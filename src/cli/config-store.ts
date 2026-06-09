@@ -33,6 +33,15 @@ export interface ModulusConfig {
   // src/cli/profiles.ts). No feature is gated on it.
   tier?: 'small' | 'standard' | 'heavy';
   logLevel?: 'debug' | 'info' | 'warn' | 'error';
+  // Integrated web panel, served in-process by the daemon (see src/panel/).
+  // enabled defaults true; bind is loopback-only by default — LAN exposure is
+  // an explicit opt-in. The bearer token is NOT here; it lives in a private
+  // file (~/.modulus/panel-token) so config.json stays safe to share.
+  panel?: {
+    enabled?: boolean;
+    port?: number;
+    bind?: string;
+  };
 }
 
 // Whitelist of accepted hardware tiers. An unknown value (from env or disk)
@@ -60,6 +69,7 @@ const DEFAULTS: ModulusConfig = {
   ollama: { url: 'http://localhost:11434' },
   models: { chat: 'qwen3.5:0.8b' },
   logLevel: 'info',
+  panel: { enabled: true, port: 7777, bind: '127.0.0.1' },
 };
 
 export function homeDir(): string {
@@ -123,6 +133,18 @@ export function effectiveConfig(home: string = homeDir()): ModulusConfig {
     })(),
     logLevel: ((env['MODULUS_LOG_LEVEL']?.trim() as ModulusConfig['logLevel']) ||
       file.logLevel) as ModulusConfig['logLevel'],
+    panel: {
+      // Only an explicit 'false' opts the panel out; anything else keeps the
+      // file/default value (on). Mirrors the panel.enabled default.
+      enabled:
+        env['MODULUS_PANEL_ENABLED']?.trim() === 'false' ? false : (file.panel?.enabled ?? true),
+      port: (() => {
+        const raw = env['MODULUS_PANEL_PORT']?.trim();
+        const n = raw ? Number.parseInt(raw, 10) : NaN;
+        return Number.isFinite(n) && n > 0 ? n : (file.panel?.port ?? 7777);
+      })(),
+      bind: env['MODULUS_PANEL_BIND']?.trim() || file.panel?.bind || '127.0.0.1',
+    },
   };
 }
 
@@ -214,6 +236,12 @@ function mergeWithDefaults(input: Partial<ConfigOnDisk>): ModulusConfig {
   const tier = normalizeTier(input.tier);
   if (tier) base.tier = tier;
   if (input.logLevel) base.logLevel = input.logLevel;
+  if (input.panel && base.panel) {
+    if (typeof input.panel.enabled === 'boolean') base.panel.enabled = input.panel.enabled;
+    if (typeof input.panel.port === 'number' && Number.isFinite(input.panel.port))
+      base.panel.port = input.panel.port;
+    if (input.panel.bind) base.panel.bind = input.panel.bind;
+  }
   return base;
 }
 

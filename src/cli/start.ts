@@ -19,7 +19,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { open as openDb, type DB } from '../storage/db.js';
+import { open as openDb } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import { createOllama } from '../core/llm.js';
 import { createRoutedLLM } from '../core/llm-router.js';
@@ -73,52 +73,15 @@ import {
   readPid,
   tryAcquirePidLock,
 } from './daemon.js';
-import { panelUrl, spawnPanel } from './panel.js';
+import { createPanel, type PanelHandle } from '../panel/server.js';
 
 const HOST_VERSION = '0.1.0';
 
 export interface StartRunOptions {
   detach?: boolean;
-  // Skip spawning the modulus-frontend web panel. The panel calls
-  // /api/agent/start with this so a panel-driven Start doesn't try to
-  // bring up a second copy of itself.
+  // Skip starting the in-process web panel. Used by the detached parent (the
+  // child owns the panel) and by a restart that only wants the agent.
   agentOnly?: boolean;
-}
-
-// True when modulus-frontend is enabled. Defaults to true for the bundled
-// extension (matching collectExtensionReadiness) when the DB has no row yet.
-function frontendExtensionEnabled(home: string): boolean {
-  const dbPath = join(home, 'modulus.db');
-  if (!existsSync(dbPath)) return true;
-  let db: DB | null = null;
-  try {
-    db = openDb({ path: dbPath, log: createLogger({ level: 'warn' }) });
-    const row = db
-      .prepare(`SELECT enabled FROM extension_state WHERE name = ?`)
-      .get('modulus-frontend') as { enabled: number } | undefined;
-    return row ? row.enabled !== 0 : true;
-  } catch {
-    return true;
-  } finally {
-    try {
-      db?.close();
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
-// Spawn the panel (best-effort) and print its URL so the user sees a clickable
-// link in the same boot output. Skipped when the frontend extension is disabled.
-function startPanel(home: string): void {
-  spawnPanel(home);
-  const url = panelUrl(home);
-  if (url) {
-    process.stdout.write(`Panel: ${url}\n`);
-    // The panel runs as its own process; its logs (incl. Tudor course builds)
-    // go to a separate file, not this terminal. Point the user at it.
-    process.stdout.write(`Panel logs: modulus logs --panel\n`);
-  }
 }
 
 function defaultExtensionRoots(home: string): string[] {
@@ -211,10 +174,6 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
     detach(home, options.agentOnly ?? false);
     return;
   }
-
-  // Foreground boot. Spawn the panel as a separate detached child so killing
-  // the foreground agent (Ctrl-C) doesn't take the panel with it.
-  if (!options.agentOnly && frontendExtensionEnabled(home)) startPanel(home);
 
   // Acquire the PID file as an atomic lock before the (slow) boot. This closes
   // the race where two near-simultaneous starts both pass the readPid guard
@@ -707,6 +666,30 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   // PID file was already written as a lock at the top of run() (see
   // tryAcquirePidLock); nothing more to do here.
 
+  // In-process web panel. It borrows the live engine (no second stack, no DB
+  // polling) and serves the browser UI + token-gated API. Best-effort: a panel
+  // failure must never take the agent down. Skipped with --agent-only or when
+  // panel.enabled is false.
+  let panel: PanelHandle | null = null;
+  if (!options.agentOnly && cfg.panel?.enabled !== false) {
+    try {
+      panel = await createPanel({
+        db,
+        log,
+        home,
+        config: cfg,
+        extensionRoots: extensionsRoots,
+        ...(process.argv[1] ? { cliEntry: process.argv[1] } : {}),
+        execArgv: process.execArgv,
+      });
+      process.stdout.write(`Panel: ${panel.url}\n`);
+    } catch (e) {
+      log.error('web panel failed to start', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
   // Best-effort warm-up. `/api/tags` proves Ollama is reachable, then the
   // tiny capped chat call actually loads the configured chat model so the
   // first real user turn doesn't pay cold-start latency.
@@ -748,6 +731,13 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
       process.exit(1);
     }, 8_000);
     hardExit.unref();
+    // Close the panel first so its port frees immediately and an in-flight
+    // browser request can't keep a handle open past the budget.
+    try {
+      await panel?.close();
+    } catch {
+      /* ignore */
+    }
     try {
       metricsWriter.stop();
     } catch {

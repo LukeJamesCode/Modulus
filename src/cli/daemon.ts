@@ -39,6 +39,14 @@ export function metricsFilePath(home: string = homeDir()): string {
   return join(home, 'metrics.json');
 }
 
+// Bearer token for the in-process web panel. Generated on first start and kept
+// owner-only here (not in config.json) so the config stays safe to share. The
+// browser obtains it via the ?token= link printed at startup / by `modulus
+// status`; see src/panel/auth.ts.
+export function panelTokenPath(home: string = homeDir()): string {
+  return join(home, 'panel-token');
+}
+
 export function writePid(pid: number, home: string = homeDir()): void {
   const file = pidFilePath(home);
   ensurePrivateDir(dirname(file));

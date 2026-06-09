@@ -45,6 +45,7 @@ test('saveConfig + loadConfig round-trips', () => {
       models: { chat: 'qwen3.5:0.5b', reason: 'qwen3.5:9b' },
       tier: 'standard',
       logLevel: 'debug',
+      panel: { enabled: true, port: 7777, bind: '127.0.0.1' },
     };
     saveConfig(input, home);
     const round = loadConfig(home);
@@ -103,6 +104,41 @@ test('environment overrides win in effectiveConfig', () => {
       assert.equal(eff.ollama.url, 'http://env:11434');
       assert.equal(eff.models.chat, 'env-chat');
       assert.deepEqual(eff.telegram.allowedIds, [7, 8]);
+    } finally {
+      process.env = oldEnv;
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('panel settings: defaults on, env overrides win', () => {
+  const home = mkHome();
+  try {
+    saveConfig(
+      {
+        telegram: { token: 't', allowedIds: [1] },
+        ollama: { url: 'http://x:11434' },
+        models: { chat: 'c' },
+      },
+      home,
+    );
+    // No env, no panel in the file: defaults apply.
+    assert.deepEqual(effectiveConfig(home).panel, {
+      enabled: true,
+      port: 7777,
+      bind: '127.0.0.1',
+    });
+    const oldEnv = { ...process.env };
+    process.env['MODULUS_PANEL_ENABLED'] = 'false';
+    process.env['MODULUS_PANEL_PORT'] = '9090';
+    process.env['MODULUS_PANEL_BIND'] = '0.0.0.0';
+    try {
+      assert.deepEqual(effectiveConfig(home).panel, {
+        enabled: false,
+        port: 9090,
+        bind: '0.0.0.0',
+      });
     } finally {
       process.env = oldEnv;
     }
