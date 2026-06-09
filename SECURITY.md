@@ -12,8 +12,8 @@ Modulus is a self-hosted tool designed to run on your own hardware. The attack s
 
 ### What runs locally
 
-| Component                 | Outbound connections                                                                           |
-| ------------------------- | ---------------------------------------------------------------------------------------------- |
+| Component                  | Outbound connections                                                                           |
+| -------------------------- | ---------------------------------------------------------------------------------------------- |
 | Modulus core               | Telegram API (long-poll), Ollama (local HTTP)                                                  |
 | modulus-everyday-assistant | Google Calendar API, Google Tasks API, Google OAuth, Open-Meteo (no account)                   |
 | modulus-websearch          | DuckDuckGo or your self-hosted SearXNG                                                         |

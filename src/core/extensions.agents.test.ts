@@ -124,10 +124,7 @@ test('loading a module with manifest agents registers them into the fleet', asyn
     assert.equal(coder.origin, 'ext:demo-codex');
     assert.equal(coder.profile, 'reason');
     assert.equal(coder.systemPrompt, 'You are a coding specialist.');
-    assert.equal(
-      loader.list().find((e) => e.name === 'demo-codex')!.registeredAgents.length,
-      1,
-    );
+    assert.equal(loader.list().find((e) => e.name === 'demo-codex')!.registeredAgents.length, 1);
     await loader.shutdown();
   } finally {
     h.cleanup();

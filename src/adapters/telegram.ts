@@ -31,7 +31,11 @@ import type { Followups, FollowupRow } from '../core/followups.js';
 import type { AgentRegistry } from '../core/agents.js';
 import type { AgentQueue } from '../core/agent-queue.js';
 import type { AgentApproval } from '../core/agent-approvals.js';
-import { formatAgentList, handleDispatch, handleDispatchWithAttachments } from './agent-commands.js';
+import {
+  formatAgentList,
+  handleDispatch,
+  handleDispatchWithAttachments,
+} from './agent-commands.js';
 import { formatWindow, parseDuration, parseWindow } from '../core/prefs.js';
 import type { Nudge, NudgeAction, SchedulerStats } from '../core/scheduler.js';
 import {
@@ -220,7 +224,11 @@ const CORE_COMMAND_DEFS: readonly CoreCommandDef[] = [
     help: 'explain the most recent proactive nudge',
     advertised: 'Explain the latest nudge',
   },
-  { name: 'doctor', help: 'run Modulus diagnostics in chat', advertised: 'Run Modulus diagnostics' },
+  {
+    name: 'doctor',
+    help: 'run Modulus diagnostics in chat',
+    advertised: 'Run Modulus diagnostics',
+  },
   {
     name: 'logs',
     argsHint: '[N]',

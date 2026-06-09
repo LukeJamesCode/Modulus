@@ -136,9 +136,10 @@ export function parseGraph(value: unknown): WorkflowGraph {
       id,
       type,
       pos: { x: Number(posRaw['x']) || 0, y: Number(posRaw['y']) || 0 },
-      config: (r['config'] && typeof r['config'] === 'object'
-        ? (r['config'] as Record<string, unknown>)
-        : {}),
+      config:
+        r['config'] && typeof r['config'] === 'object'
+          ? (r['config'] as Record<string, unknown>)
+          : {},
     };
   });
   const edges: WorkflowEdge[] = (rawEdges ?? []).map((e, i) => {
@@ -178,7 +179,8 @@ export function validateGraph(graph: WorkflowGraph): string[] {
 
   const triggers = graph.nodes.filter((n) => n.type === 'trigger');
   if (triggers.length === 0) errors.push('workflow needs exactly one trigger node (has none)');
-  else if (triggers.length > 1) errors.push(`workflow has ${triggers.length} trigger nodes; needs exactly one`);
+  else if (triggers.length > 1)
+    errors.push(`workflow has ${triggers.length} trigger nodes; needs exactly one`);
 
   for (const e of graph.edges) {
     if (!ids.has(e.from)) errors.push(`edge references unknown source node '${e.from}'`);
@@ -409,7 +411,9 @@ export function createWorkflowRegistry(db: DB): WorkflowRegistry {
        (run_id, node_id, node_type, status, output, error, agent_task_id, started_at)
      VALUES (@run_id, @node_id, @node_type, @status, @output, @error, @agent_task_id, @started_at)`,
   );
-  const selectStepsByRun = db.prepare(`SELECT * FROM workflow_step_runs WHERE run_id = ? ORDER BY id`);
+  const selectStepsByRun = db.prepare(
+    `SELECT * FROM workflow_step_runs WHERE run_id = ? ORDER BY id`,
+  );
 
   function get(id: number): WorkflowDefinition | undefined {
     const row = selectById.get(id) as WorkflowRow | undefined;
@@ -745,7 +749,10 @@ export function seedStarterWorkflows(workflows: WorkflowRegistry, agents: AgentR
         id: 'report',
         type: 'output',
         pos: { x: 1220, y: 40 },
-        config: { channel: 'telegram', template: '🔴 Code review found blockers:\n\n{{steps.audit.output}}' },
+        config: {
+          channel: 'telegram',
+          template: '🔴 Code review found blockers:\n\n{{steps.audit.output}}',
+        },
       },
       {
         id: 'clear',

@@ -14,12 +14,7 @@ import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import {
-  setupMemory,
-  ftsQueryFromText,
-  REMEMBER_TOOL_NAME,
-  FORGET_TOOL_NAME,
-} from './memory.js';
+import { setupMemory, ftsQueryFromText, REMEMBER_TOOL_NAME, FORGET_TOOL_NAME } from './memory.js';
 import { createToolRegistry } from './tools.js';
 import { open as openDb } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
@@ -77,7 +72,11 @@ test('a fact remembered in the chat is recalled for an agent turn (hive mind)', 
 test('duplicate content dedups to one row and keeps the higher importance', () => {
   const { store, cleanup } = fresh();
   try {
-    const a = store.remember({ content: 'Coffee order: flat white', source: 'user', importance: 3 });
+    const a = store.remember({
+      content: 'Coffee order: flat white',
+      source: 'user',
+      importance: 3,
+    });
     const b = store.remember({ content: '  coffee   order: FLAT WHITE ', source: 'extraction' });
     assert.equal(a, b, 'normalised duplicates must collapse to the same row');
     assert.equal(store.count(), 1);

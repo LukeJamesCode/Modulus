@@ -31,7 +31,13 @@ test('/agents: lists personas, or guides the user when there are none', () => {
     const reg = createAgentRegistry(db);
     assert.match(formatAgentList(reg), /No agents defined/);
 
-    reg.create({ name: 'planner', role: 'plans', systemPrompt: 'x', profile: 'reason', canDelegate: true });
+    reg.create({
+      name: 'planner',
+      role: 'plans',
+      systemPrompt: 'x',
+      profile: 'reason',
+      canDelegate: true,
+    });
     const out = formatAgentList(reg);
     assert.match(out, /planner — plans \(reason\)/);
     assert.match(out, /delegates/);
@@ -120,7 +126,10 @@ test('/dispatch with attachments: multimodal model accepts the image', async () 
     assert.match(reply, /with 1 attachment\b/);
     assert.doesNotMatch(reply, /Skipped/);
     const task = reg.listTasks({ agentId: agent.id })[0]!;
-    assert.deepEqual(reg.listAttachments(task.id).map((a) => a.kind), ['image']);
+    assert.deepEqual(
+      reg.listAttachments(task.id).map((a) => a.kind),
+      ['image'],
+    );
     db.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -36,7 +36,12 @@ function linearGraph(): WorkflowGraph {
         pos: { x: 1, y: 0 },
         config: { template: 'Hi {{trigger.input}}', as: 'text' },
       },
-      { id: 'o1', type: 'output', pos: { x: 2, y: 0 }, config: { channel: 'none', template: '{{steps.m1.text}}' } },
+      {
+        id: 'o1',
+        type: 'output',
+        pos: { x: 2, y: 0 },
+        config: { channel: 'none', template: '{{steps.m1.text}}' },
+      },
     ],
     edges: [
       { from: 't1', to: 'm1' },
@@ -57,7 +62,10 @@ test('validateGraph rejects duplicate node ids', () => {
 });
 
 test('validateGraph requires exactly one trigger', () => {
-  const none: WorkflowGraph = { nodes: [{ id: 'm', type: 'transform', pos: { x: 0, y: 0 }, config: {} }], edges: [] };
+  const none: WorkflowGraph = {
+    nodes: [{ id: 'm', type: 'transform', pos: { x: 0, y: 0 }, config: {} }],
+    edges: [],
+  };
   assert.ok(validateGraph(none).some((e) => e.includes('trigger')));
 
   const two = linearGraph();
@@ -192,7 +200,10 @@ test('seedStarterWorkflows: seeds the code-review example once and is idempotent
     // ...and deleting the workflow sticks: a later seed won't resurrect it.
     workflows.remove(seeded.id);
     seedStarterWorkflows(workflows, agents);
-    assert.equal(workflows.list().some((w) => w.name === CODE_REVIEW_WORKFLOW_NAME), false);
+    assert.equal(
+      workflows.list().some((w) => w.name === CODE_REVIEW_WORKFLOW_NAME),
+      false,
+    );
 
     db.close();
   } finally {

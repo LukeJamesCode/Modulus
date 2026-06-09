@@ -79,10 +79,42 @@ const SELECT_COLS = `id, content, scope, source, importance,
 // Words too common to discriminate anything. Tiny on purpose — BM25 already
 // down-weights frequent terms; this just keeps junk out of the MATCH query.
 const STOPWORDS = new Set([
-  'the', 'and', 'for', 'are', 'was', 'you', 'your', 'have', 'has', 'had',
-  'that', 'this', 'with', 'what', 'when', 'where', 'who', 'how', 'why',
-  'can', 'could', 'would', 'should', 'about', 'from', 'they', 'them',
-  'will', 'please', 'tell', 'does', 'did', 'not', 'all', 'any', 'its',
+  'the',
+  'and',
+  'for',
+  'are',
+  'was',
+  'you',
+  'your',
+  'have',
+  'has',
+  'had',
+  'that',
+  'this',
+  'with',
+  'what',
+  'when',
+  'where',
+  'who',
+  'how',
+  'why',
+  'can',
+  'could',
+  'would',
+  'should',
+  'about',
+  'from',
+  'they',
+  'them',
+  'will',
+  'please',
+  'tell',
+  'does',
+  'did',
+  'not',
+  'all',
+  'any',
+  'its',
 ]);
 
 // Build a safe FTS5 MATCH expression from free text. Tokens are quoted, so
@@ -288,7 +320,9 @@ export function setupMemory(opts: MemoryOptions): MemoryStore {
         const query = String(args['query'] ?? '').trim();
         if (!query) return 'Error: `query` is empty. Provide keywords for what to forget.';
         const n = forget(query);
-        return n === 0 ? 'No matching memories found.' : `Forgot ${n} memor${n === 1 ? 'y' : 'ies'}.`;
+        return n === 0
+          ? 'No matching memories found.'
+          : `Forgot ${n} memor${n === 1 ? 'y' : 'ies'}.`;
       },
     };
     tools.register(rememberTool);

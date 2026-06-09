@@ -36,7 +36,9 @@ export function formatAgentList(registry: AgentRegistry): string {
 
 // Split `/dispatch <agent> <task>`'s argument into the agent name and the task
 // prompt, or return a usage error. Shared by the text and attachment paths.
-export function parseDispatch(arg: string): { agentName: string; task: string } | { error: string } {
+export function parseDispatch(
+  arg: string,
+): { agentName: string; task: string } | { error: string } {
   const trimmed = arg.trim();
   if (!trimmed) return { error: 'Usage: /dispatch <agent> <task>' };
   const sep = trimmed.search(/\s/);

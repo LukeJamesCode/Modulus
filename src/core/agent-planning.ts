@@ -44,7 +44,9 @@ interface RawStep {
 export function mergePlan(raw: unknown, prev: AgentPlan | null): AgentPlan {
   const arr = Array.isArray(raw) ? raw : [];
   const prevById = new Map<string, PlanStep>((prev?.steps ?? []).map((s) => [s.id, s]));
-  const prevByTitle = new Map<string, PlanStep>((prev?.steps ?? []).map((s) => [s.title.toLowerCase(), s]));
+  const prevByTitle = new Map<string, PlanStep>(
+    (prev?.steps ?? []).map((s) => [s.title.toLowerCase(), s]),
+  );
   const steps: PlanStep[] = [];
   let n = 0;
   for (const entry of arr) {
@@ -52,10 +54,10 @@ export function mergePlan(raw: unknown, prev: AgentPlan | null): AgentPlan {
     const obj: RawStep = typeof entry === 'string' ? { title: entry } : ((entry as RawStep) ?? {});
     const title = String(obj.title ?? '').trim();
     if (!title) continue;
-    
+
     let id = String(obj.id ?? '').trim();
     const oldStep = (id ? prevById.get(id) : undefined) ?? prevByTitle.get(title.toLowerCase());
-    
+
     if (!id) {
       if (oldStep) {
         id = oldStep.id;

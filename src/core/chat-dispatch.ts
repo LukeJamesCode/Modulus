@@ -62,11 +62,7 @@ export interface ChatDispatcher {
 export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
   const { orchestrator, log } = deps;
 
-  const runAfterReplies = async (
-    chatId: number,
-    userId: number,
-    reply: string,
-  ): Promise<void> => {
+  const runAfterReplies = async (chatId: number, userId: number, reply: string): Promise<void> => {
     if (!reply || reply === '(no reply)') return;
     for (const h of deps.afterReplies()) {
       try {

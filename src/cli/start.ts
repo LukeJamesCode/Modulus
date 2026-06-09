@@ -305,8 +305,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   // as followups); the provider feeds recall into the main orchestrator AND
   // every per-agent orchestrator below, so the whole fleet shares one memory.
   const memory = setupMemory({ db, tools, log });
-  const memoryProvider = (message: string): string | undefined =>
-    memory.renderForPrompt(message);
+  const memoryProvider = (message: string): string | undefined => memory.renderForPrompt(message);
 
   const extensionsRoots = defaultExtensionRoots(home);
   const stateRoot = join(home, 'extension_state');

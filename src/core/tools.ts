@@ -262,7 +262,7 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
       let timer: NodeJS.Timeout | null = null;
       let timedOut = false;
       let signal: AbortSignal | undefined = ctx.signal;
-      
+
       let timeoutReject: ((err: Error) => void) | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutReject = reject;

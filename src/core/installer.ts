@@ -106,7 +106,8 @@ export function parseRegistryEntry(raw: unknown): RegistryIndexEntry {
   if (!raw || typeof raw !== 'object') throw new InstallError('registry entry is not an object');
   const o = raw as Record<string, unknown>;
   const name = String(o['name'] ?? '');
-  if (!MODULE_NAME_RE.test(name)) throw new InstallError(`bad module name: ${JSON.stringify(name)}`);
+  if (!MODULE_NAME_RE.test(name))
+    throw new InstallError(`bad module name: ${JSON.stringify(name)}`);
   const version = String(o['version'] ?? '');
   if (!VERSION_RE.test(version))
     throw new InstallError(`bad version for ${name}: ${JSON.stringify(version)}`);
@@ -170,16 +171,14 @@ export async function downloadAndVerify(
 ): Promise<Buffer> {
   const fetchImpl = opts.fetchImpl ?? (fetch as unknown as FetchLike);
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_TARBALL_BYTES;
-  if (!entry.tarball.startsWith('https://'))
-    throw new InstallError('tarball URL must be https://');
+  if (!entry.tarball.startsWith('https://')) throw new InstallError('tarball URL must be https://');
   const res = await fetchImpl(entry.tarball);
   if (!res.ok) throw new InstallError(`download failed: HTTP ${res.status}`);
   const declared = Number.parseInt(res.headers.get('content-length') ?? '', 10);
   if (!Number.isNaN(declared) && declared > maxBytes)
     throw new InstallError(`tarball exceeds the ${maxBytes}-byte cap`);
   const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.byteLength > maxBytes)
-    throw new InstallError(`tarball exceeds the ${maxBytes}-byte cap`);
+  if (buf.byteLength > maxBytes) throw new InstallError(`tarball exceeds the ${maxBytes}-byte cap`);
   const digest = createHash('sha256').update(buf).digest('hex');
   if (digest !== entry.sha256)
     throw new InstallError(
