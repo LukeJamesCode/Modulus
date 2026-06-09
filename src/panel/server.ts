@@ -17,6 +17,7 @@ import { sendJson } from './http.js';
 import { dispatch, type RouteContext, type RouteModule } from './router.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createModuleRoutes } from './routes/modules.js';
+import { createSettingsRoutes } from './routes/settings.js';
 import { createSystemRoutes } from './routes/system.js';
 import type { PanelDeps, PanelHandle, PanelRuntime } from './types.js';
 
@@ -89,6 +90,7 @@ export async function createPanel(deps: PanelDeps): Promise<PanelHandle> {
     createSystemRoutes(deps, runtime),
     createAgentRoutes(deps),
     createModuleRoutes(deps),
+    createSettingsRoutes(deps),
   ];
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {

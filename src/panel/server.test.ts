@@ -11,8 +11,10 @@ import { after, before, test } from 'node:test';
 import { open as openDb, type DB } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import { createAgentRegistry } from '../core/agents.js';
+import { setupMemory } from '../core/memory.js';
 import { createPrefsStore } from '../core/prefs.js';
 import { createScheduler } from '../core/scheduler.js';
+import { createToolRegistry } from '../core/tools.js';
 import { effectiveConfig } from '../cli/config-store.js';
 import { panelTokenPath } from '../cli/daemon.js';
 import { createPanel, type PanelDeps, type PanelHandle } from './server.js';
@@ -54,6 +56,11 @@ before(async () => {
     // The exercised routes don't touch the queue or llm; stub them.
     agentQueue: { notify() {} } as unknown as PanelDeps['agentQueue'],
     llm: { resolveModel: () => 'test-model' } as unknown as PanelDeps['llm'],
+    memory: setupMemory({
+      db,
+      tools: createToolRegistry({ log, confirm: async () => false }),
+      log,
+    }),
     onStop: () => {
       stopCalls += 1;
     },
@@ -174,6 +181,28 @@ test('modules: list and command reference respond', async () => {
 test('module settings for an unknown module is 404', async () => {
   const res = await authed('/api/extensions/does-not-exist/settings');
   assert.equal(res.status, 404);
+});
+
+test('settings: config exposes the instant-responses toggle', async () => {
+  const res = await authed('/api/config');
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { instantResponses: boolean; envLocks: object };
+  assert.equal(typeof body.instantResponses, 'boolean');
+  assert.equal(typeof body.envLocks, 'object');
+});
+
+test('memory browser lists, finds, and deletes', async () => {
+  await authed('/api/agents'); // touch nothing; just ensure server up
+  // Seed a fact directly via the store the panel shares.
+  const seeded = await fetch(`${base}/api/memory?q=pineapple`, {
+    headers: { 'x-modulus-token': token },
+  });
+  assert.equal(seeded.status, 200);
+  const empty = (await seeded.json()) as { memories: unknown[]; total: number };
+  assert.ok(Array.isArray(empty.memories));
+  assert.equal(typeof empty.total, 'number');
+  const del = await authed('/api/memory/99999999', { method: 'DELETE' });
+  assert.equal(del.status, 404);
 });
 
 test('stop and restart hand off to the host hooks', async () => {

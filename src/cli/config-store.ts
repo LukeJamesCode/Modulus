@@ -42,6 +42,12 @@ export interface ModulusConfig {
     port?: number;
     bind?: string;
   };
+  // Instant Responses: send a canned ack before a slow turn. Default on; the
+  // behaviour is wired in Phase 2, but the toggle persists here from Phase 1 so
+  // the Settings UI has something to read/write.
+  instantResponses?: {
+    enabled?: boolean;
+  };
 }
 
 // Whitelist of accepted hardware tiers. An unknown value (from env or disk)
@@ -70,6 +76,7 @@ const DEFAULTS: ModulusConfig = {
   models: { chat: 'qwen3.5:0.8b' },
   logLevel: 'info',
   panel: { enabled: true, port: 7777, bind: '127.0.0.1' },
+  instantResponses: { enabled: true },
 };
 
 export function homeDir(): string {
@@ -144,6 +151,12 @@ export function effectiveConfig(home: string = homeDir()): ModulusConfig {
         return Number.isFinite(n) && n > 0 ? n : (file.panel?.port ?? 7777);
       })(),
       bind: env['MODULUS_PANEL_BIND']?.trim() || file.panel?.bind || '127.0.0.1',
+    },
+    instantResponses: {
+      enabled:
+        env['MODULUS_INSTANT_RESPONSES']?.trim() === 'false'
+          ? false
+          : (file.instantResponses?.enabled ?? true),
     },
   };
 }
@@ -241,6 +254,10 @@ function mergeWithDefaults(input: Partial<ConfigOnDisk>): ModulusConfig {
     if (typeof input.panel.port === 'number' && Number.isFinite(input.panel.port))
       base.panel.port = input.panel.port;
     if (input.panel.bind) base.panel.bind = input.panel.bind;
+  }
+  if (input.instantResponses && base.instantResponses) {
+    if (typeof input.instantResponses.enabled === 'boolean')
+      base.instantResponses.enabled = input.instantResponses.enabled;
   }
   return base;
 }

@@ -7,6 +7,7 @@ import type { createScheduler } from '../core/scheduler.js';
 import type { createAgentRegistry } from '../core/agents.js';
 import type { createAgentQueue } from '../core/agent-queue.js';
 import type { createRoutedLLM } from '../core/llm-router.js';
+import type { MemoryStore } from '../core/memory.js';
 import type { ModulusConfig } from '../cli/config-store.js';
 
 // The live handles the panel borrows from the daemon. Engine handles
@@ -27,6 +28,9 @@ export interface PanelDeps {
   agentRegistry: ReturnType<typeof createAgentRegistry>;
   agentQueue: ReturnType<typeof createAgentQueue>;
   llm: ReturnType<typeof createRoutedLLM>;
+  // The hive-mind memory store, for the Settings memory browser (list/search/
+  // delete) — the same store every agent reads and writes.
+  memory: MemoryStore;
   // argv[1] + execArgv of the daemon, so a panel-triggered restart re-execs the
   // same entrypoint under the same loader (tsx in dev, node in prod).
   cliEntry?: string;

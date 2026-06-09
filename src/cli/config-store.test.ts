@@ -46,6 +46,7 @@ test('saveConfig + loadConfig round-trips', () => {
       tier: 'standard',
       logLevel: 'debug',
       panel: { enabled: true, port: 7777, bind: '127.0.0.1' },
+      instantResponses: { enabled: true },
     };
     saveConfig(input, home);
     const round = loadConfig(home);
