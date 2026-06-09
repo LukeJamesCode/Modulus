@@ -190,6 +190,10 @@ export interface AgentDefinition {
   // Autonomous-run budget ceilings; null => engine default.
   maxWallClockMs: number | null;
   maxTotalRounds: number | null;
+  // Provenance: null = user-created; 'ext:<name>' = provided by that module's
+  // manifest. The loader owns the lifecycle of ext-origin agents (upsert on
+  // load, delete on uninstall); update() deliberately cannot change it.
+  origin: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -245,9 +249,12 @@ export interface CreateAgentInput {
   mode?: AgentMode;
   maxWallClockMs?: number | null;
   maxTotalRounds?: number | null;
+  origin?: string | null;
 }
 
-export type UpdateAgentInput = Partial<Omit<CreateAgentInput, 'name'>> & { name?: string };
+export type UpdateAgentInput = Partial<Omit<CreateAgentInput, 'name' | 'origin'>> & {
+  name?: string;
+};
 
 export interface EnqueueTaskInput {
   agentId: number;
@@ -289,6 +296,7 @@ interface AgentRow {
   mode: string;
   max_wall_clock_ms: number | null;
   max_total_rounds: number | null;
+  origin: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -344,6 +352,7 @@ function rowToAgent(r: AgentRow): AgentDefinition {
     mode: r.mode === 'autonomous' ? 'autonomous' : 'single',
     maxWallClockMs: r.max_wall_clock_ms,
     maxTotalRounds: r.max_total_rounds,
+    origin: r.origin ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -474,10 +483,10 @@ export function createAgentRegistry(db: DB): AgentRegistry {
     `INSERT INTO agents
        (name, role, system_prompt, tool_allowlist, profile, think_mode, max_tool_rounds,
         budget_tokens, execution_mode, max_concurrency, can_delegate,
-        delegatable_agents, mode, max_wall_clock_ms, max_total_rounds, created_at, updated_at)
+        delegatable_agents, mode, max_wall_clock_ms, max_total_rounds, origin, created_at, updated_at)
      VALUES (@name, @role, @system_prompt, @tool_allowlist, @profile, @think_mode, @max_tool_rounds,
              @budget_tokens, @execution_mode, @max_concurrency, @can_delegate,
-             @delegatable_agents, @mode, @max_wall_clock_ms, @max_total_rounds, @created_at, @updated_at)`,
+             @delegatable_agents, @mode, @max_wall_clock_ms, @max_total_rounds, @origin, @created_at, @updated_at)`,
   );
   const selectById = db.prepare(`SELECT * FROM agents WHERE id = ?`);
   const selectByName = db.prepare(`SELECT * FROM agents WHERE name = ?`);
@@ -522,6 +531,7 @@ export function createAgentRegistry(db: DB): AgentRegistry {
       mode: input.mode ?? 'single',
       max_wall_clock_ms: input.maxWallClockMs ?? null,
       max_total_rounds: input.maxTotalRounds ?? null,
+      origin: input.origin ?? null,
       created_at: now,
       updated_at: now,
     });

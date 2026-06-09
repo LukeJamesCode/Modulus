@@ -74,6 +74,58 @@ export interface Manifest {
   // When NO extension's pattern matches, the orchestrator falls back to
   // exposing every tool (preserves the pre-filter behaviour).
   intent_pattern?: string;
+  // Agent personas this module ships (manifest v2). Upserted into the fleet
+  // on load with origin 'ext:<name>', kept in sync on reload, removed on
+  // uninstall/disable. Installing a module thus adds a delegatable specialist
+  // with zero glue code — the "modules are mods" promise extended to agents.
+  agents?: ManifestAgent[];
+}
+
+export interface ManifestAgent {
+  name: string;
+  role?: string;
+  systemPrompt: string;
+  // 'chat' | 'tools' | 'reason'. Defaults to 'tools' — a module specialist
+  // exists to drive that module's tools.
+  profile?: string;
+  // Defaults to [<module name>]: scoped to the module's own tools, which is
+  // exactly the short manifest a tiny model selects tools best from. Pass []
+  // for a no-tools persona, or null for every registered tool.
+  toolAllowlist?: string[] | null;
+  // 'single' (default) | 'autonomous'.
+  mode?: string;
+  maxToolRounds?: number;
+}
+
+// The minimal agent-registry surface the loader needs, kept structural
+// (matching createAgentRegistry's shape) instead of importing agents.ts:
+// the orchestrator already imports extensions.ts for the host types, so a
+// loader → agent-engine import would create a module cycle.
+export interface AgentFleetRegistrar {
+  getByName(name: string): { id: number; origin: string | null } | undefined;
+  list(): Array<{ id: number; name: string; origin: string | null }>;
+  create(input: {
+    name: string;
+    role?: string;
+    systemPrompt: string;
+    toolAllowlist?: string[] | null;
+    profile?: 'chat' | 'tools' | 'reason';
+    mode?: 'single' | 'autonomous';
+    maxToolRounds?: number;
+    origin?: string | null;
+  }): unknown;
+  update(
+    id: number,
+    patch: {
+      role?: string;
+      systemPrompt?: string;
+      toolAllowlist?: string[] | null;
+      profile?: 'chat' | 'tools' | 'reason';
+      mode?: 'single' | 'autonomous';
+      maxToolRounds?: number;
+    },
+  ): unknown;
+  remove(id: number): boolean;
 }
 
 export interface SettingsSchema {
@@ -518,6 +570,7 @@ export interface LoadedExtension {
   promptFragment?: string;
   // Live for diagnostics.
   registeredTools: string[];
+  registeredAgents: string[];
   registeredCommands: string[];
   registeredJobs: number;
   registeredIntercepts: number;
@@ -545,6 +598,10 @@ export interface ExtensionLoaderOptions {
   // submit user turns through the same pipeline Telegram uses. The CLI wires
   // this in at startup; tests typically leave it undefined.
   orchestrator?: HostOrchestrator;
+  // Optional. When provided, manifest `agents` entries are synced into the
+  // fleet (upsert on load, removed on uninstall/disable). The CLI passes the
+  // real agent registry; tests can pass a stub or omit it entirely.
+  agents?: AgentFleetRegistrar;
 
   // Host's own version — used to validate `manifest.modulus` ranges.
   hostVersion: string;
@@ -673,6 +730,72 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
   const activeReloads = new Set<Promise<void>>();
   let importVersion = 0;
   let shuttingDown = false;
+
+  // -- module-provided agents (manifest v2) ---------------------------------
+  // Agents are durable fleet rows, not transient registrations: a hot-reload
+  // must NOT delete and recreate them (task history hangs off the agent id),
+  // so sync is an upsert keyed by name and guarded by origin, and deletion
+  // happens only on uninstall/disable/orphan-sweep.
+  const AGENT_NAME_RE = /^[a-z0-9][a-z0-9_-]{1,40}$/i;
+
+  function syncManifestAgents(manifest: Manifest, cl: Logger): string[] {
+    const registrar = opts.agents;
+    if (!registrar) return [];
+    const origin = `ext:${manifest.name}`;
+    const wanted = new Set<string>();
+    const registered: string[] = [];
+    for (const spec of manifest.agents ?? []) {
+      const name = String(spec?.name ?? '').trim();
+      const systemPrompt = String(spec?.systemPrompt ?? '').trim();
+      if (!AGENT_NAME_RE.test(name) || !systemPrompt) {
+        cl.warn('manifest agent skipped (bad name or empty systemPrompt)', { agent: name });
+        continue;
+      }
+      const profile =
+        (['chat', 'tools', 'reason'] as const).find((p) => p === spec.profile) ?? 'tools';
+      const mode = spec.mode === 'autonomous' ? ('autonomous' as const) : ('single' as const);
+      const fields = {
+        role: spec.role ?? `Specialist provided by ${manifest.name}`,
+        systemPrompt,
+        toolAllowlist: spec.toolAllowlist === undefined ? [manifest.name] : spec.toolAllowlist,
+        profile,
+        mode,
+        ...(typeof spec.maxToolRounds === 'number' ? { maxToolRounds: spec.maxToolRounds } : {}),
+      };
+      const existing = registrar.getByName(name);
+      if (existing && existing.origin !== origin) {
+        // Never hijack a user-created agent (or another module's) by name.
+        cl.warn('manifest agent collides with an existing agent — skipped', { agent: name });
+        continue;
+      }
+      try {
+        if (existing) registrar.update(existing.id, fields);
+        else registrar.create({ name, ...fields, origin });
+        wanted.add(name);
+        registered.push(name);
+      } catch (e) {
+        cl.warn('manifest agent registration failed', {
+          agent: name,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+    // Drop agents this module registered in a previous version but no longer
+    // declares (also the whole-module cleanup path when `wanted` is empty).
+    for (const a of registrar.list()) {
+      if (a.origin === origin && !wanted.has(a.name)) registrar.remove(a.id);
+    }
+    return registered;
+  }
+
+  function removeManifestAgents(extName: string): void {
+    const registrar = opts.agents;
+    if (!registrar) return;
+    const origin = `ext:${extName}`;
+    for (const a of registrar.list()) {
+      if (a.origin === origin) registrar.remove(a.id);
+    }
+  }
 
   function ensureStateRow(manifest: Manifest): boolean {
     const existing = opts.db
@@ -821,12 +944,16 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     const cl = log.child({ ext: manifest.name });
     if (!enabled) {
       cl.info('extension is disabled — skipping load');
+      // A disabled module's tools are gone, so a fleet agent allowlisted to
+      // them would be a dead persona — remove it; re-enable re-syncs it.
+      removeManifestAgents(manifest.name);
       loaded.set(manifest.name, {
         name: manifest.name,
         version: manifest.version,
         enabled: false,
         manifest,
         registeredTools: [],
+        registeredAgents: [],
         registeredCommands: [],
         registeredJobs: 0,
         registeredIntercepts: 0,
@@ -1140,12 +1267,16 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       // disposer above missed any (e.g. an extension that registered jobs
       // through a different path in a future refactor).
       opts.scheduler.unregisterByExtension(manifest.name);
+      // A failed load means the module's tools aren't registered; don't leave
+      // its agents pointing at nothing.
+      removeManifestAgents(manifest.name);
       loaded.set(manifest.name, {
         name: manifest.name,
         version: manifest.version,
         enabled: true,
         manifest,
         registeredTools: [],
+        registeredAgents: [],
         registeredCommands: [],
         registeredJobs: 0,
         registeredIntercepts: 0,
@@ -1157,12 +1288,14 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     }
 
     registrations.set(manifest.name, reg);
+    const registeredAgents = syncManifestAgents(manifest, cl);
     const entry: LoadedExtension = {
       name: manifest.name,
       version: manifest.version,
       enabled: true,
       manifest,
       registeredTools: [...reg.toolNames],
+      registeredAgents,
       registeredCommands: reg.commands.map((c) => c.name),
       registeredJobs: reg.jobsRegistered,
       registeredIntercepts: reg.intercepts.length,
@@ -1174,6 +1307,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     cl.info('extension loaded', {
       version: manifest.version,
       tools: reg.toolNames.length,
+      agents: registeredAgents.length,
       commands: reg.commands.length,
       jobs: reg.jobsRegistered,
     });
@@ -1192,6 +1326,11 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       for (const t of reg.toolNames) opts.tools.unregister(t);
       opts.scheduler.unregisterByExtension(name);
     }
+    // Distinguish uninstall from hot-reload: a reload's unload still has the
+    // folder on disk and must keep the module's fleet agents (task history
+    // hangs off their ids); a removed folder is an uninstall, so the agents go.
+    const folder = dirs.get(name);
+    if (!folder || !existsSync(folder)) removeManifestAgents(name);
     registrations.delete(name);
     loaded.delete(name);
     const close = extensionWatchers.get(name);
@@ -1225,6 +1364,20 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
             folder,
             error: e instanceof Error ? e.message : String(e),
           });
+        }
+      }
+    }
+    // Orphan sweep: a module uninstalled while the daemon was down never got
+    // its unload, so ext-origin agents for modules that aren't present (or
+    // didn't load) would linger as dead personas in the fleet.
+    if (opts.agents) {
+      const present = new Set(
+        [...loaded.values()].filter((e) => e.enabled && !e.error).map((e) => `ext:${e.name}`),
+      );
+      for (const a of opts.agents.list()) {
+        if (a.origin && a.origin.startsWith('ext:') && !present.has(a.origin)) {
+          log.info('removing orphaned module agent', { agent: a.name, origin: a.origin });
+          opts.agents.remove(a.id);
         }
       }
     }

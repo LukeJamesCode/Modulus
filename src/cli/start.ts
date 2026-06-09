@@ -332,6 +332,10 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
       await orchestratorImpl.handleUserMessage(msg);
     },
   };
+  // Created before the loader so manifest v2 `agents` entries can sync into
+  // the fleet during loadAll. Only needs the DB, so the early construction is
+  // free; all the run-time machinery (runtime, queue) still wires up below.
+  const agentRegistry = createAgentRegistry(db);
   const loader = createExtensionLoader({
     roots: extensionsRoots,
     stateRoot,
@@ -340,6 +344,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
     log,
     scheduler,
     tools,
+    agents: agentRegistry,
     hostVersion: HOST_VERSION,
     chatId: cfg.telegram.allowedIds[0]!,
     allowedUserIds: cfg.telegram.allowedIds,
@@ -392,7 +397,6 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   // Multi-agent engine. Personas run headlessly through their own per-agent
   // orchestrators (sharing this db/llm/tool registry); the queue governs WHEN
   // they run so two heavy reasoners never thrash the one resident model slot.
-  const agentRegistry = createAgentRegistry(db);
   // Crash recovery for tasks left 'running' by a previous process. A single-mode
   // task can't resume mid-turn, so it re-runs from scratch (started_at cleared).
   // An autonomous task checkpoints after every step, so we re-queue it but keep
