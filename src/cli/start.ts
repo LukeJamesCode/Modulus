@@ -681,6 +681,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
         home,
         config: cfg,
         extensionRoots: extensionsRoots,
+        scheduler,
         ...(process.argv[1] ? { cliEntry: process.argv[1] } : {}),
         execArgv: process.execArgv,
         onStop: () => void shutdown('panel-stop'),

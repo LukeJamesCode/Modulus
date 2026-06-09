@@ -3,6 +3,7 @@
 
 import type { DB } from '../storage/db.js';
 import type { Logger } from '../util/log.js';
+import type { createScheduler } from '../core/scheduler.js';
 import type { ModulusConfig } from '../cli/config-store.js';
 
 // The live handles the panel borrows from the daemon. Engine handles
@@ -14,6 +15,9 @@ export interface PanelDeps {
   home: string;
   config: ModulusConfig;
   extensionRoots: readonly string[];
+  // The daemon's live scheduler — the panel reads its job list for the timeline
+  // (read-only; the daemon is what actually fires the jobs).
+  scheduler: ReturnType<typeof createScheduler>;
   // argv[1] + execArgv of the daemon, so a panel-triggered restart re-execs the
   // same entrypoint under the same loader (tsx in dev, node in prod).
   cliEntry?: string;

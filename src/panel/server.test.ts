@@ -10,6 +10,8 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { open as openDb, type DB } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
+import { createPrefsStore } from '../core/prefs.js';
+import { createScheduler } from '../core/scheduler.js';
 import { effectiveConfig } from '../cli/config-store.js';
 import { panelTokenPath } from '../cli/daemon.js';
 import { createPanel, type PanelHandle } from './server.js';
@@ -31,14 +33,22 @@ function authed(path: string, init: RequestInit = {}): Promise<Response> {
 
 before(async () => {
   home = mkdtempSync(join(tmpdir(), 'modulus-panel-'));
-  db = openDb({ path: join(home, 'modulus.db'), log: createLogger({ level: 'error' }) });
+  const log = createLogger({ level: 'error' });
+  db = openDb({ path: join(home, 'modulus.db'), log });
+  const scheduler = createScheduler({
+    log,
+    dispatch: async () => {},
+    prefs: createPrefsStore(db),
+    db,
+  });
   panel = await createPanel({
     db,
-    log: createLogger({ level: 'error' }),
+    log,
     home,
     // port 0 → ephemeral; effectiveConfig fills panel defaults otherwise.
     config: { ...effectiveConfig(home), panel: { enabled: true, port: 0, bind: '127.0.0.1' } },
     extensionRoots: [],
+    scheduler,
     onStop: () => {
       stopCalls += 1;
     },
@@ -121,6 +131,13 @@ test('proactive toggle flips the flag surfaced in /api/state', async () => {
   });
   const on = (await (await authed('/api/state')).json()) as { proactive: boolean };
   assert.equal(on.proactive, true);
+});
+
+test('system read routes respond with a valid token', async () => {
+  for (const route of ['/api/metrics', '/api/scheduler', '/api/conversations', '/api/docs']) {
+    const res = await authed(route);
+    assert.equal(res.status, 200, `${route} should be 200`);
+  }
 });
 
 test('stop and restart hand off to the host hooks', async () => {
