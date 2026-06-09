@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-accent="green" data-density="balanced">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Modulus — home control panel</title>
+    <link rel="icon" href="favicon.svg" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot">
+        <span class="boot-mark">m</span>
+        <span class="boot-text">Loading Modulus…</span>
+      </div>
+    </div>
+
+    <!-- React + Babel from CDN. No build step: .jsx files are transpiled in the
+         browser. This keeps the panel a single static bundle the extension can
+         ship as-is and a Pi can serve without a toolchain. -->
+    <script
+      src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script src="https://unpkg.com/marked@12.0.2/marked.min.js" crossorigin="anonymous"></script>
+
+    <script src="api.js"></script>
+    <script type="text/babel" src="data.jsx"></script>
+    <script type="text/babel" src="components.jsx"></script>
+    <script type="text/babel" src="chathub.jsx"></script>
+    <script type="text/babel" src="agents.jsx"></script>
+    <script type="text/babel" src="builder.jsx"></script>
+    <script type="text/babel" src="voicehub.jsx"></script>
+    <script type="text/babel" src="extensions.jsx"></script>
+    <script type="text/babel" src="settings.jsx"></script>
+    <script type="text/babel" src="system.jsx"></script>
+    <script type="text/babel" src="wizard.jsx"></script>
+    <script type="text/babel" src="dashboard.jsx"></script>
+    <script type="text/babel" src="docs.jsx"></script>
+    <script type="text/babel" src="app.jsx"></script>
+  </body>
+</html>

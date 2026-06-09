@@ -13,6 +13,7 @@ export default [
       // not part of the Node/TS build — they use browser globals ESLint's
       // Node config doesn't know about.
       'extensions/**/web/**',
+      'src/panel/web/**',
       '.claude/**',
     ],
   },
