@@ -1011,6 +1011,13 @@ export interface AgentRuntimeOptions {
   // When set, a task's image attachments are fed to a multimodal model on its
   // first turn. The pinned read_file/list_dir root is wired separately (start.ts).
   attachmentsDir?: string;
+  // Hive-mind hooks. memoryProvider fills the prompt's memory slot on every
+  // agent turn from the same store the main chat uses — that's what makes the
+  // fleet share one memory. onTaskDone fires after a task reaches 'done';
+  // start.ts wires it to promote the task's recorded findings into that store.
+  // Both are best-effort: a throwing hook is logged, never fatal to the run.
+  memoryProvider?: (message: string) => string | undefined;
+  onTaskDone?: (task: AgentTask, agent: AgentDefinition) => void;
 }
 
 export interface RunResult {
@@ -1107,6 +1114,7 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
           : {}),
       ...(opts.toolResultMaxChars ? { toolResultMaxChars: opts.toolResultMaxChars } : {}),
       ...(opts.inferenceTimeoutMs ? { inferenceTimeoutMs: opts.inferenceTimeoutMs } : {}),
+      ...(opts.memoryProvider ? { memoryProvider: opts.memoryProvider } : {}),
     });
   }
 
@@ -1267,6 +1275,23 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
     images?: string[];
   }
 
+  // Fire the hive-mind completion hook. Best-effort by contract: promotion is
+  // an enrichment, so a throwing hook must never fail a finished task.
+  function notifyTaskDone(taskId: number, agent: AgentDefinition): void {
+    if (!opts.onTaskDone) return;
+    const task = opts.registry.getTask(taskId);
+    if (!task) return;
+    try {
+      opts.onTaskDone(task, agent);
+    } catch (e) {
+      log.warn('onTaskDone hook failed', {
+        taskId,
+        agent: agent.name,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
   // -- single-mode run (today's behaviour) ----------------------------------
   async function runSingle(ctx: RunCtx): Promise<RunResult> {
     const { taskId, agent, virtualChatId, orch, onDelta } = ctx;
@@ -1315,6 +1340,7 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
       liveText: null, // clear the transient streaming buffer on completion
       ...(conversationId ? { conversationId } : {}),
     });
+    notifyTaskDone(taskId, agent);
     emit(taskId, { type: 'done', ok: true });
     return { ok: true, text, conversationId };
   }
@@ -1358,6 +1384,7 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
         liveText: null, // clear the transient streaming buffer on completion
         ...(conversationId ? { conversationId } : {}),
       });
+      notifyTaskDone(taskId, agent);
       emit(taskId, { type: 'done', ok: true });
       return { ok: true, text, conversationId };
     };

@@ -28,6 +28,7 @@ import { createToolRegistry, type ToolHandler, type ToolContext } from '../core/
 import { createOrchestrator } from '../core/orchestrator.js';
 import { createScheduler, type Nudge } from '../core/scheduler.js';
 import { setupFollowups } from '../core/followups.js';
+import { setupMemory } from '../core/memory.js';
 import {
   createAgentRegistry,
   createAgentRuntime,
@@ -299,6 +300,14 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   // it.
   const followups = setupFollowups({ db, scheduler, tools, log });
 
+  // Hive-mind shared memory: one store every agent reads and writes. Registers
+  // the remember/forget core tools here (before extensions load, same reason
+  // as followups); the provider feeds recall into the main orchestrator AND
+  // every per-agent orchestrator below, so the whole fleet shares one memory.
+  const memory = setupMemory({ db, tools, log });
+  const memoryProvider = (message: string): string | undefined =>
+    memory.renderForPrompt(message);
+
   const extensionsRoots = defaultExtensionRoots(home);
   const stateRoot = join(home, 'extension_state');
   ensurePrivateDir(stateRoot);
@@ -368,6 +377,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
     log,
     promptFragmentProvider: (filter) => loader.promptFragment(filter),
     toolIntentFilter: (message) => loader.relevantExtensions(message),
+    memoryProvider,
     turnGuards: () => loader.turnGuards().map((r) => r.guard),
     budgetTokens,
     toolResultMaxChars,
@@ -419,6 +429,16 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
     toolResultMaxChars,
     inferenceTimeoutMs: agentInferenceTimeoutMs,
     attachmentsDir,
+    memoryProvider,
+    // Promote a finished task's recorded findings into shared memory, tagged
+    // by the agent that learned them — the write half of the hive mind.
+    onTaskDone: (task, agent) => {
+      const findings = agentRegistry
+        .listArtifacts(task.id)
+        .filter((a) => a.name === 'finding' && typeof a.content === 'string')
+        .map((a) => a.content as string);
+      if (findings.length > 0) memory.promoteFindings(findings, agent.name);
+    },
   });
   const agentQueue = createAgentQueue({
     registry: agentRegistry,

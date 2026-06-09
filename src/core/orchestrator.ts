@@ -163,6 +163,12 @@ export interface OrchestratorOptions {
   // "no tools" — used for trivial chatter like "hi", "thanks".
   // Without this provider, the orchestrator always exposes every tool.
   toolIntentFilter?: (message: string) => string[] | null;
+  // Returns the long-term memory block recalled for this turn's user message,
+  // or undefined when nothing relevant is stored. Fills the `memory` slot of
+  // the deterministic prefix (system → tools → memory → session → history).
+  // Shared across the main chat and every agent run — the hive-mind store
+  // (src/core/memory.ts) is the canonical provider, wired in start.ts.
+  memoryProvider?: (message: string) => string | undefined;
   // Whether deterministic tool auto-routing (a tool's `autoRoute` hook claiming
   // the turn before the model runs) is honoured. Defaults to true for the main
   // chat, where it compensates for a tiny model that won't reliably escalate.
@@ -540,6 +546,14 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
     const intent = opts.toolIntentFilter?.(msg.text) ?? null;
     const intentSet = intent && intent.length > 0 ? new Set(intent) : undefined;
     const toolPrompt = opts.promptFragmentProvider?.(intentSet) || undefined;
+    // Recall failure must never block a turn — memory is an enrichment, and a
+    // corrupt FTS index degrading to "no memories" is the right failure mode.
+    let memory: string | undefined;
+    try {
+      memory = opts.memoryProvider?.(msg.text) || undefined;
+    } catch (e) {
+      cl.warn('memory provider failed', { error: e instanceof Error ? e.message : String(e) });
+    }
     const systemForTurn = `${systemPrompt}\n\n${dailyContext(new Date(), lastUserAt)}`;
 
     // One helper, three callers: initial chat, tool-loop followup, safety-net
@@ -550,6 +564,7 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
         systemPrompt: systemForTurn,
         history,
         ...(!omitToolPrompt && toolPrompt ? { toolPrompt } : {}),
+        ...(memory ? { memory } : {}),
         budgetTokens,
       });
 
