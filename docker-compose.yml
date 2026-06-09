@@ -1,0 +1,87 @@
+# Why Ollama is a separate service (not bundled into the Modulus image):
+#
+#   1. Model load latency. Ollama keeps the model resident in memory between
+#      requests; on CPU, cold-loading a 9B model costs 30-60s. Bundling it
+#      into the Modulus container would make every Modulus redeploy pay that
+#      cost and drop the warm model from memory. Keeping Ollama in its own
+#      container means Modulus can be rebuilt and restarted freely while the
+#      model stays hot.
+#   2. Independent lifecycle. Modulus code changes far more often than the
+#      model runtime. Decoupling them lets each be upgraded, restarted, or
+#      scaled without touching the other.
+#   3. Image size & cache. Ollama's image plus model weights are large;
+#      keeping them out of the Modulus image keeps Modulus builds fast and
+#      avoids re-downloading weights on every rebuild (they live in the
+#      ollama-data volume).
+#   4. Security posture. Modulus runs read-only with all capabilities
+#      dropped; Ollama needs more privileges to manage model files. Separate
+#      services let each have the minimum permissions it needs.
+#
+# FalkorDB is left commented out and is activated by the modulus-memgraph
+# extension.
+#
+# Security note: the default compose file intentionally publishes no host
+# ports. Ollama has no built-in authentication, so keep it reachable only on
+# the private Compose network unless you put an authenticated reverse proxy in
+# front of it.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: modulus-ollama
+    expose:
+      - '11434'
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      OLLAMA_FLASH_ATTENTION: '${OLLAMA_FLASH_ATTENTION:-1}'
+      OLLAMA_NUM_THREADS: '${OLLAMA_NUM_THREADS:-4}'
+      OLLAMA_KEEP_ALIVE: '24h'
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  modulus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: modulus:dev
+    container_name: modulus
+    depends_on:
+      - ollama
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      OLLAMA_URL: 'http://ollama:11434'
+      MODULUS_HOME: '/data'
+      MODULUS_LOG_LEVEL: '${MODULUS_LOG_LEVEL:-info}'
+    volumes:
+      - modulus-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  # Activated by the `modulus-memgraph` extension. Uncomment when installed.
+  # Keep FalkorDB on the private Compose network unless you add authentication
+  # at a proxy/firewall layer.
+  # falkordb:
+  #   image: falkordb/falkordb:latest
+  #   container_name: modulus-falkordb
+  #   expose:
+  #     - '6379'
+  #   volumes:
+  #     - falkordb-data:/data
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   restart: unless-stopped
+
+volumes:
+  ollama-data:
+  modulus-data:
+  # falkordb-data:

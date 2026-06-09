@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local Claude Code permissions (can contain machine paths / user names)
+.claude/settings.local.json
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# SQLite scratch
+*.sqlite
+*.sqlite3
+*.db
+
+# Runtime data (~/.modulus is the real home but in case of in-repo testing)
+.modulus/
+
+# Graphify — Claude Code internal tool, not part of Modulus
+graphify-out/
+.graphify_python
+
+# Claude Code worktrees — never commit
+.claude/worktrees/
+
+# Personal agent-onboarding docs
+CLAUDE.md
+AGENTS.md
+
+# Local scratch / notes
+*.scratch.*
+NOTES.local.md
+TODO.local.md

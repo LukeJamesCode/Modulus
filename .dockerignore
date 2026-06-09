@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+.git
+.github
+.env
+.env.*
+!.env.example
+*.log
+*.sqlite
+*.sqlite3
+.modulus
+.vscode
+.idea
+README.md
+PLAN.md
+CLAUDE.md

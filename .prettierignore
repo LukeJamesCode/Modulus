@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+*.log
+.env
+.env.*
+!.env.example
+package-lock.json
+
+# Local Claude Code settings — not part of the project source.
+.claude/
+
+# Authored docs -- prettier shouldn't reflow these.
+CLAUDE.md
+PLAN.md
+README.md
+LICENSE

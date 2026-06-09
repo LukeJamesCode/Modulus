@@ -1,0 +1,46 @@
+{
+  "name": "modulus",
+  "version": "1.0.0",
+  "description": "The everyday AI orchestrator. CPU-only core, integrated UI, modules turn it into anything.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "modulus": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/copy-migrations.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "node scripts/run-tests.mjs",
+    "bench:spec-decode": "node scripts/bench-spec-decode.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20.17.10",
+    "@types/ws": "^8.18.1",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "pdf-lib": "^1.17.1",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.2"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^8.4.2",
+    "better-sqlite3": "^12.9.0",
+    "commander": "^14.0.3",
+    "discord.js": "^14.26.4",
+    "grammy": "^1.42.0",
+    "tsx": "^4.19.2",
+    "unpdf": "^1.6.2",
+    "ws": "^8.21.0"
+  }
+}

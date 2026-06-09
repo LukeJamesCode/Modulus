@@ -1,0 +1,12 @@
+# Force LF line endings for all text files so Prettier's endOfLine: lf
+# doesn't conflict with Windows git autocrlf.
+* text=auto eol=lf
+
+# Binaries — no line-ending conversion.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.sqlite binary
+*.sqlite3 binary
