@@ -35,3 +35,23 @@ export async function readJson<T>(req: IncomingMessage): Promise<T> {
   if (!raw.trim()) return {} as T;
   return JSON.parse(raw) as T;
 }
+
+// Collect a binary request body (e.g. a staged attachment) into a Buffer, with
+// a generous-but-bounded cap.
+export function readRawBody(req: IncomingMessage, limitBytes = 16 * 1024 * 1024): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limitBytes) {
+        reject(new Error('request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}

@@ -4,6 +4,9 @@
 import type { DB } from '../storage/db.js';
 import type { Logger } from '../util/log.js';
 import type { createScheduler } from '../core/scheduler.js';
+import type { createAgentRegistry } from '../core/agents.js';
+import type { createAgentQueue } from '../core/agent-queue.js';
+import type { createRoutedLLM } from '../core/llm-router.js';
 import type { ModulusConfig } from '../cli/config-store.js';
 
 // The live handles the panel borrows from the daemon. Engine handles
@@ -18,6 +21,12 @@ export interface PanelDeps {
   // The daemon's live scheduler — the panel reads its job list for the timeline
   // (read-only; the daemon is what actually fires the jobs).
   scheduler: ReturnType<typeof createScheduler>;
+  // Live agent engine. The panel does CRUD + enqueue on the registry and pokes
+  // the queue so work is picked up immediately (no poll wait); the daemon stays
+  // the single executor. llm is used for per-agent vision capability checks.
+  agentRegistry: ReturnType<typeof createAgentRegistry>;
+  agentQueue: ReturnType<typeof createAgentQueue>;
+  llm: ReturnType<typeof createRoutedLLM>;
   // argv[1] + execArgv of the daemon, so a panel-triggered restart re-execs the
   // same entrypoint under the same loader (tsx in dev, node in prod).
   cliEntry?: string;

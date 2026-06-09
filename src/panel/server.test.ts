@@ -10,11 +10,12 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { open as openDb, type DB } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
+import { createAgentRegistry } from '../core/agents.js';
 import { createPrefsStore } from '../core/prefs.js';
 import { createScheduler } from '../core/scheduler.js';
 import { effectiveConfig } from '../cli/config-store.js';
 import { panelTokenPath } from '../cli/daemon.js';
-import { createPanel, type PanelHandle } from './server.js';
+import { createPanel, type PanelDeps, type PanelHandle } from './server.js';
 
 let home: string;
 let db: DB;
@@ -49,6 +50,10 @@ before(async () => {
     config: { ...effectiveConfig(home), panel: { enabled: true, port: 0, bind: '127.0.0.1' } },
     extensionRoots: [],
     scheduler,
+    agentRegistry: createAgentRegistry(db),
+    // The exercised routes don't touch the queue or llm; stub them.
+    agentQueue: { notify() {} } as unknown as PanelDeps['agentQueue'],
+    llm: { resolveModel: () => 'test-model' } as unknown as PanelDeps['llm'],
     onStop: () => {
       stopCalls += 1;
     },
@@ -138,6 +143,22 @@ test('system read routes respond with a valid token', async () => {
     const res = await authed(route);
     assert.equal(res.status, 200, `${route} should be 200`);
   }
+});
+
+test('GET /api/agents lists agents off the live registry', async () => {
+  const res = await authed('/api/agents');
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { agents: unknown[] };
+  assert.ok(Array.isArray(body.agents));
+});
+
+test('agents validation: create without name is 400', async () => {
+  const res = await authed('/api/agents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ systemPrompt: 'x' }),
+  });
+  assert.equal(res.status, 400);
 });
 
 test('stop and restart hand off to the host hooks', async () => {
