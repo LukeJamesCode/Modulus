@@ -16,6 +16,7 @@ import { loadOrCreatePanelToken, PANEL_CSP, requestToken, tokensMatch } from './
 import { sendJson } from './http.js';
 import { dispatch, type RouteContext, type RouteModule } from './router.js';
 import { createAgentRoutes } from './routes/agents.js';
+import { createModuleRoutes } from './routes/modules.js';
 import { createSystemRoutes } from './routes/system.js';
 import type { PanelDeps, PanelHandle, PanelRuntime } from './types.js';
 
@@ -84,7 +85,11 @@ export async function createPanel(deps: PanelDeps): Promise<PanelHandle> {
   const port = deps.config.panel?.port ?? 7777;
   const token = loadOrCreatePanelToken(deps.home);
   const runtime: PanelRuntime = { proactive: true };
-  const routes: RouteModule[] = [createSystemRoutes(deps, runtime), createAgentRoutes(deps)];
+  const routes: RouteModule[] = [
+    createSystemRoutes(deps, runtime),
+    createAgentRoutes(deps),
+    createModuleRoutes(deps),
+  ];
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);

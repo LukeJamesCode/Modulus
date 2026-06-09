@@ -161,6 +161,21 @@ test('agents validation: create without name is 400', async () => {
   assert.equal(res.status, 400);
 });
 
+test('modules: list and command reference respond', async () => {
+  const exts = await authed('/api/extensions');
+  assert.equal(exts.status, 200);
+  assert.ok(Array.isArray(((await exts.json()) as { extensions: unknown[] }).extensions));
+  const cmds = await authed('/api/commands');
+  assert.equal(cmds.status, 200);
+  const body = (await cmds.json()) as { core: unknown[]; extensions: unknown[] };
+  assert.ok(Array.isArray(body.core) && body.core.length > 0);
+});
+
+test('module settings for an unknown module is 404', async () => {
+  const res = await authed('/api/extensions/does-not-exist/settings');
+  assert.equal(res.status, 404);
+});
+
 test('stop and restart hand off to the host hooks', async () => {
   assert.equal((await authed('/api/agent/stop', { method: 'POST' })).status, 200);
   assert.equal((await authed('/api/agent/restart', { method: 'POST' })).status, 200);
