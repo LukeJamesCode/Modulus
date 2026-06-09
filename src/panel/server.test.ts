@@ -19,6 +19,15 @@ let db: DB;
 let panel: PanelHandle;
 let base: string;
 let token: string;
+let stopCalls = 0;
+let restartCalls = 0;
+
+function authed(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(`${base}${path}`, {
+    ...init,
+    headers: { ...(init.headers ?? {}), 'x-modulus-token': token },
+  });
+}
 
 before(async () => {
   home = mkdtempSync(join(tmpdir(), 'modulus-panel-'));
@@ -30,6 +39,12 @@ before(async () => {
     // port 0 → ephemeral; effectiveConfig fills panel defaults otherwise.
     config: { ...effectiveConfig(home), panel: { enabled: true, port: 0, bind: '127.0.0.1' } },
     extensionRoots: [],
+    onStop: () => {
+      stopCalls += 1;
+    },
+    onRestart: () => {
+      restartCalls += 1;
+    },
   });
   const u = new URL(panel.url);
   base = `${u.protocol}//${u.host}`;
@@ -82,4 +97,37 @@ test('path traversal outside web/ is forbidden', async () => {
   // Raw request — fetch would normalize ../, so go through the encoded form.
   const res = await fetch(`${base}/..%2f..%2fpackage.json`);
   assert.ok(res.status === 403 || res.status === 404);
+});
+
+test('POST /api/agent/start is a no-op that reports running', async () => {
+  const res = await authed('/api/agent/start', { method: 'POST' });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { ok: boolean; running: boolean };
+  assert.equal(body.running, true);
+});
+
+test('proactive toggle flips the flag surfaced in /api/state', async () => {
+  await authed('/api/agent/proactive', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ on: false }),
+  });
+  const off = (await (await authed('/api/state')).json()) as { proactive: boolean };
+  assert.equal(off.proactive, false);
+  await authed('/api/agent/proactive', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ on: true }),
+  });
+  const on = (await (await authed('/api/state')).json()) as { proactive: boolean };
+  assert.equal(on.proactive, true);
+});
+
+test('stop and restart hand off to the host hooks', async () => {
+  assert.equal((await authed('/api/agent/stop', { method: 'POST' })).status, 200);
+  assert.equal((await authed('/api/agent/restart', { method: 'POST' })).status, 200);
+  // The hooks fire ~100ms after the response flushes.
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(stopCalls, 1);
+  assert.equal(restartCalls, 1);
 });

@@ -669,7 +669,9 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   // In-process web panel. It borrows the live engine (no second stack, no DB
   // polling) and serves the browser UI + token-gated API. Best-effort: a panel
   // failure must never take the agent down. Skipped with --agent-only or when
-  // panel.enabled is false.
+  // panel.enabled is false. A panel Restart sets this flag so shutdown re-execs
+  // a fresh daemon only after the pid lock is released (no double-start race).
+  let restartRequested = false;
   let panel: PanelHandle | null = null;
   if (!options.agentOnly && cfg.panel?.enabled !== false) {
     try {
@@ -681,6 +683,11 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
         extensionRoots: extensionsRoots,
         ...(process.argv[1] ? { cliEntry: process.argv[1] } : {}),
         execArgv: process.execArgv,
+        onStop: () => void shutdown('panel-stop'),
+        onRestart: () => {
+          restartRequested = true;
+          void shutdown('panel-restart');
+        },
       });
       process.stdout.write(`Panel: ${panel.url}\n`);
     } catch (e) {
@@ -794,6 +801,21 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
       /* ignore */
     }
     clearPid(home);
+    // A panel-triggered restart re-execs a fresh daemon now that the pid lock
+    // is released, so the replacement's tryAcquirePidLock can't lose to us.
+    if (restartRequested) {
+      try {
+        const here = dirname(fileURLToPath(import.meta.url));
+        const cliEntry = process.argv[1] ?? join(here, 'index.js');
+        spawn(process.execPath, [...process.execArgv, cliEntry, 'start'], {
+          detached: true,
+          stdio: 'ignore',
+          env: process.env,
+        }).unref();
+      } catch (e) {
+        log.warn('restart re-exec failed', { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
     clearTimeout(hardExit);
     process.exit(0);
   };
