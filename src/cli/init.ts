@@ -184,8 +184,24 @@ export async function run(): Promise<void> {
       default: true,
     });
     if (wantWeb) {
+      // If they'll reach the panel from another device, bind it to the LAN — both
+      // for the setup wizard (otherwise the link only opens on this machine) and
+      // persistently, so the promoted daemon keeps binding the LAN. Loopback-only
+      // stays the default; LAN exposure is an explicit opt-in (North Star #5).
+      const wantLan = await confirm({
+        message: 'Will you open Modulus from another device on your network (phone, laptop)?',
+        default: false,
+      });
+      if (wantLan) {
+        const cfg = loadConfig(home);
+        cfg.panel = { ...cfg.panel, bind: '0.0.0.0' };
+        saveConfig(cfg, home);
+        process.stdout.write(
+          "Modulus will be reachable on your network — open the link it prints (it'll use this machine's address) from your other device.\n",
+        );
+      }
       const { run: startRun } = await import('./start.js');
-      await startRun({});
+      await startRun(wantLan ? { lan: true } : {});
       return;
     }
     process.stdout.write('Continuing setup in the terminal.\n\n');
