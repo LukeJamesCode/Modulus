@@ -674,7 +674,9 @@ async function downloadWhisperBinary(
   mkdirSync(installDir, { recursive: true });
   const archivePath = join(installDir, asset.archive);
   const url = `${WHISPER_RELEASE_BASE}/${asset.archive}`;
-  stdout(`  → Downloading whisper.cpp ${WHISPER_VERSION} for ${process.platform}/${process.arch}...\n`);
+  stdout(
+    `  → Downloading whisper.cpp ${WHISPER_VERSION} for ${process.platform}/${process.arch}...\n`,
+  );
   try {
     await downloadWithPartFile(url, archivePath, downloadFile);
     const status = await extractArchive(archivePath, installDir);
@@ -844,9 +846,7 @@ async function ensureStaticCmake(
     } catch {
       /* ignore */
     }
-    stdout(
-      `  cmake download failed: ${e instanceof Error ? e.message : String(e)}\n`,
-    );
+    stdout(`  cmake download failed: ${e instanceof Error ? e.message : String(e)}\n`);
     return undefined;
   }
 }
@@ -963,7 +963,9 @@ async function buildWhisperFromSource(
   }
 
   // Build whisper-cli.
-  stdout(`  → ${cmakeBin} --build ${buildDir} --target whisper-cli (a few minutes on slow CPUs)…\n`);
+  stdout(
+    `  → ${cmakeBin} --build ${buildDir} --target whisper-cli (a few minutes on slow CPUs)…\n`,
+  );
   const buildStatus = await streamingRunStep(
     {
       command: cmakeBin,
@@ -1049,9 +1051,7 @@ export async function ensureWhisperForVoice(
     // works there without forcing the user to follow a README. Skipped when
     // we have no home dir (no place to cache the source/build).
     if (platform !== 'win32' && opts.home) {
-      stdout(
-        '  No whisper.cpp package available for this system — building from source.\n',
-      );
+      stdout('  No whisper.cpp package available for this system — building from source.\n');
       const built = await buildWhisperFromSource(opts.home, opts);
       if (built) return built;
     }
