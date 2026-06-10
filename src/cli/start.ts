@@ -74,6 +74,7 @@ import {
   tryAcquirePidLock,
 } from './daemon.js';
 import { createPanel, type PanelHandle } from '../panel/server.js';
+import { createPanelConfirmBus } from '../panel/confirm-bus.js';
 
 const HOST_VERSION = '0.1.0';
 
@@ -265,6 +266,11 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   // every per-agent orchestrator below, so the whole fleet shares one memory.
   const memory = setupMemory({ db, tools, log });
   const memoryProvider = (message: string): string | undefined => memory.renderForPrompt(message);
+
+  // Bridges browser-chat confirm-tier prompts into the daemon's confirm router
+  // (consulted below before the Telegram fallback). The panel registers per-turn
+  // renderers on it; empty until a panel chat turn is live.
+  const panelConfirmBus = createPanelConfirmBus();
 
   const extensionsRoots = defaultExtensionRoots(home);
   const stateRoot = join(home, 'extension_state');
@@ -584,6 +590,11 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
         ...(ctx.signal ? { signal: ctx.signal } : {}),
       });
     }
+    // (A) A live browser chat turn for this chatId renders the confirm inline.
+    // When no panel turn is active this returns null and we fall through to (B)
+    // chat surfaces / Telegram, so the prompt always reaches the owner somewhere.
+    const viaPanel = panelConfirmBus.tryConfirm(handler, args, ctx);
+    if (viaPanel) return viaPanel;
     if (ctx.chatId !== undefined) {
       for (const surface of loader.chatSurfaces()) {
         let owns = false;
@@ -686,6 +697,9 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
         agentQueue,
         llm,
         memory,
+        orchestrator,
+        loader,
+        confirmBus: panelConfirmBus,
         ...(process.argv[1] ? { cliEntry: process.argv[1] } : {}),
         execArgv: process.execArgv,
         onStop: () => void shutdown('panel-stop'),

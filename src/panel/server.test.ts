@@ -17,6 +17,7 @@ import { createScheduler } from '../core/scheduler.js';
 import { createToolRegistry } from '../core/tools.js';
 import { effectiveConfig } from '../cli/config-store.js';
 import { panelTokenPath } from '../cli/daemon.js';
+import { createPanelConfirmBus } from './confirm-bus.js';
 import { createPanel, type PanelDeps, type PanelHandle } from './server.js';
 
 let home: string;
@@ -48,8 +49,12 @@ before(async () => {
     db,
     log,
     home,
-    // port 0 → ephemeral; effectiveConfig fills panel defaults otherwise.
-    config: { ...effectiveConfig(home), panel: { enabled: true, port: 0, bind: '127.0.0.1' } },
+    // port 0 → ephemeral; an allowlisted owner so chat can resolve a chatId.
+    config: {
+      ...effectiveConfig(home),
+      telegram: { token: 'x', allowedIds: [123] },
+      panel: { enabled: true, port: 0, bind: '127.0.0.1' },
+    },
     extensionRoots: [],
     scheduler,
     agentRegistry: createAgentRegistry(db),
@@ -61,6 +66,23 @@ before(async () => {
       tools: createToolRegistry({ log, confirm: async () => false }),
       log,
     }),
+    // A stub orchestrator that streams two deltas then finishes, and a loader
+    // with no intercepts — enough to exercise the SSE chat path offline.
+    orchestrator: {
+      handleUserMessage: async (msg: {
+        send: (c: { delta: string; done: boolean; meta?: unknown }) => void;
+      }) => {
+        msg.send({ delta: 'hi ', done: false });
+        msg.send({ delta: 'there', done: false });
+        msg.send({ delta: '', done: true, meta: { model: 'test', elapsedMs: 1 } });
+      },
+      stop: () => false,
+      newChat: () => {},
+      lastError: () => undefined,
+      shutdown: async () => {},
+    } as unknown as PanelDeps['orchestrator'],
+    loader: { intercepts: () => [] } as unknown as PanelDeps['loader'],
+    confirmBus: createPanelConfirmBus(),
     onStop: () => {
       stopCalls += 1;
     },
@@ -203,6 +225,43 @@ test('memory browser lists, finds, and deletes', async () => {
   assert.equal(typeof empty.total, 'number');
   const del = await authed('/api/memory/99999999', { method: 'DELETE' });
   assert.equal(del.status, 404);
+});
+
+test('chat: empty message is 400', async () => {
+  const res = await authed('/api/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: '  ' }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test('chat streams orchestrator deltas then done over SSE', async () => {
+  const res = await authed('/api/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 'hello' }),
+  });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') ?? '', /text\/event-stream/);
+  const text = await res.text();
+  assert.match(text, /event: delta/);
+  assert.match(text, /"delta":"hi /);
+  assert.match(text, /event: done/);
+});
+
+test('chat/confirm with an unknown id is 409 (fail-closed)', async () => {
+  const res = await authed('/api/chat/confirm', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: 'nope', ok: true }),
+  });
+  assert.equal(res.status, 409);
+});
+
+test('chat/clear resets the conversation', async () => {
+  const res = await authed('/api/chat/clear', { method: 'POST' });
+  assert.equal(res.status, 200);
 });
 
 test('stop and restart hand off to the host hooks', async () => {

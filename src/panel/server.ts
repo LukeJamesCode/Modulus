@@ -16,6 +16,7 @@ import { loadOrCreatePanelToken, PANEL_CSP, requestToken, tokensMatch } from './
 import { sendJson } from './http.js';
 import { dispatch, type RouteContext, type RouteModule } from './router.js';
 import { createAgentRoutes } from './routes/agents.js';
+import { createChatRoutes } from './routes/chat.js';
 import { createModuleRoutes } from './routes/modules.js';
 import { createSettingsRoutes } from './routes/settings.js';
 import { createSystemRoutes } from './routes/system.js';
@@ -88,6 +89,7 @@ export async function createPanel(deps: PanelDeps): Promise<PanelHandle> {
   const runtime: PanelRuntime = { proactive: true };
   const routes: RouteModule[] = [
     createSystemRoutes(deps, runtime),
+    createChatRoutes(deps),
     createAgentRoutes(deps),
     createModuleRoutes(deps),
     createSettingsRoutes(deps),
