@@ -1,6 +1,6 @@
 {
   "name": "modulus-minimax",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Adds MiniMax (chatcompletion_v2) as an LLM provider. Not OpenAI-compatible.",
   "modulus": ">=0.1.0",
   "deps": [],
