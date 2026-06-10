@@ -41,6 +41,7 @@ import type { LLM } from './llm.js';
 import type { AfterExecuteListener, ToolHandler, ToolRegistry } from './tools.js';
 import type { Scheduler, JobHandler, ScheduledJob, NudgeAction, Nudge } from './scheduler.js';
 import type { FastCache } from './fast-cache.js';
+import type { ModulePermissions } from './installer.js';
 import { namespacedCache } from './fast-cache.js';
 import { createChatDispatcher, type ChatDispatcher, type InboundMessage } from './chat-dispatch.js';
 
@@ -58,6 +59,12 @@ export interface Manifest {
   // Declarative — the host doesn't sandbox these in v1, but it logs anything
   // unrecognised so we surface drift.
   capabilities?: string[];
+  // Manifest v2: the concrete capabilities the user consents to at install. The
+  // registry publish step copies this verbatim into the index entry, and the
+  // marketplace / `modulus mod install` render it on the consent screen. Honest
+  // and minimal — list the domains the module contacts, binaries it spawns, and
+  // filesystem roots it touches.
+  permissions?: ModulePermissions;
   entrypoints?: {
     tools?: string;
     commands?: string;
