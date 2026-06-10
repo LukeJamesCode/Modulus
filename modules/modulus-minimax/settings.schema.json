@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "api_key": {
+      "type": "string",
+      "description": "MiniMax API Key",
+      "secret": true
+    },
+    "model": {
+      "type": "string",
+      "default": "abab6.5s-chat",
+      "description": "Default MiniMax model to use"
+    },
+    "ceiling": {
+      "type": "number",
+      "default": 1000000,
+      "description": "Daily total token budget (input + output). Set to 0 to disable."
+    },
+    "timeout_ms": {
+      "type": "number",
+      "default": 180000,
+      "description": "Network timeout per request in ms"
+    }
+  },
+  "required": ["api_key"]
+}

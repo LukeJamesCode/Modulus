@@ -1,0 +1,29 @@
+{
+  "name": "modulus-openai",
+  "version": "0.1.0",
+  "description": "Register OpenAI-compatible chat-completions endpoints as Modulus LLM provider aliases.",
+  "modulus": ">=0.1.0",
+  "deps": [],
+  "capabilities": ["network", "storage", "telegram"],
+  "permissions": {
+    "network": ["api.openai.com", "api.deepseek.com"]
+  },
+  "entrypoints": {
+    "tools": "./tools.ts",
+    "commands": "./commands.ts"
+  },
+  "telegram_commands": [
+    {
+      "command": "oai",
+      "description": "Send a one-shot prompt to an OpenAI-compatible endpoint"
+    },
+    {
+      "command": "oaistatus",
+      "description": "Today's OpenAI-compatible endpoint usage"
+    },
+    {
+      "command": "oaiendpoints",
+      "description": "List configured OpenAI-compatible endpoints"
+    }
+  ]
+}

@@ -22,6 +22,9 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
+  // Test files are run (and transpiled) by the test runner, not typechecked
+  // here — they use array indexing freely, which noUncheckedIndexedAccess
+  // flags. This pass guards the shipping module code against the core types.
   "include": ["**/*.ts", "../src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

@@ -1,0 +1,30 @@
+{
+  "name": "modulus-minimax",
+  "version": "0.1.0",
+  "description": "Adds MiniMax (chatcompletion_v2) as an LLM provider. Not OpenAI-compatible.",
+  "modulus": ">=0.1.0",
+  "deps": [],
+  "capabilities": ["network", "storage", "telegram"],
+  "permissions": {
+    "network": ["api.minimaxi.chat"]
+  },
+  "entrypoints": {
+    "tools": "./tools.ts",
+    "commands": "./commands.ts",
+    "auth": "./auth.ts"
+  },
+  "telegram_commands": [
+    {
+      "command": "minimax",
+      "description": "Run a one-shot query via MiniMax"
+    },
+    {
+      "command": "minimaxstatus",
+      "description": "Check today's MiniMax token budget and usage"
+    },
+    {
+      "command": "minimaxlogout",
+      "description": "Clear the stored MiniMax API key"
+    }
+  ]
+}
