@@ -1,0 +1,79 @@
+{
+  "name": "modulus-assistant",
+  "version": "1.0.0",
+  "description": "Unified everyday assistant: calendar, tasks, reminders, weather, briefings, and day-planning in one module.",
+  "modulus": ">=0.1.0",
+  "deps": [],
+  "capabilities": ["network", "storage", "auth:oauth", "telegram", "scheduler"],
+  "permissions": {
+    "network": [
+      "accounts.google.com",
+      "oauth2.googleapis.com",
+      "www.googleapis.com",
+      "tasks.googleapis.com",
+      "api.open-meteo.com",
+      "geocoding-api.open-meteo.com"
+    ]
+  },
+  "entrypoints": {
+    "tools": "./tools/index.ts",
+    "commands": "./commands.ts",
+    "jobs": "./jobs.ts",
+    "auth": "./auth.ts"
+  },
+  "telegram_commands": [
+    {
+      "command": "events",
+      "description": "List today's events"
+    },
+    {
+      "command": "addevent",
+      "description": "Add an event: /addevent <ISO start> | <title>"
+    },
+    {
+      "command": "delevent",
+      "description": "Delete an event by id"
+    },
+    {
+      "command": "quickadd",
+      "description": "Natural-language quick add: /quickadd Lunch with Sam Friday 1pm"
+    },
+    {
+      "command": "todos",
+      "description": "List incomplete tasks"
+    },
+    {
+      "command": "todo",
+      "description": "Add a task: /todo <title>"
+    },
+    {
+      "command": "done",
+      "description": "Complete a task: /done <title>"
+    },
+    {
+      "command": "tasks",
+      "description": "List available task lists"
+    },
+    {
+      "command": "weather",
+      "description": "Current weather and 4-day forecast"
+    },
+    {
+      "command": "remind",
+      "description": "Set a reminder: /remind <time> <message>"
+    },
+    {
+      "command": "reminders",
+      "description": "List upcoming reminders"
+    },
+    {
+      "command": "morningbrief",
+      "description": "Today's weather, events, and tasks"
+    },
+    {
+      "command": "nightbrief",
+      "description": "Evening summary: what's done, what's tomorrow"
+    }
+  ],
+  "intent_pattern": "\\b(events?|meetings?|appointments?|calendar|reschedule|free|schedul\\w*|tasks?|to-?dos?|my list|finish\\w*|done|remind\\w*|ping me|weather|temp\\w*|rain|snow|sunny|brief\\w*|plan.*day|block.*out|routines?|gym|run|tomorrow|today|cancel|delete|remove|drop)\\b"
+}

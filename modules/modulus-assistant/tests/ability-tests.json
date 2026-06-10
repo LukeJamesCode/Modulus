@@ -1,0 +1,398 @@
+{
+  "tests": [
+    {
+      "id": "cal.create.smoke",
+      "ability": "calendar:create_event",
+      "tier": "smoke",
+      "kind": "freeform",
+      "message": "Create an event for tomorrow at 12pm for camping",
+      "expects": { "tool": "calendar_add_event" }
+    },
+    {
+      "id": "cal.create.std1",
+      "ability": "calendar:create_event",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "I have a party at Ranchman's on May 19th 2pm to 5pm — add it to my calendar",
+      "expects": { "tool": "calendar_add_event" }
+    },
+    {
+      "id": "cal.create.std2",
+      "ability": "calendar:create_event",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Book a dentist appointment next Tuesday morning at 9",
+      "expects": { "tool": "calendar_add_event" }
+    },
+    {
+      "id": "cal.create.full1",
+      "ability": "calendar:create_event",
+      "tier": "full",
+      "kind": "freeform",
+      "message": "Add gym tomorrow 6:30am to 7:30am",
+      "expects": { "tool": "calendar_add_event" }
+    },
+    {
+      "id": "cal.create.full2",
+      "ability": "calendar:create_event",
+      "tier": "full",
+      "kind": "freeform",
+      "message": "Schedule lunch with Mum on Friday — I'll figure out the time later",
+      "note": "No clock time given. Either an all-day calendar_add_event for Friday OR a clarifying question (no tool) is acceptable.",
+      "expects": {}
+    },
+    {
+      "id": "cal.create.slash.full",
+      "ability": "calendar:create_event",
+      "tier": "full",
+      "kind": "slash",
+      "message": "/addevent 2026-05-23T18:00:00 | Movie night"
+    },
+    {
+      "id": "cal.quickadd.smoke",
+      "ability": "calendar:quickadd",
+      "tier": "smoke",
+      "kind": "slash",
+      "message": "/quickadd Lunch with Sam Friday 1pm"
+    },
+    {
+      "id": "cal.list.smoke",
+      "ability": "calendar:list_events",
+      "tier": "smoke",
+      "kind": "freeform",
+      "message": "What's on my calendar today?",
+      "expects": { "tool": "calendar_list_events" }
+    },
+    {
+      "id": "cal.list.std1",
+      "ability": "calendar:list_events",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Do I have anything tomorrow?",
+      "expects": { "tool": "calendar_list_events" }
+    },
+    {
+      "id": "cal.list.std2",
+      "ability": "calendar:list_events",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Show my events this week",
+      "expects": { "tool": "calendar_list_events" }
+    },
+    {
+      "id": "cal.list.slash.smoke",
+      "ability": "calendar:list_events",
+      "tier": "smoke",
+      "kind": "slash",
+      "message": "/events"
+    },
+    {
+      "id": "cal.delete.std",
+      "ability": "calendar:delete_event",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Cancel the camping event I just created",
+      "expects": { "tool": "calendar_delete_event" }
+    },
+
+    {
+      "id": "tasks.add.smoke",
+      "ability": "tasks:add",
+      "tier": "smoke",
+      "kind": "freeform",
+      "message": "Add \"buy milk\" to my todos",
+      "expects": { "tool": "tasks_add" }
+    },
+    {
+      "id": "tasks.add.std1",
+      "ability": "tasks:add",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "I need to finish the project report",
+      "expects": { "tool": "tasks_add" }
+    },
+    {
+      "id": "tasks.add.std2",
+      "ability": "tasks:add",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Put \"call dad on his birthday\" on my list"
+    },
+    {
+      "id": "tasks.add.full1",
+      "ability": "tasks:add",
+      "tier": "full",
+      "kind": "freeform",
+      "message": "Add a todo to renew the car insurance"
+    },
+    {
+      "id": "tasks.add.slash.smoke",
+      "ability": "tasks:add",
+      "tier": "smoke",
+      "kind": "slash",
+      "message": "/todo Buy bread"
+    },
+    {
+      "id": "tasks.list.smoke",
+      "ability": "tasks:list",
+      "tier": "smoke",
+      "kind": "freeform",
+      "message": "What's on my to-do list?",
+      "expects": { "tool": "tasks_list" }
+    },
+    {
+      "id": "tasks.list.std",
+      "ability": "tasks:list",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Show my open tasks",
+      "expects": { "tool": "tasks_list" }
+    },
+    {
+      "id": "tasks.list.slash.smoke",
+      "ability": "tasks:list",
+      "tier": "smoke",
+      "kind": "slash",
+      "message": "/todos"
+    },
+    {
+      "id": "tasks.lists.slash.std",
+      "ability": "tasks:lists",
+      "tier": "standard",
+      "kind": "slash",
+      "message": "/tasks"
+    },
+    {
+      "id": "tasks.complete.smoke",
+      "ability": "tasks:complete",
+      "tier": "smoke",
+      "kind": "freeform",
+      "message": "Mark \"buy milk\" as done",
+      "expects": { "tool": "tasks_complete" }
+    },
+    {
+      "id": "tasks.complete.std",
+      "ability": "tasks:complete",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "I finished the project report",
+      "expects": { "tool": "tasks_complete" }
+    },
+    {
+      "id": "tasks.complete.slash.smoke",
+      "ability": "tasks:complete",
+      "tier": "smoke",
+      "kind": "slash",
+      "message": "/done Buy bread"
+    },
+    {
+      "id": "tasks.delete.full",
+      "ability": "tasks:delete",
+      "tier": "full",
+      "kind": "freeform",
+      "message": "Delete \"buy milk\" from my todos",
+      "note": "Destructive on the real task list — relies on tasks.add.smoke having created \"buy milk\" earlier in the run; cleanup removes any leftover.",
+      "expects": { "tool": "tasks_delete" }
+    },
+
+    {
+      "id": "rem.set.smoke",
+      "ability": "reminders:set",
+      "tier": "smoke",
+      "kind": "freeform",
+      "message": "Remind me at 8pm tonight to take the trash out",
+      "expects": { "tool": "reminder_set" }
+    },
+    {
+      "id": "rem.set.std1",
+      "ability": "reminders:set",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Remind me in 10 minutes to check the oven",
+      "expects": { "tool": "reminder_set" }
+    },
+    {
+      "id": "rem.set.std2",
+      "ability": "reminders:set",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Remind me tomorrow morning to email the landlord",
+      "expects": { "tool": "reminder_set" }
+    },
+    {
+      "id": "rem.set.full",
+      "ability": "reminders:set",
+      "tier": "full",
+      "kind": "freeform",
+      "message": "Ping me every weekday at 9am to take my vitamins"
+    },
+    {
+      "id": "rem.set.slash.smoke",
+      "ability": "reminders:set",
+      "tier": "smoke",
+      "kind": "slash",
+      "message": "/remind 20:00 take the trash out"
+    },
+    {
+      "id": "rem.list.smoke",
+      "ability": "reminders:list",
+      "tier": "smoke",
+      "kind": "freeform",
+      "message": "What reminders do I have?",
+      "expects": { "tool": "reminder_list" }
+    },
+    {
+      "id": "rem.list.slash.smoke",
+      "ability": "reminders:list",
+      "tier": "smoke",
+      "kind": "slash",
+      "message": "/reminders"
+    },
+    {
+      "id": "rem.cancel.std",
+      "ability": "reminders:cancel",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Cancel my reminder to take the trash out",
+      "note": "Relies on rem.set.* having created the trash reminder earlier in the run; only test-created reminders are affected and cleanup removes the rest.",
+      "expects": { "tool": "reminder_cancel" }
+    },
+
+    {
+      "id": "weather.now.smoke",
+      "ability": "weather:get",
+      "tier": "smoke",
+      "kind": "freeform",
+      "message": "What's the weather right now?",
+      "expects": { "tool": "weather_get" }
+    },
+    {
+      "id": "weather.tomorrow.std",
+      "ability": "weather:get",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Will it rain tomorrow?",
+      "expects": { "tool": "weather_get" }
+    },
+    {
+      "id": "weather.week.std",
+      "ability": "weather:get",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "What's the forecast for the next few days?",
+      "expects": { "tool": "weather_get" }
+    },
+    {
+      "id": "weather.outdoor.full",
+      "ability": "weather:get",
+      "tier": "full",
+      "kind": "freeform",
+      "message": "Is it a good day to go for a run later?",
+      "expects": { "tool": "weather_get" }
+    },
+    {
+      "id": "weather.slash.smoke",
+      "ability": "weather:get",
+      "tier": "smoke",
+      "kind": "slash",
+      "message": "/weather"
+    },
+
+    {
+      "id": "brief.morning.slash.smoke",
+      "ability": "briefing:morning",
+      "tier": "smoke",
+      "kind": "slash",
+      "message": "/morningbrief"
+    },
+    {
+      "id": "brief.morning.std",
+      "ability": "briefing:morning",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Give me my morning brief",
+      "expects": { "tool": "briefing_today" }
+    },
+    {
+      "id": "brief.night.slash.smoke",
+      "ability": "briefing:night",
+      "tier": "smoke",
+      "kind": "slash",
+      "message": "/nightbrief"
+    },
+    {
+      "id": "brief.night.std",
+      "ability": "briefing:night",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "What does tomorrow look like?",
+      "expects": { "tool": "briefing_tomorrow" }
+    },
+
+    {
+      "id": "plan.day.smoke",
+      "ability": "planning:plan_day",
+      "tier": "smoke",
+      "kind": "freeform",
+      "message": "Plan my day",
+      "expects": { "tool": "plan_day" }
+    },
+    {
+      "id": "plan.day.std",
+      "ability": "planning:plan_day",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Help me block out tomorrow",
+      "expects": { "tool": "plan_day" }
+    },
+    {
+      "id": "plan.free.smoke",
+      "ability": "planning:find_free_slot",
+      "tier": "smoke",
+      "kind": "freeform",
+      "message": "When am I free tomorrow afternoon?",
+      "expects": { "tool": "find_free_slot" }
+    },
+    {
+      "id": "plan.free.std",
+      "ability": "planning:find_free_slot",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "Find me a free hour this week for a workout",
+      "expects": { "tool": "find_free_slot" }
+    },
+    {
+      "id": "plan.smart.full",
+      "ability": "planning:smart_schedule_task",
+      "tier": "full",
+      "kind": "freeform",
+      "message": "Schedule the project report somewhere this week, 2 hours, mornings preferred",
+      "expects": { "tool": "smart_schedule_task" }
+    },
+    {
+      "id": "plan.wxcheck.full",
+      "ability": "planning:weather_reschedule_check",
+      "tier": "full",
+      "kind": "freeform",
+      "message": "Anything outdoor on my calendar tomorrow that's going to get rained on?",
+      "expects": { "tool": "weather_reschedule_check" }
+    },
+
+    {
+      "id": "routine.list.std",
+      "ability": "routines:list",
+      "tier": "standard",
+      "kind": "freeform",
+      "message": "What routines have you learned?",
+      "expects": { "tool": "learned_routine_list" }
+    },
+    {
+      "id": "routine.delete.full",
+      "ability": "routines:delete",
+      "tier": "full",
+      "kind": "freeform",
+      "message": "Forget the vitamins routine",
+      "note": "learned_routine_delete is a confirm-tier tool and cannot complete in non-interactive abilitytest. Informational only."
+    }
+  ]
+}
