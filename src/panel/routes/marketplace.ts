@@ -30,12 +30,10 @@ import { collectModuleReadiness } from '../../core/module-readiness.js';
 import { userModulesRoot } from '../../cli/module-paths.js';
 import { ensurePrivateDir } from '../../cli/config-store.js';
 import { readJson, sendJson } from '../http.js';
+import { HOST_VERSION } from '../../core/version.js';
 import type { RouteModule } from '../router.js';
 import type { PanelDeps } from '../types.js';
 
-// Best-effort core version for the entry's minCoreVersion gate; matches the
-// version the panel reports in /api/state and package.json.
-const HOST_VERSION = '1.0.0';
 // Per-module record of the capabilities the user consented to, so an update
 // that asks for MORE re-prompts while one that asks for the same (or less)
 // installs quietly. Sits inside the module dir; the loader only reads

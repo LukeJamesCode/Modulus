@@ -73,8 +73,7 @@ import {
 } from './daemon.js';
 import { createPanel, type PanelHandle } from '../panel/server.js';
 import { createPanelConfirmBus } from '../panel/confirm-bus.js';
-
-const HOST_VERSION = '0.1.0';
+import { HOST_VERSION } from '../core/version.js';
 
 export interface StartRunOptions {
   detach?: boolean;

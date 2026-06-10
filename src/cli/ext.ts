@@ -51,10 +51,7 @@ import {
   InstallError,
 } from '../core/installer.js';
 import { fetchRegistryIndex, findRegistryEntry } from '../core/registry.js';
-
-// Best-effort core version for the registry entry's minCoreVersion gate; matches
-// package.json and the version the panel reports.
-const HOST_VERSION = '1.0.0';
+import { HOST_VERSION } from '../core/version.js';
 
 interface InstalledExt {
   name: string;

@@ -13,8 +13,7 @@ import { metricsFilePath } from '../cli/daemon.js';
 import { probeOllama } from '../cli/ollama-probe.js';
 import { collectModuleReadiness } from '../core/module-readiness.js';
 import { readMetrics } from '../core/metrics.js';
-
-const VERSION = '1.0.0';
+import { HOST_VERSION } from '../core/version.js';
 
 export interface BuildStateDeps {
   db: DB;
@@ -158,7 +157,7 @@ export async function buildState(deps: BuildStateDeps): Promise<unknown> {
       ? { jobs: metrics.scheduler.jobsRegistered, nudgesSent: metrics.scheduler.nudgesSent }
       : null,
     activity,
-    version: VERSION,
+    version: HOST_VERSION,
     lan: lanAddress(),
   };
 }
