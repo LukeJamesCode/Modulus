@@ -1,0 +1,23 @@
+{
+  "name": "modulus-voice",
+  "version": "1.0.0",
+  "description": "Two-way voice for Telegram: outbound replies via Piper TTS, inbound voice-note transcription via whisper.cpp. /voice on enables voice replies; /voice transcribe on enables voice-in.",
+  "modulus": ">=0.1.0",
+  "deps": [],
+  "capabilities": ["telegram", "storage", "network"],
+  "permissions": {
+    "network": ["github.com", "huggingface.co"]
+  },
+  "entrypoints": {
+    "commands": "./commands.ts",
+    "jobs": "./jobs.ts",
+    "auth": "./auth.ts",
+    "setup": "./setup.ts"
+  },
+  "telegram_commands": [
+    {
+      "command": "voice",
+      "description": "Voice settings: /voice on|off|status, /voice transcribe on|off|status"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "type": "object",
+  "properties": {
+    "piper_bin": {
+      "type": "string",
+      "default": "piper",
+      "description": "Path or name of the piper executable. The default expects piper to be on $PATH."
+    },
+    "voice_id": {
+      "type": "string",
+      "default": "en_GB-northern_english_male-medium",
+      "description": "Piper voice ID to auto-download on first use (e.g. en_GB-northern_english_male-medium). Set via the setup wizard."
+    },
+    "voice_model_path": {
+      "type": "string",
+      "secret": true,
+      "description": "Optional override: filesystem path to a Piper voice model (.onnx). Leave blank to auto-download and use voice_id."
+    },
+    "ffmpeg_bin": {
+      "type": "string",
+      "default": "ffmpeg",
+      "description": "Path or name of ffmpeg, used to convert Piper's WAV output to OGG/Opus for Telegram voice notes (and the inbound OGG -> WAV conversion for STT)."
+    },
+    "max_chars": {
+      "type": "number",
+      "default": 600,
+      "description": "Skip TTS for replies longer than this many characters. Voice notes for very long replies feel punishing on the listener side."
+    },
+    "default_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether new chats default to voice replies on. Most users want to opt in per chat with /voice on."
+    },
+    "whisper_bin": {
+      "type": "string",
+      "default": "whisper-cli",
+      "description": "Path or name of the whisper.cpp CLI used for voice-to-text. Other common names (whisper, whisper-cpp) are tried automatically."
+    },
+    "whisper_model_id": {
+      "type": "string",
+      "default": "ggml-base.en",
+      "description": "Whisper model id to auto-download on first use (e.g. ggml-tiny.en for Pi 4, ggml-base.en for mini-PC). Pulled from huggingface.co/ggerganov/whisper.cpp."
+    },
+    "whisper_model_path": {
+      "type": "string",
+      "secret": true,
+      "description": "Optional override: filesystem path to a ggml whisper model (.bin). Leave blank to auto-download and use whisper_model_id."
+    },
+    "stt_max_duration_sec": {
+      "type": "number",
+      "default": 120,
+      "description": "Skip transcription for voice notes longer than this many seconds. Long notes can pin the CPU for tens of seconds on a Pi."
+    },
+    "stt_language": {
+      "type": "string",
+      "default": "auto",
+      "description": "ISO-639-1 language code for transcription, or 'auto' to let whisper detect. The default English-only models (ggml-*.en) ignore this."
+    },
+    "stt_default_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether new chats default to voice transcription on. Most users opt in per chat with /voice transcribe on."
+    }
+  },
+  "required": []
+}
