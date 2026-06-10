@@ -26,5 +26,10 @@
   // here — they use array indexing freely, which noUncheckedIndexedAccess
   // flags. This pass guards the shipping module code against the core types.
   "include": ["**/*.ts", "../src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  // Heavy modules import third-party packages (playwright, discord.js) that core
+  // deliberately does NOT carry — they ship with the opt-in module and are
+  // installed only when a user enables it. Their tool entrypoints can't resolve
+  // here, so they're excluded from the core typecheck; the pure, safety-critical
+  // logic each ships (e.g. the SSRF guard) lives in its own file and IS checked.
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "modulus-browser/tools.ts"]
 }
