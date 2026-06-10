@@ -12,7 +12,7 @@
     "modulus": "./dist/cli/index.js"
   },
   "scripts": {
-    "build": "tsc && node scripts/copy-migrations.mjs",
+    "build": "tsc && node scripts/copy-migrations.mjs && node scripts/copy-web.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
