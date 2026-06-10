@@ -43,6 +43,7 @@ import {
 import { createAgentQueue } from '../core/agent-queue.js';
 import { setupAgentApprovals } from '../core/agent-approvals.js';
 import { setupAgentDelegation } from '../core/agent-delegation.js';
+import { setupAgentEscalation, ESCALATE_TOOL_NAME } from '../core/agent-escalation.js';
 import { setupAgentPlanning } from '../core/agent-planning.js';
 import { setupFilesystemTools } from '../core/fs-tools.js';
 import { pinnedFilesRoot } from '../core/agent-attachments.js';
@@ -383,10 +384,16 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   const agentInferenceTimeoutMs = envInt('MODULUS_AGENT_INFERENCE_TIMEOUT_MS') ?? 20 * 60_000;
   // Per-task input attachments (dropped files/folders/images/PDFs) live here.
   const attachmentsDir = join(home, 'agent-attachments');
+  // Agents see every tool except escalate_to_agent: escalation is the main
+  // chat's way to hand long work to the operator, and an agent re-escalating to
+  // a sibling operator would just spawn redundant work (agents delegate with
+  // spawn_agent instead). The mirror of chatTools, which hides the agent-only
+  // delegation tools from the chat.
+  const agentTools = filterToolRegistry(tools, (h) => h.name !== ESCALATE_TOOL_NAME);
   const agentRuntime = createAgentRuntime({
     db,
     llm,
-    tools,
+    tools: agentTools,
     log,
     registry: agentRegistry,
     ownerUserId: ownerId,
@@ -414,6 +421,16 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
     // The web panel enqueues tasks from its own process; poll so the daemon —
     // the single executor — picks them up.
     pollMs: 2500,
+  });
+  // escalate_to_agent: the main chat's hand-off to the autonomous operator on
+  // the queue. Registered on the full registry so chatTools (which only hides
+  // the agent-only tools) exposes it, while agentTools above hides it from
+  // agents.
+  setupAgentEscalation({
+    tools,
+    registry: agentRegistry,
+    queue: agentQueue,
+    log,
   });
   // The spawn_agent / spawn_agents delegation tools (visible only to agents
   // that may delegate). maxParallel bounds spawn_agents' inline fan-out to the
