@@ -38,10 +38,10 @@ No telemetry. No analytics. No outbound calls except to the services you configu
 All credentials (Telegram bot token, Google OAuth client ID/secret/refresh tokens, API keys) are stored in:
 
 - `~/.modulus/config.json` (mode `0600`) — Telegram token
-- `~/.modulus/modulus.db` (SQLite, mode `0600`) — extension credentials via `extension_settings`
+- `~/.modulus/modulus.db` (SQLite, mode `0600`) — module credentials via `module_settings`
 - `~/.modulus/log/modulus.log`, `~/.modulus/modulus.pid`, and `~/.modulus/metrics.json` (mode `0600`) — operational state
 
-Modulus also tightens `~/.modulus/`, `~/.modulus/log/`, and extension state directories to mode `0700` at startup/config writes. On filesystems that do not support POSIX permissions this is best-effort, so keep the host directory private at the OS/container layer too.
+Modulus also tightens `~/.modulus/`, `~/.modulus/log/`, and module state directories to mode `0700` at startup/config writes. On filesystems that do not support POSIX permissions this is best-effort, so keep the host directory private at the OS/container layer too.
 
 Access is OS-level. If an attacker has read access to these files, they have your credentials. Protect the `~/.modulus/` directory accordingly.
 
@@ -53,7 +53,7 @@ If you share logs for debugging, check for unredacted values before posting publ
 
 ### `modulus config` masking
 
-Settings marked `"secret": true` in an extension's `settings.schema.json` are masked in the interactive TUI prompt and in `modulus status` output. The underlying stored value is plaintext in SQLite.
+Settings marked `"secret": true` in an module's `settings.schema.json` are masked in the interactive TUI prompt and in `modulus status` output. The underlying stored value is plaintext in SQLite.
 
 ---
 
@@ -67,7 +67,7 @@ Keep this list to the minimum set of users who should have access. The bot can e
 
 ## Tool permission tiers
 
-Extensions register tools at one of three tiers:
+Modules register tools at one of three tiers:
 
 | Tier      | Behaviour                                                           |
 | --------- | ------------------------------------------------------------------- |
@@ -75,22 +75,22 @@ Extensions register tools at one of three tiers:
 | `confirm` | Sends a Telegram confirmation prompt before running.                |
 | `owner`   | Runs only for users with the owner role (first ID in `allowedIds`). |
 
-When installing a third-party extension, review its `tools.ts` to confirm that mutating tools use `confirm` or `owner` tier rather than `auto`.
+When installing a third-party module, review its `tools.ts` to confirm that mutating tools use `confirm` or `owner` tier rather than `auto`.
 
 ---
 
-## Extension security
+## Module security
 
-Extensions run in-process with full Node.js privileges. A malicious extension has access to:
+Modules run in-process with full Node.js privileges. A malicious module has access to:
 
 - The shared SQLite database
 - All `host.*` APIs (settings, tools, Telegram, scheduler)
 - The filesystem
 - The network
 
-Only install extensions you trust. The bundled first-party extensions in `extensions/` are reviewed as part of the main codebase.
+Only install modules you trust. The bundled first-party modules in `modules/` are reviewed as part of the main codebase.
 
-Third-party extensions installed via git URL run whatever code is in that repository. Review the code before installing. In particular, check `tools.ts`, `jobs.ts`, and `auth.ts`.
+Third-party modules installed via git URL run whatever code is in that repository. Review the code before installing. In particular, check `tools.ts`, `jobs.ts`, and `auth.ts`.
 
 ---
 

@@ -17,10 +17,10 @@ Audit of the Gurney codebase shows Modulus is ~70% already built:
 | Modulus requirement                                                      | Existing Gurney asset                                                                                                                                                                                      |
 | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Orchestrator that delegates to specialist agents                         | Multi-agent engine: `src/core/agents.ts`, `agent-delegation.ts` (`spawn_agent`/`spawn_agents`), `agent-queue.ts` (resource governor), `agent-planning.ts` (autonomous loop). See `docs/05-multi-agent.md`. |
-| Integrated UI with Dashboard / Agents / Modules / Settings / System tabs | `extensions/gurney-frontend` — all five tabs already exist (`chathub.jsx`, `agents.jsx`, `extensions.jsx`, `settings.jsx`, `system.jsx`).                                                                  |
+| Integrated UI with Dashboard / Agents / Modules / Settings / System tabs | `modules/gurney-frontend` — all five tabs already exist (`chathub.jsx`, `agents.jsx`, `modules.jsx`, `settings.jsx`, `system.jsx`).                                                                        |
 | Module install from a registry                                           | `src/cli/ext.ts` — registry.json resolution, git/folder install, `assertSafeExtName`, `assertContained` path safety.                                                                                       |
 | Install-time permission consent                                          | Already designed (deferred "ClawHub-style registry" notes): install consent prompt, domain-scoped network, root-pinned filesystem, binary-allowlisted subprocess, no silent capability grants on update.   |
-| Instant responses                                                        | `extensions/gurney-instant-responses` (port into core behind a toggle).                                                                                                                                    |
+| Instant responses                                                        | `modules/gurney-instant-responses` (port into core behind a toggle).                                                                                                                                       |
 | Telegram native                                                          | `src/adapters/telegram.ts` (grammY long-poll) — unchanged.                                                                                                                                                 |
 
 So the work is: **rebrand + integrate + 3 new features** (hive-mind memory, marketplace UX, delegation polish). Everything below is organized around that.
@@ -46,8 +46,8 @@ So the work is: **rebrand + integrate + 3 new features** (hive-mind memory, mark
 Create `Modulus` repo. Copy from GurneyAgent:
 
 - `src/` (all), `scripts/`, `.github/workflows/`, `package.json`, `tsconfig.json`, ESLint/Prettier configs, `docker-compose` files.
-- `extensions/gurney-frontend/web/*` → becomes `src/panel/web/` (see §2).
-- `extensions/gurney-instant-responses` logic → into core (see §4).
+- `modules/gurney-frontend/web/*` → becomes `src/panel/web/` (see §2).
+- `modules/gurney-instant-responses` logic → into core (see §4).
 - The 8 V1 modules → `modules/` directory in the new repo (see §6).
 
 Do **not** copy: `gurney-tudor` (V2), `graphify-out/`, `future-plans/`, ATLAS migration tooling, `web/history.jsx` + `web/learnhub.jsx` (History tab removed; LearnHub is V2 Tutor UI). `gurney-abilitytest` (the eval harness) is **not copied in Phase 0** — it is outdated and needs rework; it comes back as the final phase (Phase 9) so performance claims are measured, not vibes.
@@ -55,7 +55,7 @@ Do **not** copy: `gurney-tudor` (V2), `graphify-out/`, `future-plans/`, ATLAS mi
 Global renames:
 
 - Package/binary: `gurney` → `modulus`; data dir `~/.gurney/` → `~/.modulus/`; env prefix `GURNEY_` → `MODULUS_`; DB file `modulus.db`.
-- "extension" → "module" in all identifiers, tables (`extension_state` → `module_state`, `extension_settings` → `module_settings` — fresh repo, fresh migration 0001 baseline, no compat shims), CLI (`modulus mod install …`), and UI copy.
+- "module" → "module" in all identifiers, tables (`module_state` → `module_state`, `module_settings` → `module_settings` — fresh repo, fresh migration 0001 baseline, no compat shims), CLI (`modulus mod install …`), and UI copy.
 - Module naming: the V1 list says "Gurney Browser" etc. — **rename to `modulus-browser`, `modulus-codex`, `modulus-discord`, `modulus-assistant`, `modulus-minimax`, `modulus-openai`, `modulus-voice`, `modulus-websearch`** so the brand is consistent. (Flagged to maintainer; assumed yes.)
 
 Because the repo is fresh, **squash Gurney's 20+ migrations into a clean numbered baseline** (`0001_core.sql`, `0002_agents.sql`, …). There are no existing Modulus installs to migrate. Keep the migration _system_ (`src/storage/db.ts`, `_migrations` checksum tracking) exactly as is.
@@ -78,10 +78,10 @@ src/panel/
     modules.ts       — marketplace: index fetch, install, update, settings, docs
     settings.ts      — core settings incl. instant-responses toggle, memory browser
     system.ts        — CPU/RAM/logs/metrics
-  web/               — moved from extensions/gurney-frontend/web (minus history.jsx, learnhub.jsx)
+  web/               — moved from modules/gurney-frontend/web (minus history.jsx, learnhub.jsx)
 ```
 
-The current `extensions/gurney-frontend/server.ts` is a 128 KB file whose `handleApi()` is the most connected node in the codebase (37 edges). **Split it along the route boundaries above** — mechanical extraction, same handlers.
+The current `modules/gurney-frontend/server.ts` is a 128 KB file whose `handleApi()` is the most connected node in the codebase (37 edges). **Split it along the route boundaries above** — mechanical extraction, same handlers.
 
 ### In-process wiring
 
@@ -93,7 +93,7 @@ The current `extensions/gurney-frontend/server.ts` is a 128 KB file whose `handl
 
 1. **Dashboard** — the chat with the Modulus Agent (existing `chathub.jsx`, renamed/restyled).
 2. **Agents** — fleet + editor + live run view (existing `agents.jsx`).
-3. **Modules** — Marketplace + installed-module settings/docs (existing `extensions.jsx`, extended per §5).
+3. **Modules** — Marketplace + installed-module settings/docs (existing `modules.jsx`, extended per §5).
 4. **Settings** — general settings, instant-responses toggle, memory browser.
 5. **System** — CPU/RAM/logs (existing `system.jsx`).
 
@@ -152,7 +152,7 @@ On module load, declared agents are registered into the fleet (marked module-own
 
 ## 4. Instant Responses — core feature
 
-Port `extensions/gurney-instant-responses/commands.ts` logic into the chat dispatch path (`src/core/chat-dispatch.ts` area), behind a core setting `instantResponses.enabled` (UI toggle in Settings, default on).
+Port `modules/gurney-instant-responses/commands.ts` logic into the chat dispatch path (`src/core/chat-dispatch.ts` area), behind a core setting `instantResponses.enabled` (UI toggle in Settings, default on).
 
 Behaviour: when a turn is predicted slow (heavy profile selected, delegation likely, or autonomous escalation), immediately send a short friendly ack — canned-phrase pool with light variation; **no model call for the ack** (Rule: code answers when code can answer) — then stream/edit the real answer when ready. Works identically for Telegram (message edit) and the panel (SSE status → final).
 
@@ -297,7 +297,7 @@ Port logic into chat dispatch behind `instantResponses.enabled`; Settings toggle
 _Done when:_ §4 success criteria pass.
 
 **Phase 3 — Module system v2.**
-extension→module rename everywhere; manifest v2 (`version`, `displayName`, `icon`, `permissions`, `agents`); module-registered agents join/leave the fleet on install/uninstall; hot-load investigation (or daemon-managed reload fallback).
+module→module rename everywhere; manifest v2 (`version`, `displayName`, `icon`, `permissions`, `agents`); module-registered agents join/leave the fleet on install/uninstall; hot-load investigation (or daemon-managed reload fallback).
 _Done when:_ dropping a module folder into `~/.modulus/modules/` surfaces tools **and** its agent with no core change; §3 module-agent criteria pass.
 
 **Phase 4 — Hive-Mind memory.**
