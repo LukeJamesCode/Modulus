@@ -3,10 +3,8 @@
 // CLI (the same path `modulus ext` uses, so native-dep setup runs too). The
 // daemon stays the install owner; the panel just drives it.
 //
-// Deferred to later passes: the enable-stream SSE (progress for big model
-// downloads), the interactive OAuth auth flows, and binary upload — all
-// SSE/interactive and tied to other subsystems. /api/commands lives here
-// because it reuses listExtensions.
+// Deferred to later passes: the interactive OAuth auth flows and binary
+// upload. /api/commands lives here because it reuses listExtensions.
 
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -15,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { configureNativeDepsForExtension } from '../../cli/ext-setup.js';
 import { collectExtensionReadiness } from '../../core/extension-readiness.js';
 import type { Manifest, SettingsSchema } from '../../core/extensions.js';
-import { readJson, sendJson } from '../http.js';
+import { readJson, sendJson, sse, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
 import type { PanelDeps } from '../types.js';
 import type { DB } from '../../storage/db.js';
@@ -201,11 +199,48 @@ function runModulus(
   });
 }
 
+// Like runModulus, but hands output chunks to the caller as they arrive — the
+// enable-stream SSE relays them so a big model download shows progress lines
+// instead of a frozen spinner. Generous timeout for exactly that case.
+function runModulusStreaming(
+  deps: PanelDeps,
+  args: string[],
+  onChunk: (text: string) => void,
+  timeoutMs = 1_800_000,
+): Promise<{ code: number }> {
+  return new Promise((resolveRun) => {
+    const child = spawn(process.execPath, [...(deps.execArgv ?? []), cliEntryPath(deps), ...args], {
+      cwd: REPO_ROOT,
+      env: process.env,
+    });
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* ignore */
+      }
+    }, timeoutMs);
+    timer.unref();
+    child.stdout.on('data', (d: Buffer) => onChunk(d.toString('utf8')));
+    child.stderr.on('data', (d: Buffer) => onChunk(d.toString('utf8')));
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolveRun({ code: code ?? -1 });
+    });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      onChunk(String(e));
+      resolveRun({ code: -1 });
+    });
+  });
+}
+
 // Run a module's `setup` entrypoint (native-dep bootstrap) non-interactively,
 // the same way `modulus init` does after the user picks modules.
 async function runExtSetup(
   deps: PanelDeps,
   name: string,
+  onChunk?: (text: string) => void,
 ): Promise<{ ok: boolean; output: string }> {
   const folder = findExtFolder(deps.extensionRoots, name);
   if (!folder) return { ok: false, output: `module '${name}' not found` };
@@ -222,6 +257,7 @@ async function runExtSetup(
       interactive: false,
       stdout: (text) => {
         captured += text;
+        onChunk?.(text);
       },
     });
     return { ok: true, output: captured };
@@ -268,6 +304,49 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
         })
         .flatMap((e) => e.commands);
       sendJson(res, 200, { core: CORE_COMMANDS, extensions: extension });
+      return true;
+    }
+
+    // SSE stream of `ext enable` + native-dep setup output, so a user staring
+    // at a 150 MB model download sees lines arriving instead of a frozen
+    // "Setting up…" spinner. Unnamed frames with a `type` field — the browser
+    // reads this through native EventSource.onmessage.
+    const extStream = /^\/api\/extensions\/([a-z0-9._-]+)\/enable-stream$/i.exec(path);
+    if (extStream && method === 'GET') {
+      const name = extStream[1]!;
+      writeSseHead(res);
+      const send = (data: unknown): void => sse(res, null, data);
+      const sendChunk = (text: string): void => {
+        for (const line of String(text).split(/\r?\n/)) {
+          if (line.length > 0) send({ type: 'line', line });
+        }
+      };
+      // Comment frames keep proxies from idling the connection out mid-download.
+      const keepAlive = setInterval(() => {
+        try {
+          res.write(': ping\n\n');
+        } catch {
+          /* client gone */
+        }
+      }, 20_000);
+      keepAlive.unref?.();
+      req.on('close', () => clearInterval(keepAlive));
+      try {
+        const r = await runModulusStreaming(deps, ['ext', 'enable', name], sendChunk);
+        if (r.code !== 0) {
+          send({ type: 'done', ok: false, error: `ext enable exited ${r.code}` });
+        } else {
+          // Best-effort, mirroring the non-stream enable: a failed setup
+          // doesn't undo the enable.
+          const s = await runExtSetup(deps, name, sendChunk);
+          send({ type: 'done', ok: s.ok });
+        }
+      } catch (e) {
+        send({ type: 'done', ok: false, error: e instanceof Error ? e.message : String(e) });
+      } finally {
+        clearInterval(keepAlive);
+        res.end();
+      }
       return true;
     }
 
@@ -322,8 +401,7 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
       }
     }
 
-    // Deferred to the SSE/upload pass: /enable-stream (SSE), /auth/* (OAuth),
-    // and /upload (binary). They fall through to 404 until then.
+    // Deferred: /auth/* (OAuth) and /upload (binary). 404 until then.
     return false;
   };
 }

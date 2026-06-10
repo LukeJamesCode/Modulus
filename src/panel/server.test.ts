@@ -343,6 +343,28 @@ test('modules: list and command reference respond', async () => {
   assert.ok(Array.isArray(body.core) && body.core.length > 0);
 });
 
+test('enable-stream ends with an unnamed done frame when the CLI run fails', async () => {
+  // No cliEntry/execArgv in the test deps, so the spawned CLI cannot run a
+  // TypeScript entry — the route must still surface that as done ok:false.
+  const res = await fetch(
+    `${base}/api/extensions/no-such-module/enable-stream?token=${encodeURIComponent(token)}`,
+  );
+  assert.equal(res.status, 200);
+  const frames = sseFrames(res);
+  let done: Record<string, unknown> | null = null;
+  for (;;) {
+    const f = await frames.next(30_000);
+    if (!f) break;
+    if ((f as { type?: string }).type === 'done') {
+      done = f;
+      break;
+    }
+  }
+  assert.ok(done, 'expected a done frame');
+  assert.equal(done?.['ok'], false);
+  assert.equal(frames.sawNamed, false);
+});
+
 test('module settings for an unknown module is 404', async () => {
   const res = await authed('/api/extensions/does-not-exist/settings');
   assert.equal(res.status, 404);
