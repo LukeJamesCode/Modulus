@@ -714,7 +714,7 @@ function FrontendSection({ onSaved }) {
 
   const load = async () => {
     const r = await window.api.get(
-      `/api/extensions/${encodeURIComponent(FRONTEND_EXT_NAME)}/settings`,
+      `/api/modules/${encodeURIComponent(FRONTEND_EXT_NAME)}/settings`,
     );
     if (r.ok && r.data && Array.isArray(r.data.schema)) {
       setFields(r.data.schema);
@@ -743,7 +743,7 @@ function FrontendSection({ onSaved }) {
     setError(null);
     const body = Object.fromEntries(fields.map((field) => [field.key, field.value]));
     const r = await window.api.post(
-      `/api/extensions/${encodeURIComponent(FRONTEND_EXT_NAME)}/settings`,
+      `/api/modules/${encodeURIComponent(FRONTEND_EXT_NAME)}/settings`,
       body,
     );
     setSaving(false);

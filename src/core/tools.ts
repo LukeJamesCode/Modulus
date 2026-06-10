@@ -12,7 +12,7 @@ import { composeAbort } from '../util/abort.js';
 
 export type ToolPermissionTier = 'auto' | 'confirm' | 'owner';
 
-// Default per-tool execution deadline. A buggy or hung extension handler
+// Default per-tool execution deadline. A buggy or hung module handler
 // (e.g. a fetch() to an unresponsive upstream) would otherwise pin the user
 // queue indefinitely. 15s matches atlas; tools that legitimately need longer
 // (TTS synthesis, PDF parsing) override via ToolHandler.timeoutMs.
@@ -41,10 +41,10 @@ export interface ToolHandler {
   // JSON Schema for the function's arguments. Forwarded verbatim to the LLM.
   parameters: Record<string, unknown>;
   tier: ToolPermissionTier;
-  // Optional: extension that registered this tool. Used for /help grouping.
-  extension?: string;
-  // Optional per-tool intent filter. Extension-level intent pruning decides
-  // whether an extension is in scope at all; this narrows large extensions
+  // Optional: module that registered this tool. Used for /help grouping.
+  module?: string;
+  // Optional per-tool intent filter. Module-level intent pruning decides
+  // whether an module is in scope at all; this narrows large modules
   // to just the relevant tools for the user's current message. This keeps
   // Ollama's native tool manifest small enough for CPU-sized tool models and
   // reduces malformed tool-call XML from tiny models.
@@ -97,14 +97,14 @@ export interface ToolRegistry {
   list(): ToolHandler[];
   get(name: string): ToolHandler | undefined;
   schemas(): ToolSchema[];
-  // Filtered view: only return schemas owned by extensions whose name is in
+  // Filtered view: only return schemas owned by modules whose name is in
   // the provided set. Used by the orchestrator to prune the per-turn tool
-  // manifest based on intent. Tools without an `extension` (i.e. core-owned)
-  // are always included so behaviour stays the same when no extensions match.
-  schemasFor(extensionNames: ReadonlySet<string>, inputText?: string): ToolSchema[];
+  // manifest based on intent. Tools without an `module` (i.e. core-owned)
+  // are always included so behaviour stays the same when no modules match.
+  schemasFor(moduleNames: ReadonlySet<string>, inputText?: string): ToolSchema[];
   execute(call: ToolCall, ctx: ToolContext): Promise<ToolResult>;
   // Register a callback fired *after* a successful tool run, before the
-  // result is returned to the caller. Used by extensions to invalidate
+  // result is returned to the caller. Used by modules to invalidate
   // fast-cache entries on writes (e.g. add_event → bust the today's-events
   // cache). Multiple listeners per tool name are allowed and called in
   // registration order; exceptions are caught + logged.
@@ -166,7 +166,7 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
       throw new Error(`tool '${h.name}' is already registered`);
     }
     handlers.set(h.name, h);
-    log.debug('tool registered', { name: h.name, tier: h.tier, extension: h.extension });
+    log.debug('tool registered', { name: h.name, tier: h.tier, module: h.module });
   }
 
   function unregister(name: string): void {
@@ -186,29 +186,27 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
     return [...handlers.values()].map(toSchema);
   }
 
-  function schemasFor(extensionNames: ReadonlySet<string>, inputText?: string): ToolSchema[] {
-    const inScope = [...handlers.values()].filter(
-      (h) => !h.extension || extensionNames.has(h.extension),
-    );
+  function schemasFor(moduleNames: ReadonlySet<string>, inputText?: string): ToolSchema[] {
+    const inScope = [...handlers.values()].filter((h) => !h.module || moduleNames.has(h.module));
     if (!inputText) return inScope.map(toSchema);
 
     const grouped = new Map<string, ToolHandler[]>();
     const core: ToolHandler[] = [];
     for (const h of inScope) {
-      if (!h.extension) {
+      if (!h.module) {
         core.push(h);
         continue;
       }
-      const arr = grouped.get(h.extension) ?? [];
+      const arr = grouped.get(h.module) ?? [];
       arr.push(h);
-      grouped.set(h.extension, arr);
+      grouped.set(h.module, arr);
     }
 
     const filtered = [...core];
     for (const group of grouped.values()) {
       const narrowed = group.filter((h) => matchesToolIntent(h, inputText));
-      // Safety fallback: if the extension-level pattern matched but no
-      // per-tool pattern did, expose the whole extension rather than silently
+      // Safety fallback: if the module-level pattern matched but no
+      // per-tool pattern did, expose the whole module rather than silently
       // disabling a valid request.
       filtered.push(...(narrowed.length > 0 ? narrowed : group));
     }
@@ -337,7 +335,7 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// Tiny JSON-schema validator. Matches what extensions actually write in
+// Tiny JSON-schema validator. Matches what modules actually write in
 // their `parameters` blocks — type, properties, required, enum, items —
 // without dragging in ajv (~150KB). Returns a list of human-readable
 // error strings; empty array means valid. The model then sees these
@@ -349,7 +347,7 @@ export function validateArgs(args: unknown, schema: Record<string, unknown> | un
   return errs;
 }
 
-// Depth-bound: a malicious extension schema with circular refs or 10k+
+// Depth-bound: a malicious module schema with circular refs or 10k+
 // nested arrays would otherwise blow the stack. 32 is far deeper than any
 // legitimate tool schema needs.
 const MAX_VALIDATION_DEPTH = 32;
@@ -460,7 +458,7 @@ function matchesToolIntent(h: ToolHandler, inputText: string): boolean {
     try {
       return new RegExp(h.intentPattern, 'i').test(inputText);
     } catch {
-      // Bad extension metadata should not make the tool disappear at runtime.
+      // Bad module metadata should not make the tool disappear at runtime.
       return true;
     }
   }

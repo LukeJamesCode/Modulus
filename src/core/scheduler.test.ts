@@ -32,7 +32,7 @@ test('tickAt fires only matching jobs and routes nudges to dispatch', async () =
   let aFires = 0;
   let bFires = 0;
   s.register({
-    extension: 'ext-a',
+    module: 'ext-a',
     name: 'a',
     cron: '0 9 * * *',
     handler: async () => {
@@ -41,7 +41,7 @@ test('tickAt fires only matching jobs and routes nudges to dispatch', async () =
     },
   });
   s.register({
-    extension: 'ext-b',
+    module: 'ext-b',
     name: 'b',
     cron: '*/5 * * * *',
     handler: async () => {
@@ -63,7 +63,7 @@ test('nudge dedup: same key inside TTL is not re-dispatched', async () => {
   const sent: Nudge[] = [];
   const s = createScheduler({ log, dispatch: (n) => void sent.push(n) });
   s.register({
-    extension: 'ext',
+    module: 'ext',
     name: 'sweep',
     cron: '*/5 * * * *',
     handler: async () => [{ chatId: 1, text: 'reminder', key: 'event-42' }],
@@ -82,7 +82,7 @@ test('long-running job does not block the next tick on a different job', async (
     release = r;
   });
   s.register({
-    extension: 'a',
+    module: 'a',
     name: 'slow',
     cron: '*/5 * * * *',
     handler: async () => {
@@ -90,7 +90,7 @@ test('long-running job does not block the next tick on a different job', async (
     },
   });
   s.register({
-    extension: 'b',
+    module: 'b',
     name: 'fast',
     cron: '*/5 * * * *',
     handler: async () => {
@@ -105,38 +105,38 @@ test('long-running job does not block the next tick on a different job', async (
   await t1;
 });
 
-test('unregisterByExtension drops all of an extensions jobs', () => {
+test('unregisterByModule drops all of an modules jobs', () => {
   const s = createScheduler({ log });
   s.register({
-    extension: 'cal',
+    module: 'cal',
     name: 'sweep',
     cron: '*/5 * * * *',
     handler: async () => {},
   });
   s.register({
-    extension: 'cal',
+    module: 'cal',
     name: 'daily',
     cron: '0 7 * * *',
     handler: async () => {},
   });
   s.register({
-    extension: 'tasks',
+    module: 'tasks',
     name: 'sweep',
     cron: '*/5 * * * *',
     handler: async () => {},
   });
-  s.unregisterByExtension('cal');
+  s.unregisterByModule('cal');
   assert.deepEqual(
-    s.list().map((j) => `${j.extension}:${j.name}`),
+    s.list().map((j) => `${j.module}:${j.name}`),
     ['tasks:sweep'],
   );
 });
 
-test('register throws on duplicate (extension, name)', () => {
+test('register throws on duplicate (module, name)', () => {
   const s = createScheduler({ log });
-  s.register({ extension: 'a', name: 'x', cron: '* * * * *', handler: async () => {} });
+  s.register({ module: 'a', name: 'x', cron: '* * * * *', handler: async () => {} });
   assert.throws(() =>
-    s.register({ extension: 'a', name: 'x', cron: '* * * * *', handler: async () => {} }),
+    s.register({ module: 'a', name: 'x', cron: '* * * * *', handler: async () => {} }),
   );
 });
 
@@ -154,7 +154,7 @@ test('quiet hours suppress nudges and bump the dropped counter', async () => {
       now: () => new Date(2026, 4, 1, 12, 0),
     });
     s.register({
-      extension: 'cal',
+      module: 'cal',
       name: 'sweep',
       cron: '*/5 * * * *',
       handler: async () => [{ chatId: 99, text: 'hi' }],
@@ -167,7 +167,7 @@ test('quiet hours suppress nudges and bump the dropped counter', async () => {
   }
 });
 
-test('cross-extension rate limit caps nudges per chat per window', async () => {
+test('cross-module rate limit caps nudges per chat per window', async () => {
   const { db, cleanup } = freshDb();
   try {
     const sent: Nudge[] = [];
@@ -179,19 +179,19 @@ test('cross-extension rate limit caps nudges per chat per window', async () => {
       now: () => new Date(2026, 4, 1, 12, 0),
     });
     s.register({
-      extension: 'cal',
+      module: 'cal',
       name: 'a',
       cron: '*/1 * * * *',
       handler: async () => [{ chatId: 7, text: 'cal!' }],
     });
     s.register({
-      extension: 'journal',
+      module: 'journal',
       name: 'b',
       cron: '*/1 * * * *',
       handler: async () => [{ chatId: 7, text: 'journal!' }],
     });
     s.register({
-      extension: 'habits',
+      module: 'habits',
       name: 'c',
       cron: '*/1 * * * *',
       handler: async () => [{ chatId: 7, text: 'habits!' }],
@@ -215,7 +215,7 @@ test('dedup persists in nudge_log across scheduler instances', async () => {
       rateLimit: { max: 100, windowMs: 60_000 },
     });
     a.register({
-      extension: 'cal',
+      module: 'cal',
       name: 'sweep',
       cron: '*/1 * * * *',
       handler: async () => [{ chatId: 1, text: 'r', key: 'event-42' }],
@@ -232,7 +232,7 @@ test('dedup persists in nudge_log across scheduler instances', async () => {
       rateLimit: { max: 100, windowMs: 60_000 },
     });
     b.register({
-      extension: 'cal',
+      module: 'cal',
       name: 'sweep',
       cron: '*/1 * * * *',
       handler: async () => [{ chatId: 1, text: 'r', key: 'event-42' }],
@@ -256,7 +256,7 @@ test('scheduler persists nudge reason metadata in nudge_log', async () => {
       now: () => new Date('2026-05-09T12:00:00.000Z'),
     });
     s.register({
-      extension: 'cal',
+      module: 'cal',
       name: 'sweep',
       cron: '* * * * *',
       handler: async () => [
@@ -286,7 +286,7 @@ test('nudge metadata persists to nudge_log', async () => {
       now: () => new Date('2026-05-01T12:00:00.000Z'),
     });
     s.register({
-      extension: 'cal',
+      module: 'cal',
       name: 'sweep',
       cron: '* * * * *',
       handler: async () => [
@@ -355,7 +355,7 @@ test('timezone-aware jobs match cron fields in their configured zone', async () 
   const sent: Nudge[] = [];
   const s = createScheduler({ log, dispatch: (n) => void sent.push(n) });
   s.register({
-    extension: 'briefing',
+    module: 'briefing',
     name: 'morning',
     cron: '0 7 * * *',
     timeZone: 'America/Edmonton',
@@ -385,7 +385,7 @@ test('deferred nudge persists during quiet hours and sends when the window opens
       rateLimit: { max: 100, windowMs: 60_000 },
     });
     s.register({
-      extension: 'cal',
+      module: 'cal',
       name: 'quiet-defer',
       cron: '0 12 * * *',
       handler: async () => [
@@ -432,10 +432,10 @@ test('deferred nudge waits out the rate-limit window', async () => {
       rateLimit: { max: 1, windowMs: 5 * 60_000 },
     });
     db.prepare(
-      `INSERT INTO nudge_log (chat_id, extension, job, key, sent_at) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO nudge_log (chat_id, module, job, key, sent_at) VALUES (?, ?, ?, ?, ?)`,
     ).run(8, 'other', 'recent', null, current.getTime());
     s.register({
-      extension: 'cal',
+      module: 'cal',
       name: 'rate-defer',
       cron: '0 12 * * *',
       handler: async () => [{ chatId: 8, text: 'after rate limit', key: 'rate-1', defer: true }],
@@ -475,7 +475,7 @@ test('expired deferred nudges are discarded instead of delivered', async () => {
       rateLimit: { max: 100, windowMs: 60_000 },
     });
     s.register({
-      extension: 'cal',
+      module: 'cal',
       name: 'expires',
       cron: '0 12 * * *',
       handler: async () => [
@@ -524,7 +524,7 @@ test('deferred nudge dedup keys keep only one pending row', async () => {
     });
     for (const name of ['a', 'b']) {
       s.register({
-        extension: 'cal',
+        module: 'cal',
         name,
         cron: '0 12 * * *',
         handler: async () => [{ chatId: 77, text: `same ${name}`, key: 'same-key', defer: true }],

@@ -267,7 +267,7 @@ test('validateArgs returns clean diagnostics for each failure mode', () => {
   assert.match(validateArgs({ name: 'x', mode: 'c' }, schema)[0]!, /not in enum/);
 });
 
-test('schemasFor narrows matching extension tools by per-tool intent', () => {
+test('schemasFor narrows matching module tools by per-tool intent', () => {
   const tools = createToolRegistry({ log });
   tools.register({
     name: 'core_ping',
@@ -280,7 +280,7 @@ test('schemasFor narrows matching extension tools by per-tool intent', () => {
     name: 'tasks_add',
     description: 'add task',
     tier: 'auto',
-    extension: 'everyday',
+    module: 'everyday',
     intentPattern: '\\b(task|todo|need to)\\b',
     parameters: { type: 'object', properties: {} },
     invoke: async () => 'ok',
@@ -289,7 +289,7 @@ test('schemasFor narrows matching extension tools by per-tool intent', () => {
     name: 'weather_get',
     description: 'weather',
     tier: 'auto',
-    extension: 'everyday',
+    module: 'everyday',
     intentPattern: '\\b(weather|forecast)\\b',
     parameters: { type: 'object', properties: {} },
     invoke: async () => 'ok',
@@ -298,7 +298,7 @@ test('schemasFor narrows matching extension tools by per-tool intent', () => {
     name: 'calendar_add',
     description: 'calendar',
     tier: 'auto',
-    extension: 'everyday',
+    module: 'everyday',
     intentPattern: '\\b(calendar|event)\\b',
     parameters: { type: 'object', properties: {} },
     invoke: async () => 'ok',
@@ -311,13 +311,13 @@ test('schemasFor narrows matching extension tools by per-tool intent', () => {
   );
 });
 
-test('schemasFor falls back to all extension tools if per-tool intent misses', () => {
+test('schemasFor falls back to all module tools if per-tool intent misses', () => {
   const tools = createToolRegistry({ log });
   tools.register({
     name: 'taskish',
     description: 'task',
     tier: 'auto',
-    extension: 'everyday',
+    module: 'everyday',
     intentPattern: '\\btask\\b',
     parameters: { type: 'object', properties: {} },
     invoke: async () => 'ok',
@@ -326,7 +326,7 @@ test('schemasFor falls back to all extension tools if per-tool intent misses', (
     name: 'weatherish',
     description: 'weather',
     tier: 'auto',
-    extension: 'everyday',
+    module: 'everyday',
     intentPattern: '\\bweather\\b',
     parameters: { type: 'object', properties: {} },
     invoke: async () => 'ok',

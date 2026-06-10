@@ -4,12 +4,12 @@
 // minute, picks rows whose due_at has arrived, and emits Nudges for the
 // scheduler to dispatch.
 //
-// Why this lives in core, not an extension:
+// Why this lives in core, not an module:
 // - It's the smallest possible step from "answers when asked" to "thinks
 //   across time" — the agent gap discussion in CLAUDE.md.
-// - Every extension benefits: the calendar extension can ask the model to
-//   schedule a followup for an event without any extension-specific glue.
-// - Extensions can still hook the lifecycle if they want (an `afterReply`
+// - Every module benefits: the calendar module can ask the model to
+//   schedule a followup for an event without any module-specific glue.
+// - Modules can still hook the lifecycle if they want (an `afterReply`
 //   listener that scans the assistant turn for promises, say) but the core
 //   tool gives them one consistent place to land followups.
 //
@@ -21,7 +21,7 @@
 //
 // Rate-limit + quiet-hours behaviour:
 // - Followups go through the standard nudge dispatch, so they respect quiet
-//   hours and the cross-extension rate limit.
+//   hours and the cross-module rate limit.
 // - On dispatch the row is marked `fired_at` regardless of whether it was
 //   suppressed. Trade-off: a followup that lands during quiet hours is lost,
 //   not retried. Acceptable for now — the alternative (re-firing every
@@ -144,10 +144,10 @@ export function setupFollowups(opts: FollowupsOptions): Followups {
     return nudges;
   }
 
-  // Register the sweep against the core scheduler. `extension: 'core'` is
-  // just a label — the scheduler doesn't gate by registered extensions.
+  // Register the sweep against the core scheduler. `module: 'core'` is
+  // just a label — the scheduler doesn't gate by registered modules.
   opts.scheduler.register({
-    extension: 'core',
+    module: 'core',
     name: 'followups-sweep',
     cron: SWEEP_CRON,
     handler: async ({ firedAt }) => sweep(firedAt),

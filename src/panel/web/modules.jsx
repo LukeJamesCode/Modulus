@@ -1,15 +1,15 @@
 /* global React, window */
-// Extensions tab. Lists the extensions Modulus actually has installed (from
-// GET /api/extensions, which merges each manifest with its readiness state and
+// Modules tab. Lists the modules Modulus actually has installed (from
+// GET /api/modules, which merges each manifest with its readiness state and
 // settings schema). Enable/disable/uninstall shell out to the `modulus` CLI on
 // the server; settings are read/written through the SQLite settings store.
 //
-// Note: there's no "app store" of remotely-installable extensions — you add new
+// Note: there's no "app store" of remotely-installable modules — you add new
 // ones with `modulus ext install <path|git-url>`. So this tab manages what's
 // present rather than offering a catalog to install from.
 const { useState: useStateExt, useEffect: useEffectExt, useRef: useRefExt } = React;
 
-function ExtensionsTab() {
+function ModulesTab() {
   const [exts, setExts] = useStateExt(null); // null = loading
   const [error, setError] = useStateExt(null);
   const [detail, setDetail] = useStateExt(null); // ext name
@@ -21,11 +21,11 @@ function ExtensionsTab() {
   const [setupPromptDismissed, setSetupPromptDismissed] = useStateExt(false);
 
   const load = async () => {
-    const r = await window.api.get('/api/extensions');
+    const r = await window.api.get('/api/modules');
     if (r.ok) {
-      setExts(r.data.extensions);
+      setExts(r.data.modules);
       setError(null);
-    } else setError(r.error || 'Could not load extensions.');
+    } else setError(r.error || 'Could not load modules.');
   };
   useEffectExt(() => {
     load();
@@ -33,7 +33,7 @@ function ExtensionsTab() {
 
   const act = async (name, action) => {
     setBusy(name + ':' + action);
-    const r = await window.api.post(`/api/extensions/${encodeURIComponent(name)}/${action}`);
+    const r = await window.api.post(`/api/modules/${encodeURIComponent(name)}/${action}`);
     setBusy(null);
     await load();
     return r;
@@ -45,7 +45,7 @@ function ExtensionsTab() {
     await act(name, 'uninstall');
   };
 
-  if (exts === null && !error) return <window.SectionTitle>Extensions</window.SectionTitle>;
+  if (exts === null && !error) return <window.SectionTitle>Modules</window.SectionTitle>;
 
   if (settingsFor) {
     const ext = exts.find((e) => e.name === settingsFor);
@@ -110,7 +110,7 @@ function ExtensionsTab() {
   return (
     <div>
       <window.SectionTitle sub="The capabilities Modulus has installed. Each one is opt-in and shows exactly what it can access.">
-        Extensions
+        Modules
       </window.SectionTitle>
 
       {error && <ErrorNote text={error} onRetry={load} />}
@@ -150,7 +150,7 @@ function ExtensionsTab() {
         >
           <window.Icon name="plug" size={28} style={{ margin: '0 auto 10px' }} />
           <p style={{ fontSize: 14, color: 'var(--text-2)', fontWeight: 600 }}>
-            No extensions installed
+            No modules installed
           </p>
           <p style={{ fontSize: 13, marginTop: 3 }}>
             Install one with <span className="mono">modulus ext install &lt;name&gt;</span>.
@@ -179,7 +179,7 @@ function ExtensionsTab() {
       <ConfirmUninstall confirm={confirm} setConfirm={setConfirm} uninstall={uninstall} />
       <SetupNeededModal
         open={showSetupPrompt}
-        extensions={setupNeeded}
+        modules={setupNeeded}
         onClose={() => setSetupPromptDismissed(true)}
         onReview={(name) => {
           setSetupPromptDismissed(true);
@@ -190,15 +190,15 @@ function ExtensionsTab() {
   );
 }
 
-function SetupNeededModal({ open, extensions, onClose, onReview }) {
-  if (!open || extensions.length === 0) return null;
-  const shown = extensions.slice(0, 5);
-  const first = extensions[0];
+function SetupNeededModal({ open, modules, onClose, onReview }) {
+  if (!open || modules.length === 0) return null;
+  const shown = modules.slice(0, 5);
+  const first = modules[0];
   return (
     <window.Modal
       open={open}
       onClose={onClose}
-      title="Finish extension setup"
+      title="Finish module setup"
       width={560}
       tone="warn"
       footer={
@@ -213,8 +213,8 @@ function SetupNeededModal({ open, extensions, onClose, onReview }) {
       }
     >
       <p style={{ marginBottom: 12 }}>
-        Some downloaded extensions are installed but not ready yet. Finish their connection or
-        required settings so Modulus can use their tools and commands.
+        Some downloaded modules are installed but not ready yet. Finish their connection or required
+        settings so Modulus can use their tools and commands.
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {shown.map((ext) => (
@@ -256,10 +256,10 @@ function SetupNeededModal({ open, extensions, onClose, onReview }) {
           </button>
         ))}
       </div>
-      {extensions.length > shown.length && (
+      {modules.length > shown.length && (
         <p style={{ marginTop: 10, fontSize: 12.5, color: 'var(--text-3)' }}>
-          Plus {extensions.length - shown.length} more extension
-          {extensions.length - shown.length === 1 ? '' : 's'}.
+          Plus {modules.length - shown.length} more module
+          {modules.length - shown.length === 1 ? '' : 's'}.
         </p>
       )}
     </window.Modal>
@@ -270,7 +270,7 @@ function setupStatusText(ext) {
   if (ext.status === 'disabled') return 'Disabled. Turn it on to run setup.';
   if (ext.status === 'needs_auth') return 'Needs an account connection.';
   if (ext.status === 'needs_settings') return 'Missing required settings.';
-  return ext.reasons && ext.reasons[0] ? ext.reasons[0] : 'Review this extension.';
+  return ext.reasons && ext.reasons[0] ? ext.reasons[0] : 'Review this module.';
 }
 
 function ErrorNote({ text, onRetry }) {
@@ -546,7 +546,7 @@ function ExtDetail({
           padding: 0,
         }}
       >
-        <window.Icon name="back" size={16} /> All extensions
+        <window.Icon name="back" size={16} /> All modules
       </button>
 
       <div
@@ -660,11 +660,11 @@ function ExtDetail({
                   style={{ color: 'var(--text-3)' }}
                 />
               ) : (
-                <window.Toggle checked={ext.enabled} onChange={onToggle} label="Enable extension" />
+                <window.Toggle checked={ext.enabled} onChange={onToggle} label="Enable module" />
               )}
               <div>
                 <div style={{ fontWeight: 600, fontSize: 14 }}>
-                  {ext.enabled ? 'Extension is enabled' : 'Extension is disabled'}
+                  {ext.enabled ? 'Module is enabled' : 'Module is disabled'}
                 </div>
                 <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
                   {ext.enabled
@@ -886,10 +886,7 @@ function ExtSettings({ ext, onBack, onSaved }) {
   const save = async () => {
     setSaving(true);
     setErr(null);
-    const r = await window.api.post(
-      `/api/extensions/${encodeURIComponent(ext.name)}/settings`,
-      vals,
-    );
+    const r = await window.api.post(`/api/modules/${encodeURIComponent(ext.name)}/settings`, vals);
     setSaving(false);
     if (r.ok) onSaved();
     else setErr(r.error || 'Could not save settings.');
@@ -1027,8 +1024,8 @@ function ConfirmUninstall({ confirm, setConfirm, uninstall }) {
       }
     >
       <p>
-        This removes the extension and its tools, commands, and scheduled jobs. Bundled extensions
-        can be re-enabled later; installed ones you'd re-add with{' '}
+        This removes the module and its tools, commands, and scheduled jobs. Bundled modules can be
+        re-enabled later; installed ones you'd re-add with{' '}
         <span className="mono">modulus ext install</span>.
       </p>
     </window.Modal>
@@ -1036,7 +1033,7 @@ function ConfirmUninstall({ confirm, setConfirm, uninstall }) {
 }
 
 /* ---- interactive auth flow ---- */
-// Renders an extension's `modulus auth` flow in the browser. The server runs the
+// Renders an module's `modulus auth` flow in the browser. The server runs the
 // real flow (runAuthForExt); we stream its printed output, surface each prompt
 // as an input, and POST the user's answers back. URLs in the output are made
 // clickable so the OAuth consent link is one tap away.
@@ -1070,7 +1067,7 @@ function AuthFlowModal({ ext, onClose, onDone }) {
   const boxRef = useRefExt(null);
   const lastSeqRef = useRefExt(-1);
   const url = (action, qs) =>
-    `/api/extensions/${encodeURIComponent(ext.name)}/auth/${action}${qs ? '?' + qs : ''}`;
+    `/api/modules/${encodeURIComponent(ext.name)}/auth/${action}${qs ? '?' + qs : ''}`;
 
   useEffectExt(() => {
     let cancelled = false;
@@ -1315,7 +1312,7 @@ function DropZoneInput({ extName, value, onChange }) {
     setUploading(true);
     try {
       const res = await fetch(
-        window.api.url(`/api/extensions/${encodeURIComponent(extName)}/upload`),
+        window.api.url(`/api/modules/${encodeURIComponent(extName)}/upload`),
         {
           method: 'POST',
           headers: { 'x-filename': file.name },
@@ -1360,4 +1357,4 @@ function DropZoneInput({ extName, value, onChange }) {
   );
 }
 
-Object.assign(window, { ExtensionsTab, AuthFlowModal });
+Object.assign(window, { ModulesTab, AuthFlowModal });

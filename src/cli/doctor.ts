@@ -15,7 +15,7 @@ import { freemem, totalmem } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { effectiveConfig, homeDir } from './config-store.js';
-import { extensionFolders } from './extension-paths.js';
+import { moduleFolders } from './module-paths.js';
 import { probeOllama } from './ollama-probe.js';
 import { isExternalModelRef } from './model-options.js';
 import { loadMigrations } from '../storage/db.js';
@@ -100,7 +100,7 @@ export async function collectDoctorChecks(): Promise<CheckResult[]> {
     guard('config', () => checkConfig(c)),
     guard('ram', () => checkRam()),
     guard('disk', () => checkDisk(home)),
-    guard('extensions', () => checkExtensions(home)),
+    guard('modules', () => checkModules(home)),
     guard('migrations', () => checkMigrations(home)),
     guard('env', () => checkEnvVars(process.env)),
     guard('ports', () => checkPorts(c.ollama.url)),
@@ -162,21 +162,21 @@ function checkRam(): CheckResult {
   };
 }
 
-function checkExtensions(home: string): CheckResult {
+function checkModules(home: string): CheckResult {
   let count = 0;
   let bad = 0;
-  for (const { folder } of extensionFolders(home)) {
+  for (const { folder } of moduleFolders(home)) {
     if (existsSync(join(folder, 'manifest.json'))) count += 1;
     else bad += 1;
   }
   if (bad > 0) {
     return {
-      name: 'extensions',
+      name: 'modules',
       ok: false,
       msg: `${count} valid, ${bad} folder(s) without manifest.json`,
     };
   }
-  return { name: 'extensions', ok: true, msg: `${count} installed` };
+  return { name: 'modules', ok: true, msg: `${count} installed` };
 }
 
 // Inspect the live process environment for vars Modulus *used to* read and
@@ -468,8 +468,8 @@ function shQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-// Whether the modulus-voice extension's binaries and models are installed. Only
-// runs if the extension is enabled — a fresh Modulus without voice should not
+// Whether the modulus-voice module's binaries and models are installed. Only
+// runs if the module is enabled — a fresh Modulus without voice should not
 // fail doctor. Resolves each path: explicit setting, then bare-name $PATH
 // lookup, then the auto-download default location.
 function checkVoice(home: string): CheckResult {

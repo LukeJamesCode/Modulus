@@ -1,9 +1,9 @@
-// Shared extension setup logic used by both `modulus init` and `modulus ext install`.
+// Shared module setup logic used by both `modulus init` and `modulus ext install`.
 //
 // Covers:
-//   - Running an extension's auth flow (if it declares one)
+//   - Running an module's auth flow (if it declares one)
 //   - Prompting for remaining non-secret, no-default settings
-//   - Printing the BotFather /setcommands guide for all active extensions
+//   - Printing the BotFather /setcommands guide for all active modules
 
 import { confirm, input } from '@inquirer/prompts';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -11,18 +11,18 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { open as openDb, type DB } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
-import { runAuthForExt, type DiscoveredExtension } from './auth.js';
+import { runAuthForExt, type DiscoveredModule } from './auth.js';
 import type {
-  ExtensionSettings,
-  ExtensionSetupContext,
+  ModuleSettings,
+  ModuleSetupContext,
   SettingsSchema,
   SetupEntrypointModule,
-} from '../core/extensions.js';
+} from '../core/modules.js';
 import { effectiveConfig, homeDir } from './config-store.js';
 
-export type { DiscoveredExtension };
+export type { DiscoveredModule };
 
-// Slash commands registered by the Modulus core itself (not via extensions).
+// Slash commands registered by the Modulus core itself (not via modules).
 const CORE_COMMANDS: ReadonlyArray<{ command: string; description: string }> = [
   { command: 'start', description: 'Start the bot and get a greeting' },
 ];
@@ -124,7 +124,7 @@ function upsertSetting(db: DB, extName: string, key: string, value: string): voi
   ).run(extName, key, value, Date.now());
 }
 
-function setupSettings(db: DB, extName: string): ExtensionSettings {
+function setupSettings(db: DB, extName: string): ModuleSettings {
   return {
     get<T = unknown>(key: string, fallback?: T): T {
       const row = db
@@ -155,7 +155,7 @@ export interface NativeDepsSetupOptions {
 }
 
 async function runSetupEntrypoint(
-  ext: DiscoveredExtension,
+  ext: DiscoveredModule,
   db: DB,
   home: string,
   opts: NativeDepsSetupOptions = {},
@@ -177,7 +177,7 @@ async function runSetupEntrypoint(
     stdout(`  Setup entrypoint has no setup(ctx) or run(ctx) export: ${entry}\n`);
     return;
   }
-  const ctx: ExtensionSetupContext = {
+  const ctx: ModuleSetupContext = {
     name: ext.name,
     folder: ext.folder,
     home,
@@ -189,8 +189,8 @@ async function runSetupEntrypoint(
   await fn(ctx);
 }
 
-export async function configureNativeDepsForExtension(
-  ext: DiscoveredExtension,
+export async function configureNativeDepsForModule(
+  ext: DiscoveredModule,
   db: DB,
   home: string = homeDir(),
   opts: NativeDepsSetupOptions = {},
@@ -198,10 +198,10 @@ export async function configureNativeDepsForExtension(
   await runSetupEntrypoint(ext, db, home, opts);
 }
 
-// Run the auth + settings wizard for one extension using an already-open DB.
+// Run the auth + settings wizard for one module using an already-open DB.
 // Returns true if auth succeeded (or wasn't needed), false if auth failed.
-export async function setupExtension(
-  ext: DiscoveredExtension,
+export async function setupModule(
+  ext: DiscoveredModule,
   db: DB,
   home: string = homeDir(),
 ): Promise<boolean> {
@@ -220,16 +220,13 @@ export async function setupExtension(
   }
 
   await promptRemainingSettings(ext.name, ext.folder, db);
-  await configureNativeDepsForExtension(ext, db, home);
+  await configureNativeDepsForModule(ext, db, home);
   process.stdout.write(`  ✓ ${ext.name} configured.\n`);
   return authOk;
 }
 
-// Run the setup wizard for a list of extensions, sharing one DB connection.
-export async function setupExtensions(
-  home: string,
-  selected: DiscoveredExtension[],
-): Promise<void> {
+// Run the setup wizard for a list of modules, sharing one DB connection.
+export async function setupModules(home: string, selected: DiscoveredModule[]): Promise<void> {
   if (selected.length === 0) return;
 
   const log = createLogger({ level: 'warn' });
@@ -238,7 +235,7 @@ export async function setupExtensions(
 
   try {
     for (const ext of selected) {
-      const ok = await setupExtension(ext, db, home);
+      const ok = await setupModule(ext, db, home);
       if (!ok) needsAuthLater.push(ext.name);
     }
   } finally {
@@ -251,7 +248,7 @@ export async function setupExtensions(
 
   if (needsAuthLater.length > 0) {
     process.stdout.write(
-      '\nThese extensions need auth — retry once the bot is running:\n' +
+      '\nThese modules need auth — retry once the bot is running:\n' +
         needsAuthLater.map((n) => `  modulus auth ${n}`).join('\n') +
         '\n',
     );
@@ -283,15 +280,15 @@ export interface CommandGuideOptions {
   includeCore?: boolean;
 }
 
-// Print a formatted BotFather /setcommands guide for the given extensions.
+// Print a formatted BotFather /setcommands guide for the given modules.
 // Pass the bot username (without @) when known so the instructions are specific.
 export function printTelegramCommandsGuide(
-  extensions: DiscoveredExtension[],
+  modules: DiscoveredModule[],
   botUsername?: string,
   options: CommandGuideOptions = {},
 ): void {
   const includeCore = options.includeCore ?? true;
-  const extCommands = extensions.flatMap((e) => e.manifest.telegram_commands ?? []);
+  const extCommands = modules.flatMap((e) => e.manifest.telegram_commands ?? []);
   const allCommands = includeCore ? [...CORE_COMMANDS, ...extCommands] : extCommands;
   if (allCommands.length === 0) return;
 

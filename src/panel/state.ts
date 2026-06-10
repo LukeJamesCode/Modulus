@@ -3,7 +3,7 @@
 // Ported from the standalone panel's buildState(), adapted for in-process: the
 // daemon serving this IS the agent, so "is it running" is always true and the
 // pid is our own. Everything else reads live: config, an Ollama probe, the
-// extension readiness sweep, the metrics snapshot the daemon writes, and a
+// module readiness sweep, the metrics snapshot the daemon writes, and a
 // couple of cheap counts off the agent_tasks table.
 
 import { cpus, freemem, networkInterfaces, totalmem } from 'node:os';
@@ -11,7 +11,7 @@ import type { DB } from '../storage/db.js';
 import { effectiveConfig, type ModulusConfig } from '../cli/config-store.js';
 import { metricsFilePath } from '../cli/daemon.js';
 import { probeOllama } from '../cli/ollama-probe.js';
-import { collectExtensionReadiness } from '../core/extension-readiness.js';
+import { collectModuleReadiness } from '../core/module-readiness.js';
 import { readMetrics } from '../core/metrics.js';
 
 const VERSION = '1.0.0';
@@ -19,7 +19,7 @@ const VERSION = '1.0.0';
 export interface BuildStateDeps {
   db: DB;
   home: string;
-  extensionRoots: readonly string[];
+  moduleRoots: readonly string[];
   // The proactive-nudge toggle, owned by the panel runtime (flipped via the
   // settings/agent route). Surfaced here so the dashboard can render it.
   proactive: boolean;
@@ -66,7 +66,7 @@ function sampleCpuPercent(): number {
 }
 
 export async function buildState(deps: BuildStateDeps): Promise<unknown> {
-  const { db, home, extensionRoots } = deps;
+  const { db, home, moduleRoots } = deps;
   let cfg: ModulusConfig | null = null;
   let cfgError: string | null = null;
   try {
@@ -76,7 +76,7 @@ export async function buildState(deps: BuildStateDeps): Promise<unknown> {
   }
 
   const probe = cfg ? await probeOllama(cfg.ollama.url) : { ok: false, models: [] };
-  const readiness = collectExtensionReadiness(extensionRoots, db);
+  const readiness = collectModuleReadiness(moduleRoots, db);
   const enabledList = readiness.filter((e) => e.enabled);
   const enabledNames = enabledList.map((e) => e.name);
   const needsSetup = enabledList
@@ -140,7 +140,7 @@ export async function buildState(deps: BuildStateDeps): Promise<unknown> {
     ramGb: Math.round(ramGb * 10) / 10,
     freeRamGb: Math.round((freemem() / 1024 ** 3) * 10) / 10,
     logLevel: cfg?.logLevel ?? 'info',
-    extensions: {
+    modules: {
       installed: readiness.length,
       enabled: enabledList.length,
       enabledNames,

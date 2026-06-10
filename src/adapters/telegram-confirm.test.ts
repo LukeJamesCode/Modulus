@@ -220,17 +220,17 @@ test('intercept replies trigger afterReply hooks for instant responses', async (
         orchestratorCalls += 1;
       },
     } as unknown as TelegramOptions['orchestrator'],
-    extensionIntercepts: () => [
+    moduleIntercepts: () => [
       {
-        extension: 'modulus-instant-responses',
+        module: 'modulus-instant-responses',
         handler: async (ctx) => {
           await ctx.reply('Hey.');
         },
       },
     ],
-    extensionAfterReplies: () => [
+    moduleAfterReplies: () => [
       {
-        extension: 'modulus-voice',
+        module: 'modulus-voice',
         handler: async (ctx) => {
           afterReplies.push(ctx.text);
         },
@@ -266,24 +266,24 @@ test('voice transcripts use the same instant-response intercept path as text', a
         orchestratorCalls += 1;
       },
     } as unknown as TelegramOptions['orchestrator'],
-    extensionVoiceMessages: () => [
+    moduleVoiceMessages: () => [
       {
-        extension: 'modulus-voice',
+        module: 'modulus-voice',
         handler: async () => ({ transcript: 'hi' }),
       },
     ],
-    extensionIntercepts: () => [
+    moduleIntercepts: () => [
       {
-        extension: 'modulus-instant-responses',
+        module: 'modulus-instant-responses',
         handler: async (ctx) => {
           assert.equal(ctx.text, 'hi');
           await ctx.reply('Hey.');
         },
       },
     ],
-    extensionAfterReplies: () => [
+    moduleAfterReplies: () => [
       {
-        extension: 'modulus-voice',
+        module: 'modulus-voice',
         handler: async (ctx) => {
           afterReplies.push(ctx.text);
         },

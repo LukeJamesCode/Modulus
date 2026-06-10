@@ -24,11 +24,11 @@ export interface HistoryMessage {
 
 export interface BuildOptions {
   systemPrompt: string;
-  // Natural-language tool fragment (e.g. an extension's prompt.md). The
+  // Natural-language tool fragment (e.g. an module's prompt.md). The
   // OpenAI-shaped tool schemas go into ChatOptions.tools, not here.
   toolPrompt?: string;
   // Long-term memory results retrieved for this turn (populated by whichever
-  // extension is providing memory; e.g. modulus-memgraph when it lands).
+  // module is providing memory; e.g. modulus-memgraph when it lands).
   memory?: string;
   // Compact running session summary kept between turns.
   session?: string;

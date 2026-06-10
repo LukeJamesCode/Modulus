@@ -110,7 +110,7 @@ export const AUTONOMOUS_PREAMBLE = [
 
 // Intersect two tool grants. null means "all tools". The result never grants
 // more than either input (fail-safe): the AND of two ceilings. For two
-// explicit lists it's a string-set intersection — conservative if an extension
+// explicit lists it's a string-set intersection — conservative if an module
 // name and one of its tool names are split across the two, which only ever
 // over-restricts.
 export function intersectGrants(a: string[] | null, b: string[] | null): string[] | null {
@@ -170,7 +170,7 @@ export interface AgentDefinition {
   name: string;
   role: string;
   systemPrompt: string;
-  // null = every registered tool; otherwise a list of extension names and/or
+  // null = every registered tool; otherwise a list of module names and/or
   // specific tool names the agent may call.
   toolAllowlist: string[] | null;
   profile: ProfileName;
@@ -942,11 +942,11 @@ export function seedStarterAgents(registry: AgentRegistry): void {
 // ---------------------------------------------------------------------------
 
 // Predicate from an allowlist: an entry matches a tool by its own name or by
-// the name of the extension that registered it. null = allow everything.
+// the name of the module that registered it. null = allow everything.
 export function agentToolPredicate(allowlist: string[] | null): (h: ToolHandler) => boolean {
   if (allowlist === null) return () => true;
   const set = new Set(allowlist);
-  return (h) => set.has(h.name) || (h.extension !== undefined && set.has(h.extension));
+  return (h) => set.has(h.name) || (h.module !== undefined && set.has(h.module));
 }
 
 // A read-through ToolRegistry that only exposes handlers the predicate admits.
@@ -978,9 +978,9 @@ export function filterToolRegistry(
       const names = visibleNames();
       return base.schemas().filter((s) => names.has(s.function.name));
     },
-    schemasFor: (extensionNames, inputText) => {
+    schemasFor: (moduleNames, inputText) => {
       const names = visibleNames();
-      return base.schemasFor(extensionNames, inputText).filter((s) => names.has(s.function.name));
+      return base.schemasFor(moduleNames, inputText).filter((s) => names.has(s.function.name));
     },
     execute: async (call, ctx) => {
       const h = base.get(call.name);

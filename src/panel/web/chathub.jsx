@@ -6,7 +6,7 @@
 // The chat talks to POST /api/chat, which streams through Modulus's orchestrator:
 // same profile routing, tools, history, and guardrails as Telegram. It has full
 // parity with the Telegram surface: confirm-tier tools (Codex) pop an inline
-// approval card, extension/core commands run via /api/command and surface as
+// approval card, module/core commands run via /api/command and surface as
 // buttons, and voice flows both ways (mic → /api/chat/voice-in transcription,
 // spoken replies stream back as a `voice` SSE event and autoplay).
 const { useState: useStateCH, useRef: useRefCH, useEffect: useEffectCH } = React;
@@ -80,7 +80,7 @@ function ChatHub({
   busy,
   scheduler,
   activity,
-  extensions,
+  modules,
   tier,
   allowlistCount,
 }) {
@@ -90,7 +90,7 @@ function ChatHub({
   const [phase, setPhase] = useStateCH('idle'); // idle | streaming | command
   const [streamText, setStreamText] = useStateCH('');
   const [streamThink, setStreamThink] = useStateCH('');
-  const [commands, setCommands] = useStateCH({ core: [], extensions: [] });
+  const [commands, setCommands] = useStateCH({ core: [], modules: [] });
   const [confirmReq, setConfirmReq] = useStateCH(null); // { id, prompt, tool }
   const [thinkMode, setThinkMode] = useStateCH(loadThinkMode); // 'auto' | 'on' | 'off'
   const [devmode, setDevmode] = useDevmode();
@@ -125,21 +125,21 @@ function ChatHub({
     }
   }, [thinkMode]);
 
-  // Pull the live command reference (core + enabled extension commands) so the
+  // Pull the live command reference (core + enabled module commands) so the
   // command bar can surface buttons. Refreshes whenever the agent comes up or
-  // the installed-extension count changes.
+  // the installed-module count changes.
   useEffectCH(() => {
     if (!running) return;
     let cancelled = false;
     window.api.get('/api/commands').then((r) => {
       if (!cancelled && r.ok && r.data) {
-        setCommands({ core: r.data.core || [], extensions: r.data.extensions || [] });
+        setCommands({ core: r.data.core || [], modules: r.data.modules || [] });
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [running, extensions && extensions.enabled]);
+  }, [running, modules && modules.enabled]);
 
   // Append a synthesized voice clip to the most recent assistant bubble.
   const attachVoice = (id) => {
@@ -199,7 +199,7 @@ function ChatHub({
           } else if (ev === 'confirm' && data && data.id) {
             setConfirmReq({ id: data.id, prompt: data.prompt, tool: data.tool });
           } else if (ev === 'instant' && data && typeof data.text === 'string') {
-            // A finished reply from an extension intercept (instant-responses):
+            // A finished reply from an module intercept (instant-responses):
             // land it as its own bubble immediately.
             setMessages((m) => [
               ...m,
@@ -410,7 +410,7 @@ function ChatHub({
         health={health}
         activeModel={activeModel}
         scheduler={scheduler}
-        extensions={extensions}
+        modules={modules}
         tier={tier}
         allowlistCount={allowlistCount}
       />
@@ -642,12 +642,12 @@ function commandNeedsArgs(desc) {
   return desc.includes('<') || /\b\w+\|\w+/.test(desc);
 }
 
-/* ---- command bar: core + extension command buttons ---- */
+/* ---- command bar: core + module command buttons ---- */
 function CommandBar({ commands, disabled, onCommand }) {
   const core = (commands.core || []).filter((c) =>
-    ['/help', '/status', '/model', '/extensions'].includes(c.cmd),
+    ['/help', '/status', '/model', '/modules'].includes(c.cmd),
   );
-  const exts = commands.extensions || [];
+  const exts = commands.modules || [];
   if (core.length === 0 && exts.length === 0) return null;
   const chip = (c, accent) => (
     <button
@@ -817,7 +817,7 @@ function MicButton({ running, disabled, onTranscript }) {
   );
 }
 
-function OverviewGrid({ agent, health, activeModel, scheduler, extensions, tier, allowlistCount }) {
+function OverviewGrid({ agent, health, activeModel, scheduler, modules, tier, allowlistCount }) {
   const running = agent === 'running';
   const tiles = [
     {
@@ -847,10 +847,10 @@ function OverviewGrid({ agent, health, activeModel, scheduler, extensions, tier,
     },
     {
       icon: 'plug',
-      label: 'Extensions',
-      value: `${extensions?.enabled ?? 0} enabled`,
-      detail: `${extensions?.installed ?? 0} installed`,
-      dot: (extensions?.enabled ?? 0) > 0 ? 'ok' : 'stopped',
+      label: 'Modules',
+      value: `${modules?.enabled ?? 0} enabled`,
+      detail: `${modules?.installed ?? 0} installed`,
+      dot: (modules?.enabled ?? 0) > 0 ? 'ok' : 'stopped',
     },
     {
       icon: 'pulse',
@@ -1592,7 +1592,7 @@ function ActivityStrip({ agent, health, activeModel, phase, lastError, activity 
         />
         <p style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5 }}>
           Everything here runs on <b style={{ color: 'var(--text)' }}>this machine</b>. Your
-          messages and data stay local unless an extension says otherwise.
+          messages and data stay local unless an module says otherwise.
         </p>
       </div>
     </div>

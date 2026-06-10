@@ -152,7 +152,7 @@ test('spawn_agent: a worker can never exceed the supervisor grant', async () => 
       description: 'allowed',
       parameters: {},
       tier: 'auto',
-      extension: 'extA',
+      module: 'extA',
       invoke: async () => 'echo',
     });
     h.tools.register({
@@ -160,7 +160,7 @@ test('spawn_agent: a worker can never exceed the supervisor grant', async () => 
       description: 'forbidden',
       parameters: {},
       tier: 'auto',
-      extension: 'extB',
+      module: 'extB',
       invoke: async () => 'leaked',
     });
     const supervisor = h.reg.create({
@@ -348,7 +348,7 @@ test('spawn_agents: a worker can never exceed the supervisor grant', async () =>
       description: 'allowed',
       parameters: {},
       tier: 'auto',
-      extension: 'extA',
+      module: 'extA',
       invoke: async () => 'echo',
     });
     h.tools.register({
@@ -356,7 +356,7 @@ test('spawn_agents: a worker can never exceed the supervisor grant', async () =>
       description: 'forbidden',
       parameters: {},
       tier: 'auto',
-      extension: 'extB',
+      module: 'extB',
       invoke: async () => 'leaked',
     });
     const boss = h.reg.create({

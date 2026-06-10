@@ -9,7 +9,7 @@ import type { createAgentQueue } from '../core/agent-queue.js';
 import type { createRoutedLLM } from '../core/llm-router.js';
 import type { MemoryStore } from '../core/memory.js';
 import type { Orchestrator } from '../core/orchestrator.js';
-import type { ExtensionLoader } from '../core/extensions.js';
+import type { ModuleLoader } from '../core/modules.js';
 import type { InstantResponder } from '../core/instant-responses.js';
 import type { ModulusConfig } from '../cli/config-store.js';
 import type { PanelConfirmBus } from './confirm-bus.js';
@@ -22,7 +22,7 @@ export interface PanelDeps {
   log: Logger;
   home: string;
   config: ModulusConfig;
-  extensionRoots: readonly string[];
+  moduleRoots: readonly string[];
   // The daemon's live scheduler — the panel reads its job list for the timeline
   // (read-only; the daemon is what actually fires the jobs).
   scheduler: ReturnType<typeof createScheduler>;
@@ -38,10 +38,10 @@ export interface PanelDeps {
   // The hive-mind memory store, for the Settings memory browser (list/search/
   // delete) — the same store every agent reads and writes.
   memory: MemoryStore;
-  // The daemon's live orchestrator + extension loader: browser chat runs through
+  // The daemon's live orchestrator + module loader: browser chat runs through
   // the exact same pipeline as Telegram (intercepts → orchestrator → SSE).
   orchestrator: Orchestrator;
-  loader: ExtensionLoader;
+  loader: ModuleLoader;
   // Shared with the daemon's confirm router so a confirm-tier tool fired during
   // a browser turn prompts inline in the browser (fail-closed otherwise).
   confirmBus: PanelConfirmBus;

@@ -1,8 +1,8 @@
 // Scheduler / proactive loop. The infrastructure that PLAN North Star puts in
-// core: a cron tick, a registry of extension-supplied jobs, a fast-cache, and
+// core: a cron tick, a registry of module-supplied jobs, a fast-cache, and
 // a nudge dispatcher that pushes job output into Telegram chats.
 //
-// Empty until extensions register against it. A fresh install has nothing to
+// Empty until modules register against it. A fresh install has nothing to
 // nudge about; installing modulus-google-calendar is what turns on calendar
 // reminders.
 //
@@ -15,7 +15,7 @@
 // - Jobs return Nudge[] (zero or more). The scheduler routes each nudge
 //   through a `dispatch` hook the Telegram adapter wires.
 // - Phase 6 polish: before dispatching, the scheduler checks per-chat quiet
-//   hours / snooze, applies a cross-extension rate limit so calendar +
+//   hours / snooze, applies a cross-module rate limit so calendar +
 //   journal + habits can't pile three pings into the same minute, and
 //   persists dedup keys so a process restart doesn't double-fire reminders.
 
@@ -35,7 +35,7 @@ export interface NudgeAction {
   // External link action. Telegram renders this as a URL button.
   url?: string;
   // Slash command to run later. Adapters can map this to callbackData today and
-  // richer command routing later without extension-specific Telegram glue.
+  // richer command routing later without module-specific Telegram glue.
   command?: string;
 }
 
@@ -48,11 +48,11 @@ export interface Nudge {
   // a TTL so a re-fired job (e.g. the bot restarted mid-tick) cannot double-
   // post the same reminder.
   key?: string;
-  // Human-readable reason metadata shown by /why. Extensions should keep this
+  // Human-readable reason metadata shown by /why. Modules should keep this
   // short and non-secret because it is persisted in nudge_log for audit.
   reason?: string;
   // Self-description so core scheduling policy can coordinate nudges across
-  // extensions without understanding each extension's domain schema. Higher-
+  // modules without understanding each module's domain schema. Higher-
   // priority deferred nudges are retried first when a quiet/rate-limit window
   // opens.
   priority?: NudgePriority;
@@ -72,15 +72,15 @@ export interface JobContext {
   log: Logger;
   // The scheduled fire time (rounded to the minute).
   firedAt: Date;
-  // The shared fast-cache, namespaced to the owning extension. Useful for
+  // The shared fast-cache, namespaced to the owning module. Useful for
   // memoizing per-tick work so a sweep that runs every minute doesn't redo
   // the same fetch when nothing has changed.
   cache: FastCache;
 }
 
 export interface ScheduledJob {
-  // Owning extension name; used for logs and unregister-by-extension.
-  extension: string;
+  // Owning module name; used for logs and unregister-by-module.
+  module: string;
   // Human label for logs / `/status`.
   name: string;
   cron: string;
@@ -102,7 +102,7 @@ export interface SchedulerStats {
 }
 
 export interface RateLimit {
-  // Max nudges per chat per window across all extensions. Default {max: 1,
+  // Max nudges per chat per window across all modules. Default {max: 1,
   // windowMs: 5*60_000} — at most one ping every five minutes.
   max: number;
   windowMs: number;
@@ -119,9 +119,9 @@ export interface SchedulerOptions {
   // a nudge. Without it, nudges always go through (Phase < 6 behaviour).
   prefs?: PrefsStore;
   // If supplied, the scheduler persists dispatched nudges into nudge_log and
-  // reads it for cross-extension rate-limit + restart-safe dedup.
+  // reads it for cross-module rate-limit + restart-safe dedup.
   db?: DB;
-  // Cross-extension rate limit. Default {max: 1, windowMs: 5*60_000}.
+  // Cross-module rate limit. Default {max: 1, windowMs: 5*60_000}.
   rateLimit?: RateLimit;
   // Dedup TTL for nudge.key. Default 24h. Same key inside this window is
   // suppressed even after a restart (when `db` is supplied).
@@ -130,14 +130,14 @@ export interface SchedulerOptions {
 
 export interface Scheduler {
   register(job: ScheduledJob): void;
-  unregisterByExtension(extension: string): void;
-  list(): ReadonlyArray<{ extension: string; name: string; cron: string }>;
+  unregisterByModule(module: string): void;
+  list(): ReadonlyArray<{ module: string; name: string; cron: string }>;
   start(): void;
   stop(): void;
   // Run one synchronous tick at the supplied date. Public so tests can drive
   // the scheduler without sleeping.
   tickAt(d: Date): Promise<void>;
-  // The shared fast-cache. Extensions get a per-extension namespaced view via
+  // The shared fast-cache. Modules get a per-module namespaced view via
   // the host API; core code can use this raw if it wants.
   cache: FastCache;
   // For /status and the metrics file.
@@ -159,7 +159,7 @@ function toEpochMs(value: Date | number | string | undefined): number | null {
 
 const DEFAULT_DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RATE_LIMIT: RateLimit = { max: 1, windowMs: 5 * 60_000 };
-const DEFERRED_SWEEP_EXTENSION = 'core';
+const DEFERRED_SWEEP_MODULE = 'core';
 const DEFERRED_SWEEP_JOB = 'deferred-nudges-sweep';
 const DEFERRED_SWEEP_LIMIT = 50;
 // Backoff applied to a deferred nudge whose dispatch attempt threw, so a
@@ -176,7 +176,7 @@ interface DispatchOptions {
 interface DeferredNudgeRow {
   id: number;
   chat_id: number;
-  extension: string;
+  module: string;
   job: string;
   key: string | null;
   text: string;
@@ -187,7 +187,7 @@ interface DeferredNudgeRow {
 export function createScheduler(opts: SchedulerOptions): Scheduler {
   const log = opts.log.child({ mod: 'scheduler' });
   const now = opts.now ?? (() => new Date());
-  const jobs = new Map<string, InternalJob>(); // keyed by `${extension}:${name}`
+  const jobs = new Map<string, InternalJob>(); // keyed by `${module}:${name}`
   const seenKeys = new Map<string, number>(); // dispatched-at ms (in-mem mirror of nudge_log keys)
   // Throttle the lazy GC of seenKeys below. Walking the whole map on every send
   // is O(n) for no reason; entries only need to be gone eventually (the DB is
@@ -219,12 +219,12 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
     cache: cache.stats(),
   };
 
-  function key(extension: string, name: string): string {
-    return `${extension}:${name}`;
+  function key(module: string, name: string): string {
+    return `${module}:${name}`;
   }
 
   function register(job: ScheduledJob): void {
-    const k = key(job.extension, job.name);
+    const k = key(job.module, job.name);
     if (jobs.has(k)) {
       throw new Error(`scheduler: job '${k}' already registered`);
     }
@@ -232,23 +232,23 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
     jobs.set(k, { ...job, parsed, inFlight: false });
     stats.jobsRegistered = jobs.size;
     log.debug('job registered', {
-      extension: job.extension,
+      module: job.module,
       name: job.name,
       cron: job.cron,
       timeZone: job.timeZone,
     });
   }
 
-  function unregisterByExtension(extension: string): void {
+  function unregisterByModule(module: string): void {
     for (const [k, j] of [...jobs.entries()]) {
-      if (j.extension === extension) jobs.delete(k);
+      if (j.module === module) jobs.delete(k);
     }
     stats.jobsRegistered = jobs.size;
   }
 
-  function list(): ReadonlyArray<{ extension: string; name: string; cron: string }> {
+  function list(): ReadonlyArray<{ module: string; name: string; cron: string }> {
     return [...jobs.values()].map((j) => ({
-      extension: j.extension,
+      module: j.module,
       name: j.name,
       cron: j.cron,
     }));
@@ -277,16 +277,16 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
     return (row?.n ?? 0) + pending >= rateLimit.max;
   }
 
-  // jobLabel is built by buildAndRunJob as `${extension}:${name}` and stored
-  // in nudge_log / deferred_nudges as a (extension, job) pair. Splitting it
+  // jobLabel is built by buildAndRunJob as `${module}:${name}` and stored
+  // in nudge_log / deferred_nudges as a (module, job) pair. Splitting it
   // anywhere else is a bug — fail loud rather than silently writing empty
   // strings to columns that downstream queries filter on.
-  function parseJobLabel(jobLabel: string): { extension: string; job: string } {
+  function parseJobLabel(jobLabel: string): { module: string; job: string } {
     const idx = jobLabel.indexOf(':');
     if (idx <= 0 || idx === jobLabel.length - 1) {
       throw new Error(`malformed job label: ${JSON.stringify(jobLabel)}`);
     }
-    return { extension: jobLabel.slice(0, idx), job: jobLabel.slice(idx + 1) };
+    return { module: jobLabel.slice(0, idx), job: jobLabel.slice(idx + 1) };
   }
 
   function recordSent(n: Nudge, jobLabel: string): void {
@@ -302,17 +302,17 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
       }
     }
     if (opts.db) {
-      const { extension, job } = parseJobLabel(jobLabel);
+      const { module, job } = parseJobLabel(jobLabel);
       opts.db
         .prepare(
           `INSERT INTO nudge_log
-           (chat_id, extension, job, key, reason, sent_at,
+           (chat_id, module, job, key, reason, sent_at,
             priority, category, source, created_at, expires_at, actions_json)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           n.chatId,
-          extension,
+          module,
           job,
           n.key ?? null,
           n.reason ?? null,
@@ -344,7 +344,7 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
   ): void {
     if (!opts.db) return;
     const t = now().getTime();
-    const { extension, job } = parseJobLabel(jobLabel);
+    const { module, job } = parseJobLabel(jobLabel);
     const expiresAt = toEpochMs(n.expiresAt);
     const priority: NudgePriority = n.priority ?? 'normal';
 
@@ -394,12 +394,12 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
     opts.db
       .prepare(
         `INSERT INTO deferred_nudges
-         (chat_id, extension, job, key, text, priority, not_before, expires_at, created_at)
+         (chat_id, module, job, key, text, priority, not_before, expires_at, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         n.chatId,
-        extension ?? '',
+        module ?? '',
         job ?? '',
         n.key ?? null,
         n.text,
@@ -525,7 +525,7 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
 
     const rows = opts.db
       .prepare(
-        `SELECT id, chat_id, extension, job, key, text, priority, expires_at
+        `SELECT id, chat_id, module, job, key, text, priority, expires_at
          FROM deferred_nudges
          WHERE delivered_at IS NULL
            AND not_before <= ?
@@ -550,7 +550,7 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
           defer: true,
           expiresAt: row.expires_at ?? undefined,
         },
-        `${row.extension}:${row.job}`,
+        `${row.module}:${row.job}`,
         { sourceDeferredId: row.id },
       );
       if (status === 'sent' || status === 'dropped') {
@@ -565,16 +565,16 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
 
   async function runJob(j: InternalJob, firedAt: Date): Promise<void> {
     if (j.inFlight) {
-      log.debug('skip: job still in flight', { extension: j.extension, name: j.name });
+      log.debug('skip: job still in flight', { module: j.module, name: j.name });
       return;
     }
     j.inFlight = true;
-    const jobLabel = `${j.extension}:${j.name}`;
+    const jobLabel = `${j.module}:${j.name}`;
     try {
       const result = await j.handler({
         log: log.child({ job: jobLabel }),
         firedAt,
-        cache: namespacedView(j.extension, cache),
+        cache: namespacedView(j.module, cache),
       });
       const nudges = Array.isArray(result) ? result : [];
       for (const n of nudges) await dispatchNudge(n, jobLabel);
@@ -638,7 +638,7 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
 
   if (opts.db) {
     register({
-      extension: DEFERRED_SWEEP_EXTENSION,
+      module: DEFERRED_SWEEP_MODULE,
       name: DEFERRED_SWEEP_JOB,
       cron: '* * * * *',
       handler: async () => {
@@ -649,7 +649,7 @@ export function createScheduler(opts: SchedulerOptions): Scheduler {
 
   return {
     register,
-    unregisterByExtension,
+    unregisterByModule,
     list,
     start,
     stop,

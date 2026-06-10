@@ -1,12 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { extensionFolders } from './extension-paths.js';
+import { moduleFolders } from './module-paths.js';
 import { open as openDb, type DB } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import { homeDir } from './config-store.js';
 
 export const CODEX_MODEL_ALIAS = 'codex';
-const CODEX_EXTENSION = 'modulus-codex';
+const CODEX_MODULE = 'modulus-codex';
 
 export function isCodexModelRef(model: string | undefined): boolean {
   return model === CODEX_MODEL_ALIAS || !!model?.startsWith(`${CODEX_MODEL_ALIAS}:`);
@@ -21,17 +21,17 @@ export function availableModelTags(
   home: string = homeDir(),
 ): string[] {
   const out = [...ollamaModels];
-  if (codexExtensionEnabled(home)) out.push(CODEX_MODEL_ALIAS);
+  if (codexModuleEnabled(home)) out.push(CODEX_MODEL_ALIAS);
   return [...new Set(out)];
 }
 
-function codexExtensionInstalled(home: string): boolean {
-  for (const { folder } of extensionFolders(home)) {
+function codexModuleInstalled(home: string): boolean {
+  for (const { folder } of moduleFolders(home)) {
     try {
       const raw = JSON.parse(readFileSync(join(folder, 'manifest.json'), 'utf8')) as {
         name?: string;
       };
-      if (raw.name === CODEX_EXTENSION) return true;
+      if (raw.name === CODEX_MODULE) return true;
     } catch {
       continue;
     }
@@ -55,13 +55,13 @@ function withDb<T>(home: string, fn: (db: DB) => T): T | undefined {
   }
 }
 
-export function codexExtensionEnabled(home: string = homeDir()): boolean {
-  if (!codexExtensionInstalled(home)) return false;
+export function codexModuleEnabled(home: string = homeDir()): boolean {
+  if (!codexModuleInstalled(home)) return false;
   return (
     withDb(home, (db) => {
       const row = db
         .prepare(`SELECT enabled FROM module_state WHERE name = ?`)
-        .get(CODEX_EXTENSION) as { enabled: number } | undefined;
+        .get(CODEX_MODULE) as { enabled: number } | undefined;
       return row?.enabled !== 0;
     }) ?? false
   );

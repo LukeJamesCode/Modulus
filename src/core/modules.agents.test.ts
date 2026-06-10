@@ -16,7 +16,7 @@ import { open } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import { createScheduler } from './scheduler.js';
 import { createToolRegistry } from './tools.js';
-import { createExtensionLoader, type ExtensionLoaderOptions } from './extensions.js';
+import { createModuleLoader, type ModuleLoaderOptions } from './modules.js';
 import { createAgentRegistry } from './agents.js';
 import type { LLM, ProfileConfig, ProfileName } from './llm.js';
 
@@ -57,7 +57,7 @@ function harness(): {
   root: string;
   db: ReturnType<typeof open>;
   agents: ReturnType<typeof createAgentRegistry>;
-  makeLoader: () => ReturnType<typeof createExtensionLoader>;
+  makeLoader: () => ReturnType<typeof createModuleLoader>;
   cleanup: () => void;
 } {
   const dir = mkdtempSync(join(tmpdir(), 'modulus-extagents-'));
@@ -66,7 +66,7 @@ function harness(): {
   const db = open({ path: join(dir, 'g.db'), log });
   const agents = createAgentRegistry(db);
   const makeLoader = () => {
-    const opts: ExtensionLoaderOptions = {
+    const opts: ModuleLoaderOptions = {
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,
@@ -79,7 +79,7 @@ function harness(): {
       chatId: 0,
       watch: false,
     };
-    return createExtensionLoader(opts);
+    return createModuleLoader(opts);
   };
   return {
     dir,

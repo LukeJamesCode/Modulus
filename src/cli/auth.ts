@@ -1,4 +1,4 @@
-// `modulus auth <ext>` — runs auth flows declared by extensions.
+// `modulus auth <ext>` — runs auth flows declared by modules.
 //
 // The flow lives in <ext>/auth.ts and registers itself with `host.auth.flow`.
 // Here we set up just enough host plumbing to import that file, run the
@@ -9,21 +9,21 @@ import { input, password } from '@inquirer/prompts';
 import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { extensionFolders } from './extension-paths.js';
+import { moduleFolders } from './module-paths.js';
 import { open as openDb, type DB } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
-import type { AuthFlow, AuthFlowIO, Host, Manifest } from '../core/extensions.js';
+import type { AuthFlow, AuthFlowIO, Host, Manifest } from '../core/modules.js';
 import { homeDir } from './config-store.js';
 import { fetchBotUsername, printTelegramCommandsGuide } from './ext-setup.js';
 
-export interface DiscoveredExtension {
+export interface DiscoveredModule {
   name: string;
   folder: string;
   manifest: Manifest;
 }
 
-export function discover(home: string, name: string): DiscoveredExtension | null {
-  for (const { folder } of extensionFolders(home)) {
+export function discover(home: string, name: string): DiscoveredModule | null {
+  for (const { folder } of moduleFolders(home)) {
     try {
       const manifestPath = join(folder, 'manifest.json');
       if (!existsSync(manifestPath)) continue;
@@ -43,7 +43,7 @@ export interface AuthRunnerIO extends AuthFlowIO {
 }
 
 export async function runAuthForExt(
-  ext: DiscoveredExtension,
+  ext: DiscoveredModule,
   db: DB,
   ioOverride?: AuthRunnerIO,
 ): Promise<void> {
@@ -168,15 +168,13 @@ export async function runAuthForExt(
 
 export async function run(extName: string | undefined): Promise<void> {
   if (!extName) {
-    process.stderr.write('Usage: modulus auth <extension-name>\n');
+    process.stderr.write('Usage: modulus auth <module-name>\n');
     process.exit(2);
   }
   const home = homeDir();
   const ext = discover(home, extName);
   if (!ext) {
-    process.stderr.write(
-      `Extension '${extName}' not found in ${home}/extensions or repo extensions/.\n`,
-    );
+    process.stderr.write(`Module '${extName}' not found in ${home}/modules or repo modules/.\n`);
     process.exit(1);
   }
   if (!ext.manifest.entrypoints?.auth) {
@@ -200,9 +198,9 @@ export async function run(extName: string | undefined): Promise<void> {
     }
   }
 
-  // Remind the user about any new slash commands this extension declares so
+  // Remind the user about any new slash commands this module declares so
   // they remember to register them with @BotFather. Skipped silently when the
-  // extension exposes no commands.
+  // module exposes no commands.
   const botUsername = await fetchBotUsername();
   printTelegramCommandsGuide([ext], botUsername, { includeCore: false });
 }

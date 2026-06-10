@@ -54,7 +54,7 @@ interface SchedulerView {
   configured: boolean;
   proactive?: boolean;
   nowMs?: number;
-  jobs?: Array<{ extension: string; name: string; cron: string; nextFireMs: number | null }>;
+  jobs?: Array<{ module: string; name: string; cron: string; nextFireMs: number | null }>;
   quietWindow?: string | null;
   pausedUntilMs?: number | null;
   quiet?: { quiet: boolean; reason: string | null; until: number | null };
@@ -78,7 +78,7 @@ function schedulerView(deps: PanelDeps, runtime: PanelRuntime): SchedulerView {
       } catch {
         nextFireMs = null; // unparseable cron — surface the job without a time
       }
-      return { extension: j.extension, name: j.name, cron: j.cron, nextFireMs };
+      return { module: j.module, name: j.name, cron: j.cron, nextFireMs };
     })
     .sort((a, b) => (a.nextFireMs ?? Infinity) - (b.nextFireMs ?? Infinity));
   const prefs = createPrefsStore(deps.db);
@@ -286,7 +286,7 @@ export function createSystemRoutes(deps: PanelDeps, runtime: PanelRuntime): Rout
         await buildState({
           db: deps.db,
           home: deps.home,
-          extensionRoots: deps.extensionRoots,
+          moduleRoots: deps.moduleRoots,
           proactive: runtime.proactive,
         }),
       );

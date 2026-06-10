@@ -6,16 +6,16 @@ import { join } from 'node:path';
 import { open as openDb } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import {
-  collectExtensionReadiness,
+  collectModuleReadiness,
   formatSetupIssuesNudge,
   setupIssuesForNudge,
-} from './extension-readiness.js';
+} from './module-readiness.js';
 
 function mkHome(): string {
   return mkdtempSync(join(tmpdir(), 'modulus-readiness-test-'));
 }
 
-function writeExtension(
+function writeModule(
   root: string,
   name: string,
   opts: {
@@ -43,20 +43,20 @@ function writeExtension(
   }
 }
 
-test('extension readiness classifies ready, disabled, settings, and auth states', () => {
+test('module readiness classifies ready, disabled, settings, and auth states', () => {
   const home = mkHome();
   try {
-    const root = join(home, 'extensions');
-    writeExtension(root, 'modulus-ready');
-    writeExtension(root, 'modulus-disabled');
-    writeExtension(root, 'modulus-settings', {
+    const root = join(home, 'modules');
+    writeModule(root, 'modulus-ready');
+    writeModule(root, 'modulus-disabled');
+    writeModule(root, 'modulus-settings', {
       schema: {
         type: 'object',
         properties: { required_name: { type: 'string' } },
         required: ['required_name'],
       },
     });
-    writeExtension(root, 'modulus-auth', {
+    writeModule(root, 'modulus-auth', {
       entrypoints: { auth: './auth.ts' },
       schema: {
         type: 'object',
@@ -77,7 +77,7 @@ test('extension readiness classifies ready, disabled, settings, and auth states'
          VALUES ('modulus-disabled', '0.1.0', 0, ?, ?)`,
       ).run(Date.now(), Date.now());
 
-      const readiness = collectExtensionReadiness([root], db);
+      const readiness = collectModuleReadiness([root], db);
       assert.equal(readiness.find((e) => e.name === 'modulus-ready')?.status, 'ready');
       assert.equal(readiness.find((e) => e.name === 'modulus-disabled')?.status, 'disabled');
       assert.equal(readiness.find((e) => e.name === 'modulus-settings')?.status, 'needs_settings');

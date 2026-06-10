@@ -1,11 +1,11 @@
-// Extension loader. Discovery, manifest validation, capability gating, and
+// Module loader. Discovery, manifest validation, capability gating, and
 // hot-reload. The loader is what turns Modulus from "a bot that talks to
 // Ollama" into "a bot that does anything".
 //
-// Lifecycle for one extension:
+// Lifecycle for one module:
 //   1. discover    — find <root>/<name>/manifest.json
 //   2. validate    — parse manifest, check name + version + modulus range
-//   3. migrate     — run extension-owned migrations against the shared DB
+//   3. migrate     — run module-owned migrations against the shared DB
 //                    using a private `_mod_<name>_migrations` table
 //   4. settings    — load settings.schema.json (if present), merge defaults
 //   5. prompt      — load prompt.md (if present)
@@ -18,10 +18,10 @@
 //
 // Partial-load safety. Every host.* call records a disposer on the staging
 // load record. If any entrypoint throws mid-load we run the disposers in
-// LIFO order before bailing out — that way a half-loaded extension can't
+// LIFO order before bailing out — that way a half-loaded module can't
 // leave stale Telegram commands, intercepts, prompt fragments, or scheduler
 // jobs behind. Without this rollback the previous loader could leak commands
-// from a broken extension and the only way out was a process restart.
+// from a broken module and the only way out was a process restart.
 
 import {
   existsSync,
@@ -65,13 +65,13 @@ export interface Manifest {
     auth?: string;
     setup?: string;
   };
-  // Telegram slash commands the extension contributes. Used for setMyCommands.
+  // Telegram slash commands the module contributes. Used for setMyCommands.
   telegram_commands?: Array<{ command: string; description: string }>;
   // Optional case-insensitive regex (as a string) that flags messages this
-  // extension's tools are relevant to. The orchestrator uses it to prune the
+  // module's tools are relevant to. The orchestrator uses it to prune the
   // tool manifest sent to the LLM per turn — a smaller manifest cuts prompt
   // tokens and gives small models fewer tools to confuse themselves with.
-  // When NO extension's pattern matches, the orchestrator falls back to
+  // When NO module's pattern matches, the orchestrator falls back to
   // exposing every tool (preserves the pre-filter behaviour).
   intent_pattern?: string;
   // Agent personas this module ships (manifest v2). Upserted into the fleet
@@ -99,7 +99,7 @@ export interface ManifestAgent {
 
 // The minimal agent-registry surface the loader needs, kept structural
 // (matching createAgentRegistry's shape) instead of importing agents.ts:
-// the orchestrator already imports extensions.ts for the host types, so a
+// the orchestrator already imports modules.ts for the host types, so a
 // loader → agent-engine import would create a module cycle.
 export interface AgentFleetRegistrar {
   getByName(name: string): { id: number; origin: string | null } | undefined;
@@ -145,14 +145,14 @@ export interface SettingsSchema {
   required?: string[];
 }
 
-export interface ExtensionSettings {
+export interface ModuleSettings {
   get<T = unknown>(key: string, fallback?: T): T;
   set(key: string, value: string | number | boolean): void;
   all(): Record<string, string | number | boolean>;
 }
 
-// What a Telegram command handler looks like from an extension's perspective.
-// Extensions don't depend on grammY directly — the adapter wraps grammY's
+// What a Telegram command handler looks like from an module's perspective.
+// Modules don't depend on grammY directly — the adapter wraps grammY's
 // Context into this richer, neutral shape.
 export interface TelegramCommandContext {
   chatId: number;
@@ -191,9 +191,9 @@ export interface AfterTurnToolCallSummary {
   resultSummary: string;
 }
 
-// Rich post-turn hook for learning/routine extensions. Unlike afterReply,
+// Rich post-turn hook for learning/routine modules. Unlike afterReply,
 // this includes the user text, conversation id, timing, and tool activity so
-// extensions can learn patterns outside the hot reply path.
+// modules can learn patterns outside the hot reply path.
 export interface AfterTurnContext {
   chatId: number;
   userId: number;
@@ -213,8 +213,8 @@ export type AfterTurnHandler = (ctx: AfterTurnContext) => Promise<void>;
 // Synchronous and side-effect-free by contract: it sits on the reply hot path
 // and must not do I/O. Return a replacement string to override the reply, or
 // null to let it through. Guards run in registration order; the first non-null
-// wins. Domain guards (weather/delete vocabulary) live in the extension that
-// owns those tools, not in core — a host without the extension has neither the
+// wins. Domain guards (weather/delete vocabulary) live in the module that
+// owns those tools, not in core — a host without the module has neither the
 // tools nor the failure mode they guard.
 export interface TurnGuardInput {
   userText: string;
@@ -223,7 +223,7 @@ export interface TurnGuardInput {
 }
 export type TurnGuard = (input: TurnGuardInput) => string | null;
 
-// Voice-note payload an extension hands the Telegram adapter. Either an
+// Voice-note payload an module hands the Telegram adapter. Either an
 // in-memory buffer or a path to a file the adapter can stream from disk.
 export interface VoicePayload {
   data?: Buffer;
@@ -231,14 +231,14 @@ export interface VoicePayload {
   caption?: string;
 }
 
-// Inbound Telegram voice note delivered to extensions via
-// host.telegram.onVoiceMessage. Extensions don't touch grammY directly — the
+// Inbound Telegram voice note delivered to modules via
+// host.telegram.onVoiceMessage. Modules don't touch grammY directly — the
 // adapter wraps the file id, exposes a download helper, and surfaces basic
 // metadata (duration, mime type) the handler needs to gate on.
 export interface TelegramVoiceMessage {
   chatId: number;
   userId: number;
-  // grammY File ID. Opaque to extensions; pass into downloadToFile when needed.
+  // grammY File ID. Opaque to modules; pass into downloadToFile when needed.
   fileId: string;
   durationSec: number;
   mimeType?: string;
@@ -267,10 +267,10 @@ export type TelegramVoiceHandler = (
   msg: TelegramVoiceMessage,
 ) => Promise<TelegramVoiceHandlerResult>;
 
-// Telegram callback (inline-button) context handed to extension handlers.
+// Telegram callback (inline-button) context handed to module handlers.
 // The adapter dispatches callbacks whose data starts with `cb:<prefix>:` to
 // the handler registered for that prefix. The remaining `data` is the raw
-// suffix (everything after `cb:<prefix>:`) so extensions can encode small
+// suffix (everything after `cb:<prefix>:`) so modules can encode small
 // per-button payloads (e.g. proposal ids, slot indices).
 export interface TelegramCallbackContext {
   chatId: number;
@@ -311,24 +311,24 @@ export interface AuthFlowIO {
   print: (line: string) => void;
 }
 
-export interface ExtensionSetupContext {
+export interface ModuleSetupContext {
   name: string;
   folder: string;
   home: string;
   db: DB;
   interactive: boolean;
   stdout: (text: string) => void;
-  settings: ExtensionSettings;
+  settings: ModuleSettings;
 }
 
 export interface SetupEntrypointModule {
-  setup?: (ctx: ExtensionSetupContext) => void | Promise<void>;
-  run?: (ctx: ExtensionSetupContext) => void | Promise<void>;
+  setup?: (ctx: ModuleSetupContext) => void | Promise<void>;
+  run?: (ctx: ModuleSetupContext) => void | Promise<void>;
 }
 
-// Streamed reply chunk an extension receives from host.orchestrator. Mirrors
+// Streamed reply chunk an module receives from host.orchestrator. Mirrors
 // orchestrator.ReplyChunk but is redeclared here to avoid an import cycle
-// between extensions.ts and orchestrator.ts.
+// between modules.ts and orchestrator.ts.
 export interface HostReplyChunk {
   delta: string;
   done: boolean;
@@ -349,7 +349,7 @@ export interface HostUserMessage {
   send: (chunk: HostReplyChunk) => void | Promise<void>;
 }
 
-// Confirm-tier dispatch for non-Telegram chat surfaces. An extension that
+// Confirm-tier dispatch for non-Telegram chat surfaces. An module that
 // owns its own chat surface (Discord, Matrix, …) feeds user turns through
 // host.orchestrator and registers a renderer here so confirm-tier tools can
 // surface a Yes/No prompt in the originating chat. The renderer is
@@ -359,7 +359,7 @@ export interface HostUserMessage {
 // only owns the UI delivery and the user-tap → boolean mapping.
 //
 // ownsChat() lets core route a given orchestrator chatId to the correct
-// surface. It must return true for chats the extension actually delivered;
+// surface. It must return true for chats the module actually delivered;
 // returning true for an unfamiliar chatId would steal Yes/No prompts that
 // belong to another surface. Falsy or absent return means "not mine".
 //
@@ -393,10 +393,10 @@ export interface ChatSurfaceRegistration {
   deliverProactive?: (nudge: Nudge) => Promise<void>;
 }
 
-// Subset of the core Orchestrator exposed to extensions. Gives non-Telegram
+// Subset of the core Orchestrator exposed to modules. Gives non-Telegram
 // surfaces a way to inject a user turn into the same conversation history
 // Telegram uses, with tools and the hallucination guard intact. Each
-// extension's chatId can be the user's normal Telegram chat (so they share
+// module's chatId can be the user's normal Telegram chat (so they share
 // history) or a synthetic one (isolated history).
 export interface HostOrchestrator {
   handleUserMessage(msg: HostUserMessage): Promise<void>;
@@ -412,14 +412,14 @@ export interface Host {
   // Shared core services
   db: DB;
   llm: LLM;
-  // Optional — wired by start.ts but absent in some test harnesses. Extensions
+  // Optional — wired by start.ts but absent in some test harnesses. Modules
   // that need it should check at runtime and fall back to host.llm if missing.
   orchestrator?: HostOrchestrator;
 
-  // Per-extension config / settings store
-  settings: ExtensionSettings;
+  // Per-module config / settings store
+  settings: ModuleSettings;
 
-  // Registries the extension can hook into
+  // Registries the module can hook into
   tools: {
     register: (h: ToolHandler) => void;
     unregister: (name: string) => void;
@@ -427,21 +427,21 @@ export interface Host {
     // invalidating fast-cache entries after a write (e.g. busting the
     // today's-events cache once add_event completes). Returns a disposer
     // that drops the listener; the loader also drops it automatically when
-    // the extension is unloaded so callers rarely have to invoke it.
+    // the module is unloaded so callers rarely have to invoke it.
     onAfterExecute: (toolName: string, listener: AfterExecuteListener) => void;
   };
   telegram: {
     command: (name: string, handler: TelegramCommandHandler, description?: string) => void;
     intercept: (handler: TelegramInterceptHandler) => void;
     // After-reply hook: fires once the orchestrator finishes a streamed reply.
-    // Wired by core; extensions opt in. Handler errors are caught by the adapter.
+    // Wired by core; modules opt in. Handler errors are caught by the adapter.
     afterReply: (handler: AfterReplyHandler) => void;
-    // Rich post-turn hook for learning/routine extensions. Fires after the
+    // Rich post-turn hook for learning/routine modules. Fires after the
     // visible Telegram reply is sent and carries user text, conversation id,
     // timing, and summarized tool activity. Use afterReply for simple TTS.
     afterTurn: (handler: AfterTurnHandler) => void;
     // Send a voice note. Backed by the Telegram adapter when available, or a
-    // no-op stub during tests so extensions can register without grammY in scope.
+    // no-op stub during tests so modules can register without grammY in scope.
     sendVoice: (chatId: number, voice: VoicePayload) => Promise<void>;
     // Receive inbound voice notes. The adapter walks handlers in registration
     // order; the first to return `{ transcript }` wins and the transcript is
@@ -451,7 +451,7 @@ export interface Host {
     // The default Telegram chat ID from core config. Prefer per-chat or per-routine
     // state when available; keep this as the backward-compatible fallback.
     defaultChatId: number;
-    // Backward-compatible alias for older extensions. New code should use
+    // Backward-compatible alias for older modules. New code should use
     // defaultChatId or knownChats().
     chatId: number;
     // Chats that have talked to the bot and belong to allowlisted Telegram users.
@@ -472,7 +472,7 @@ export interface Host {
       opts?: Pick<ScheduledJob, 'timeZone'>,
     ) => void;
   };
-  // Shared TTL cache namespaced to this extension. Useful for memoizing per-
+  // Shared TTL cache namespaced to this module. Useful for memoizing per-
   // tick work in cron jobs (e.g. "list today's events" once even if three
   // sweeps run within a minute). Stats are reported globally in /status.
   cache: FastCache;
@@ -488,14 +488,14 @@ export interface Host {
   auth: {
     flow: (flow: AuthFlow) => void;
   };
-  // Chat-surface plumbing for non-Telegram surfaces. Extensions that own
+  // Chat-surface plumbing for non-Telegram surfaces. Modules that own
   // a chat surface register a confirm renderer here so confirm-tier tools
   // route to the right place. Telegram remains wired by the adapter itself.
   chat: {
     registerConfirm: (registration: ChatSurfaceRegistration) => void;
-    // Run a user turn through the full shared pipeline — extension commands,
+    // Run a user turn through the full shared pipeline — module commands,
     // message intercepts, the orchestrator turn, and the afterReply/afterTurn
-    // hooks — exactly as the Telegram adapter does. A chat-surface extension
+    // hooks — exactly as the Telegram adapter does. A chat-surface module
     // (Discord, future Matrix/Slack) calls this instead of host.orchestrator so
     // it inherits commands and intercepts for free, not just raw model turns.
     // The surface provides `reply` to render/length-cap output its own way.
@@ -512,57 +512,57 @@ export interface EntrypointModule {
 // Registry surfaces the loader exposes to the rest of core
 // ---------------------------------------------------------------------------
 
-export interface ExtensionCommandRecord {
-  extension: string;
+export interface ModuleCommandRecord {
+  module: string;
   name: string;
   description: string;
   handler: TelegramCommandHandler;
 }
 
-export interface ExtensionInterceptRecord {
-  extension: string;
+export interface ModuleInterceptRecord {
+  module: string;
   handler: TelegramInterceptHandler;
 }
 
-export interface ExtensionAfterReplyRecord {
-  extension: string;
+export interface ModuleAfterReplyRecord {
+  module: string;
   handler: AfterReplyHandler;
 }
 
-export interface ExtensionAfterTurnRecord {
-  extension: string;
+export interface ModuleAfterTurnRecord {
+  module: string;
   handler: AfterTurnHandler;
 }
 
-export interface ExtensionTurnGuardRecord {
-  extension: string;
+export interface ModuleTurnGuardRecord {
+  module: string;
   guard: TurnGuard;
 }
 
-export interface ExtensionCallbackRecord {
-  extension: string;
+export interface ModuleCallbackRecord {
+  module: string;
   prefix: string;
   handler: TelegramCallbackHandler;
 }
 
-export interface ExtensionVoiceMessageRecord {
-  extension: string;
+export interface ModuleVoiceMessageRecord {
+  module: string;
   handler: TelegramVoiceHandler;
 }
 
-export interface ExtensionAuthRecord {
-  extension: string;
+export interface ModuleAuthRecord {
+  module: string;
   flow: AuthFlow;
 }
 
-export interface ExtensionChatSurfaceRecord {
-  extension: string;
+export interface ModuleChatSurfaceRecord {
+  module: string;
   ownsChat: (chatId: number) => boolean;
   confirm: ChatConfirmHandler;
   deliverProactive?: (nudge: Nudge) => Promise<void>;
 }
 
-export interface LoadedExtension {
+export interface LoadedModule {
   name: string;
   version: string;
   enabled: boolean;
@@ -579,14 +579,14 @@ export interface LoadedExtension {
   error?: string;
 }
 
-export interface ExtensionLoaderOptions {
-  // Search paths for extension folders. Each path is scanned non-recursively;
-  // each subdirectory containing a manifest.json is one extension. Multiple
-  // roots let core ship first-party extensions from <repo>/extensions while
-  // users also drop folders in ~/.modulus/extensions.
+export interface ModuleLoaderOptions {
+  // Search paths for module folders. Each path is scanned non-recursively;
+  // each subdirectory containing a manifest.json is one module. Multiple
+  // roots let core ship first-party modules from <repo>/modules while
+  // users also drop folders in ~/.modulus/modules.
   roots: string[];
-  // Where extension scratch state lives. The loader makes
-  // <stateRoot>/<name>/ for each extension on first load.
+  // Where module scratch state lives. The loader makes
+  // <stateRoot>/<name>/ for each module on first load.
   stateRoot: string;
 
   db: DB;
@@ -594,7 +594,7 @@ export interface ExtensionLoaderOptions {
   log: Logger;
   scheduler: Scheduler;
   tools: ToolRegistry;
-  // Optional. When provided, extensions receive `host.orchestrator` and can
+  // Optional. When provided, modules receive `host.orchestrator` and can
   // submit user turns through the same pipeline Telegram uses. The CLI wires
   // this in at startup; tests typically leave it undefined.
   orchestrator?: HostOrchestrator;
@@ -605,7 +605,7 @@ export interface ExtensionLoaderOptions {
 
   // Host's own version — used to validate `manifest.modulus` ranges.
   hostVersion: string;
-  // The default Telegram chat ID. Passed into each extension's host so older
+  // The default Telegram chat ID. Passed into each module's host so older
   // nudge jobs keep their single-chat behavior when no chat-aware state exists.
   chatId: number;
   // Telegram users allowed to talk to the bot. knownChats() filters SQLite rows
@@ -616,44 +616,44 @@ export interface ExtensionLoaderOptions {
   watch?: boolean;
   // Optional sink for voice notes. The Telegram adapter wires its grammY-backed
   // implementation here; tests leave it undefined and the loader hands a no-op
-  // to extensions so registration still succeeds.
+  // to modules so registration still succeeds.
   sendVoice?: (chatId: number, voice: VoicePayload) => Promise<void>;
   // Fired after an explicit or watched hot-reload completes. Startup calls
   // loadAll() directly and handles its own notification after Telegram is up.
   onDidReload?: () => void | Promise<void>;
 }
 
-export interface ExtensionLoader {
+export interface ModuleLoader {
   loadAll(): Promise<void>;
   reload(name: string): Promise<void>;
   unload(name: string): Promise<void>;
-  list(): LoadedExtension[];
+  list(): LoadedModule[];
   // The Telegram adapter calls these to drive its dispatcher. They return the
   // *current* registrations — fresh on every call so hot-reload is visible.
-  commands(): ExtensionCommandRecord[];
-  intercepts(): ExtensionInterceptRecord[];
-  afterReplies(): ExtensionAfterReplyRecord[];
-  afterTurns(): ExtensionAfterTurnRecord[];
-  // Post-turn reply guards contributed by extensions, in registration order.
+  commands(): ModuleCommandRecord[];
+  intercepts(): ModuleInterceptRecord[];
+  afterReplies(): ModuleAfterReplyRecord[];
+  afterTurns(): ModuleAfterTurnRecord[];
+  // Post-turn reply guards contributed by modules, in registration order.
   // The orchestrator runs them after finalizing a reply; first non-null wins.
-  turnGuards(): ExtensionTurnGuardRecord[];
-  callbacks(): ExtensionCallbackRecord[];
-  voiceMessages(): ExtensionVoiceMessageRecord[];
-  authFlows(): ExtensionAuthRecord[];
-  // Chat-surface confirm renderers contributed by extensions. The CLI's
+  turnGuards(): ModuleTurnGuardRecord[];
+  callbacks(): ModuleCallbackRecord[];
+  voiceMessages(): ModuleVoiceMessageRecord[];
+  authFlows(): ModuleAuthRecord[];
+  // Chat-surface confirm renderers contributed by modules. The CLI's
   // confirm router walks these and falls back to Telegram when no surface
   // claims the chatId. Returned in registration order so first-match wins.
-  chatSurfaces(): ExtensionChatSurfaceRecord[];
-  // Concatenated prompt fragments, in stable order (alpha by extension name).
-  // Pass a filter set to include only those extensions' fragments — pairs
-  // with `relevantExtensions` so the orchestrator can prune system-prompt
+  chatSurfaces(): ModuleChatSurfaceRecord[];
+  // Concatenated prompt fragments, in stable order (alpha by module name).
+  // Pass a filter set to include only those modules' fragments — pairs
+  // with `relevantModules` so the orchestrator can prune system-prompt
   // weight on the same axis it prunes the tool manifest.
-  promptFragment(extensionFilter?: ReadonlySet<string>): string;
-  // Names of extensions whose `intent_pattern` matches the given message.
+  promptFragment(moduleFilter?: ReadonlySet<string>): string;
+  // Names of modules whose `intent_pattern` matches the given message.
   // Returns null when nothing matched — caller should treat that as "expose
   // every tool" rather than "expose no tools". An empty array means the
   // message looks trivial or low-signal and tools should be skipped entirely.
-  relevantExtensions(message: string): string[] | null;
+  relevantModules(message: string): string[] | null;
   shutdown(): Promise<void>;
 }
 
@@ -669,24 +669,24 @@ const KNOWN_CAPABILITIES = new Set([
   'auth:oauth',
   'auth:token',
   'llm',
-  // Declared by extensions that own a chat surface other than Telegram
-  // (Discord, Matrix, …). Such an extension feeds user turns into
+  // Declared by modules that own a chat surface other than Telegram
+  // (Discord, Matrix, …). Such an module feeds user turns into
   // host.orchestrator and registers a confirm renderer via
   // host.chat.registerConfirm so confirm-tier tools can pop a per-surface
   // approval prompt instead of routing back to Telegram.
   'chat_surface',
 ]);
 
-interface RegistrationsForExtension {
+interface RegistrationsForModule {
   toolNames: string[];
-  commands: ExtensionCommandRecord[];
-  intercepts: ExtensionInterceptRecord[];
-  afterReplies: ExtensionAfterReplyRecord[];
-  afterTurns: ExtensionAfterTurnRecord[];
-  turnGuards: ExtensionTurnGuardRecord[];
-  callbacks: ExtensionCallbackRecord[];
-  voiceMessages: ExtensionVoiceMessageRecord[];
-  chatSurfaces: ExtensionChatSurfaceRecord[];
+  commands: ModuleCommandRecord[];
+  intercepts: ModuleInterceptRecord[];
+  afterReplies: ModuleAfterReplyRecord[];
+  afterTurns: ModuleAfterTurnRecord[];
+  turnGuards: ModuleTurnGuardRecord[];
+  callbacks: ModuleCallbackRecord[];
+  voiceMessages: ModuleVoiceMessageRecord[];
+  chatSurfaces: ModuleChatSurfaceRecord[];
   jobsRegistered: number;
   authFlow?: AuthFlow;
   promptFragment?: string;
@@ -694,7 +694,7 @@ interface RegistrationsForExtension {
   // we don't pay the regex cost on every user turn.
   intentPattern?: RegExp;
   // LIFO list of cleanup callbacks captured during host.* calls. Run on a
-  // failed mid-load to fully roll back a partially-registered extension.
+  // failed mid-load to fully roll back a partially-registered module.
   // Also reused at unload time so the unload path can undo every host call
   // without remembering each surface (commands, intercepts, etc.) explicitly.
   disposers: Array<() => void | Promise<void>>;
@@ -718,14 +718,14 @@ function isLowSignalMessage(message: string): boolean {
   return false;
 }
 
-export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLoader {
+export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
   const allowedUserIds = opts.allowedUserIds ?? [opts.chatId];
-  const log = opts.log.child({ mod: 'extensions' });
-  const loaded = new Map<string, LoadedExtension>();
-  const registrations = new Map<string, RegistrationsForExtension>();
-  const dirs = new Map<string, string>(); // extension name -> resolved folder
+  const log = opts.log.child({ mod: 'modules' });
+  const loaded = new Map<string, LoadedModule>();
+  const registrations = new Map<string, RegistrationsForModule>();
+  const dirs = new Map<string, string>(); // module name -> resolved folder
   const watchers: Array<() => void> = [];
-  const extensionWatchers = new Map<string, () => void>();
+  const moduleWatchers = new Map<string, () => void>();
   const reloadTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const activeReloads = new Set<Promise<void>>();
   let importVersion = 0;
@@ -822,7 +822,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     return existing.enabled !== 0;
   }
 
-  function makeSettings(name: string, schema: SettingsSchema | undefined): ExtensionSettings {
+  function makeSettings(name: string, schema: SettingsSchema | undefined): ModuleSettings {
     const defaults: Record<string, string | number | boolean> = {};
     if (schema) {
       for (const [k, v] of Object.entries(schema.properties)) {
@@ -873,13 +873,13 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
 
     if (!satisfiesModulusRange(opts.hostVersion, m['modulus'] as string)) {
       throw new Error(
-        `${source}: extension requires modulus ${m['modulus']}, host is ${opts.hostVersion}`,
+        `${source}: module requires modulus ${m['modulus']}, host is ${opts.hostVersion}`,
       );
     }
     const caps = Array.isArray(m['capabilities']) ? (m['capabilities'] as string[]) : [];
     for (const c of caps) {
       if (!KNOWN_CAPABILITIES.has(c)) {
-        log.warn('extension declares unknown capability', { name: m['name'], capability: c });
+        log.warn('module declares unknown capability', { name: m['name'], capability: c });
       }
     }
     return m as unknown as Manifest;
@@ -888,10 +888,10 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
   async function importEntrypoint(folder: string, rel: string): Promise<EntrypointModule> {
     const abs = resolve(folder, rel);
     // Containment: a manifest with `"entrypoint": "../../etc/passwd.js"` must
-    // not let an extension import code outside its own folder.
+    // not let an module import code outside its own folder.
     const within = relative(folder, abs);
     if (within.startsWith('..') || isAbsolute(within)) {
-      throw new Error(`entrypoint escapes extension folder: ${rel}`);
+      throw new Error(`entrypoint escapes module folder: ${rel}`);
     }
     if (!existsSync(abs)) throw new Error(`entrypoint missing: ${abs}`);
     const mtime = statSync(abs).mtimeMs;
@@ -901,16 +901,16 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     return (await import(url)) as EntrypointModule;
   }
 
-  async function runDisposers(reg: RegistrationsForExtension, name: string): Promise<void> {
+  async function runDisposers(reg: RegistrationsForModule, name: string): Promise<void> {
     // LIFO: undoing in reverse insertion order means a disposer that depends
     // on something installed earlier still has it around.
     for (let i = reg.disposers.length - 1; i >= 0; i--) {
       try {
         await reg.disposers[i]!();
       } catch (e) {
-        // error (not warn) — a failing disposer can leave the extension in
+        // error (not warn) — a failing disposer can leave the module in
         // an inconsistent state; operators must see this when grepping logs.
-        log.error('extension disposer failed', {
+        log.error('module disposer failed', {
           ext: name,
           error: e instanceof Error ? e.message : 'disposer error',
         });
@@ -926,7 +926,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     try {
       raw = JSON.parse(readFileSync(manifestPath, 'utf8'));
     } catch (e) {
-      log.warn('extension manifest is not valid JSON — skipping', {
+      log.warn('module manifest is not valid JSON — skipping', {
         path: manifestPath,
         error: e instanceof Error ? e.message : 'parse error',
       });
@@ -939,11 +939,11 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
 
     const enabled = ensureStateRow(manifest);
     dirs.set(manifest.name, folder);
-    if (opts.watch !== false && !shuttingDown) watchExtensionFolder(manifest.name, folder);
+    if (opts.watch !== false && !shuttingDown) watchModuleFolder(manifest.name, folder);
 
     const cl = log.child({ ext: manifest.name });
     if (!enabled) {
-      cl.info('extension is disabled — skipping load');
+      cl.info('module is disabled — skipping load');
       // A disabled module's tools are gone, so a fleet agent allowlisted to
       // them would be a dead persona — remove it; re-enable re-syncs it.
       removeManifestAgents(manifest.name);
@@ -963,7 +963,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       return;
     }
 
-    // Per-extension migrations
+    // Per-module migrations
     const migDir = join(folder, 'migrations');
     if (existsSync(migDir)) {
       runMigrations(opts.db, migDir, cl, { table: tableNameFor(manifest.name) });
@@ -989,14 +989,14 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       : undefined;
 
     const dataDir = join(opts.stateRoot, manifest.name);
-    // 0o700: extension state can hold tokens (e.g. modulus-everyday-assistant's
+    // 0o700: module state can hold tokens (e.g. modulus-everyday-assistant's
     // OAuth tokens). On a shared Pi/host, other local users shouldn't read it.
     // Mode is a no-op on Windows. recursive: true tolerates existing dirs.
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
     let intentPattern: RegExp | undefined;
     if (manifest.intent_pattern) {
-      // Hard length cap defends against ReDoS: a malicious extension can
+      // Hard length cap defends against ReDoS: a malicious module can
       // otherwise ship a pattern like `(a+)+b` that pegs CPU on every user
       // message on the Pi target. 256 chars is far more than any legitimate
       // intent pattern needs.
@@ -1016,7 +1016,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       }
     }
 
-    const reg: RegistrationsForExtension = {
+    const reg: RegistrationsForModule = {
       toolNames: [],
       commands: [],
       intercepts: [],
@@ -1058,7 +1058,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       settings,
       tools: {
         register: (h) => {
-          opts.tools.register({ ...h, extension: manifest.name });
+          opts.tools.register({ ...h, module: manifest.name });
           reg.toolNames.push(h.name);
           reg.disposers.push(() => {
             opts.tools.unregister(h.name);
@@ -1076,8 +1076,8 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       },
       telegram: {
         command: (name, handler, description = '') => {
-          const record: ExtensionCommandRecord = {
-            extension: manifest.name,
+          const record: ModuleCommandRecord = {
+            module: manifest.name,
             name,
             description,
             handler,
@@ -1089,7 +1089,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
           });
         },
         intercept: (handler) => {
-          const record: ExtensionInterceptRecord = { extension: manifest.name, handler };
+          const record: ModuleInterceptRecord = { module: manifest.name, handler };
           reg.intercepts.push(record);
           reg.disposers.push(() => {
             const idx = reg.intercepts.indexOf(record);
@@ -1097,7 +1097,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
           });
         },
         afterReply: (handler) => {
-          const record: ExtensionAfterReplyRecord = { extension: manifest.name, handler };
+          const record: ModuleAfterReplyRecord = { module: manifest.name, handler };
           reg.afterReplies.push(record);
           reg.disposers.push(() => {
             const idx = reg.afterReplies.indexOf(record);
@@ -1105,7 +1105,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
           });
         },
         afterTurn: (handler) => {
-          const record: ExtensionAfterTurnRecord = { extension: manifest.name, handler };
+          const record: ModuleAfterTurnRecord = { module: manifest.name, handler };
           reg.afterTurns.push(record);
           reg.disposers.push(() => {
             const idx = reg.afterTurns.indexOf(record);
@@ -1120,7 +1120,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
           await opts.sendVoice(chatId, voice);
         },
         onVoiceMessage: (handler) => {
-          const record: ExtensionVoiceMessageRecord = { extension: manifest.name, handler };
+          const record: ModuleVoiceMessageRecord = { module: manifest.name, handler };
           reg.voiceMessages.push(record);
           reg.disposers.push(() => {
             const idx = reg.voiceMessages.indexOf(record);
@@ -1139,8 +1139,8 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
               `telegram.onCallback: prefix must match /^[a-z0-9_-]+$/i (got "${prefix}")`,
             );
           }
-          const record: ExtensionCallbackRecord = {
-            extension: manifest.name,
+          const record: ModuleCallbackRecord = {
+            module: manifest.name,
             prefix,
             handler,
           };
@@ -1158,7 +1158,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       scheduler: {
         cron: (name, expr, handler, schedulerOpts) => {
           opts.scheduler.register({
-            extension: manifest.name,
+            module: manifest.name,
             name,
             cron: expr,
             handler,
@@ -1167,7 +1167,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
           reg.jobsRegistered += 1;
           reg.disposers.push(() => {
             // Scheduler doesn't support per-job unregister; we tear all
-            // of this extension's jobs down at unload time. Recording the
+            // of this module's jobs down at unload time. Recording the
             // disposer so it counts as an undo step keeps the rollback
             // trace symmetric across surfaces.
             reg.jobsRegistered = Math.max(0, reg.jobsRegistered - 1);
@@ -1186,7 +1186,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       },
       guards: {
         register: (guard) => {
-          const record: ExtensionTurnGuardRecord = { extension: manifest.name, guard };
+          const record: ModuleTurnGuardRecord = { module: manifest.name, guard };
           reg.turnGuards.push(record);
           const off = (): void => {
             const idx = reg.turnGuards.indexOf(record);
@@ -1207,8 +1207,8 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       },
       chat: {
         registerConfirm: (registration) => {
-          const record: ExtensionChatSurfaceRecord = {
-            extension: manifest.name,
+          const record: ModuleChatSurfaceRecord = {
+            module: manifest.name,
             ownsChat: registration.ownsChat,
             confirm: registration.confirm,
             ...(registration.deliverProactive
@@ -1251,22 +1251,22 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
         }
         if (typeof mod.unregister === 'function') {
           const fn = mod.unregister;
-          // The extension's own unregister hook runs first on the next
+          // The module's own unregister hook runs first on the next
           // unload (LIFO disposer order). Wrapped in try/catch by runDisposers.
           reg.disposers.push(() => fn(host));
         }
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      cl.error('extension load failed — rolling back', { error: msg });
+      cl.error('module load failed — rolling back', { error: msg });
       // Run every disposer collected so far. After this completes the
       // tools, commands, intercepts, jobs, prompt fragment, and any auth
       // flow registered before the error are all cleaned up.
       await runDisposers(reg, manifest.name);
-      // Defensive: also drop scheduler jobs by extension in case the cron
-      // disposer above missed any (e.g. an extension that registered jobs
+      // Defensive: also drop scheduler jobs by module in case the cron
+      // disposer above missed any (e.g. an module that registered jobs
       // through a different path in a future refactor).
-      opts.scheduler.unregisterByExtension(manifest.name);
+      opts.scheduler.unregisterByModule(manifest.name);
       // A failed load means the module's tools aren't registered; don't leave
       // its agents pointing at nothing.
       removeManifestAgents(manifest.name);
@@ -1289,7 +1289,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
 
     registrations.set(manifest.name, reg);
     const registeredAgents = syncManifestAgents(manifest, cl);
-    const entry: LoadedExtension = {
+    const entry: LoadedModule = {
       name: manifest.name,
       version: manifest.version,
       enabled: true,
@@ -1304,7 +1304,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     };
     if (reg.promptFragment) entry.promptFragment = reg.promptFragment;
     loaded.set(manifest.name, entry);
-    cl.info('extension loaded', {
+    cl.info('module loaded', {
       version: manifest.version,
       tools: reg.toolNames.length,
       agents: registeredAgents.length,
@@ -1317,14 +1317,14 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     const reg = registrations.get(name);
     if (reg) {
       // The disposer list is the symmetric undo for everything the
-      // extension's host calls did during load. Running it here means we
+      // module's host calls did during load. Running it here means we
       // don't have to enumerate every registry surface separately.
       await runDisposers(reg, name);
       // Belt-and-braces: tools and scheduler are the two surfaces with
-      // a "sweep by extension" API, so call them too in case anything
+      // a "sweep by module" API, so call them too in case anything
       // slipped past the disposer trail.
       for (const t of reg.toolNames) opts.tools.unregister(t);
-      opts.scheduler.unregisterByExtension(name);
+      opts.scheduler.unregisterByModule(name);
     }
     // Distinguish uninstall from hot-reload: a reload's unload still has the
     // folder on disk and must keep the module's fleet agents (task history
@@ -1333,10 +1333,10 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     if (!folder || !existsSync(folder)) removeManifestAgents(name);
     registrations.delete(name);
     loaded.delete(name);
-    const close = extensionWatchers.get(name);
+    const close = moduleWatchers.get(name);
     if (close) {
       close();
-      extensionWatchers.delete(name);
+      moduleWatchers.delete(name);
     }
     const timer = reloadTimers.get(name);
     if (timer) {
@@ -1360,7 +1360,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
           if (!statSync(folder).isDirectory()) continue;
           await loadOne(folder);
         } catch (e) {
-          log.warn('extension discovery failed', {
+          log.warn('module discovery failed', {
             folder,
             error: e instanceof Error ? e.message : String(e),
           });
@@ -1387,7 +1387,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
   async function reload(name: string): Promise<void> {
     const folder = dirs.get(name);
     if (!folder) {
-      // It might be a brand-new extension folder.
+      // It might be a brand-new module folder.
       for (const root of opts.roots) {
         const candidate = join(root, name);
         if (existsSync(join(candidate, 'manifest.json'))) {
@@ -1396,7 +1396,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
           return;
         }
       }
-      throw new Error(`extension '${name}' not found`);
+      throw new Error(`module '${name}' not found`);
     }
     await loadOne(folder);
     await opts.onDidReload?.();
@@ -1418,7 +1418,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
           await unloadInternal(name);
           return;
         }
-        log.info('extension change detected, reloading', { ext: name });
+        log.info('module change detected, reloading', { ext: name });
         await loadOne(folder);
         if (!shuttingDown) await opts.onDidReload?.();
       })();
@@ -1446,9 +1446,9 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     );
   }
 
-  function watchExtensionFolder(name: string, folder: string): void {
+  function watchModuleFolder(name: string, folder: string): void {
     if (shuttingDown) return;
-    if (extensionWatchers.has(name)) return;
+    if (moduleWatchers.has(name)) return;
     try {
       const closes: Array<() => void> = [];
       const watchDir = (dir: string): void => {
@@ -1457,7 +1457,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
         });
         w.on('error', (e) => {
           if (shuttingDown) return;
-          log.warn('extension folder watcher failed', {
+          log.warn('module folder watcher failed', {
             ext: name,
             folder: dir,
             error: e instanceof Error ? e.message : String(e),
@@ -1474,7 +1474,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
           const child = join(dir, entry);
           try {
             // lstatSync: never follow symlinks. Otherwise a symlink loop or
-            // a link pointing outside the extension folder would cause the
+            // a link pointing outside the module folder would cause the
             // watcher to recurse forever / watch arbitrary directories.
             const st = lstatSync(child);
             if (st.isSymbolicLink()) continue;
@@ -1557,11 +1557,11 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       poll.unref?.();
       closes.push(() => clearInterval(poll));
 
-      extensionWatchers.set(name, () => {
+      moduleWatchers.set(name, () => {
         for (const close of closes) close();
       });
     } catch (e) {
-      log.warn('failed to watch extension folder', {
+      log.warn('failed to watch module folder', {
         ext: name,
         folder,
         error: e instanceof Error ? e.message : String(e),
@@ -1587,13 +1587,13 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
             if (!existsSync(folder) || !statSync(folder).isDirectory()) {
               const found = [...dirs.entries()].find(([, f]) => f === folder);
               if (found) {
-                log.info('extension folder removed', { ext: found[0] });
+                log.info('module folder removed', { ext: found[0] });
                 await unloadInternal(found[0]);
               }
               return;
             }
             if (!existsSync(join(folder, 'manifest.json'))) return;
-            log.info('extension change detected, reloading', { folder: top });
+            log.info('module change detected, reloading', { folder: top });
             try {
               await loadOne(folder);
               await opts.onDidReload?.();
@@ -1609,14 +1609,14 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
         });
         w.on('error', (e) => {
           if (shuttingDown) return;
-          log.warn('extensions root watcher failed', {
+          log.warn('modules root watcher failed', {
             root,
             error: e instanceof Error ? e.message : String(e),
           });
         });
         watchers.push(() => w.close());
       } catch (e) {
-        log.warn('failed to watch extensions root', {
+        log.warn('failed to watch modules root', {
           root,
           error: e instanceof Error ? e.message : String(e),
         });
@@ -1624,59 +1624,59 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     }
   }
 
-  function list(): LoadedExtension[] {
+  function list(): LoadedModule[] {
     return [...loaded.values()];
   }
 
-  function commands(): ExtensionCommandRecord[] {
-    const out: ExtensionCommandRecord[] = [];
+  function commands(): ModuleCommandRecord[] {
+    const out: ModuleCommandRecord[] = [];
     for (const r of registrations.values()) out.push(...r.commands);
     return out;
   }
-  function intercepts(): ExtensionInterceptRecord[] {
-    const out: ExtensionInterceptRecord[] = [];
+  function intercepts(): ModuleInterceptRecord[] {
+    const out: ModuleInterceptRecord[] = [];
     for (const r of registrations.values()) out.push(...r.intercepts);
     return out;
   }
-  function afterReplies(): ExtensionAfterReplyRecord[] {
-    const out: ExtensionAfterReplyRecord[] = [];
+  function afterReplies(): ModuleAfterReplyRecord[] {
+    const out: ModuleAfterReplyRecord[] = [];
     for (const r of registrations.values()) out.push(...r.afterReplies);
     return out;
   }
-  function afterTurns(): ExtensionAfterTurnRecord[] {
-    const out: ExtensionAfterTurnRecord[] = [];
+  function afterTurns(): ModuleAfterTurnRecord[] {
+    const out: ModuleAfterTurnRecord[] = [];
     for (const r of registrations.values()) out.push(...r.afterTurns);
     return out;
   }
-  function turnGuards(): ExtensionTurnGuardRecord[] {
-    const out: ExtensionTurnGuardRecord[] = [];
+  function turnGuards(): ModuleTurnGuardRecord[] {
+    const out: ModuleTurnGuardRecord[] = [];
     for (const r of registrations.values()) out.push(...r.turnGuards);
     return out;
   }
-  function callbacks(): ExtensionCallbackRecord[] {
-    const out: ExtensionCallbackRecord[] = [];
+  function callbacks(): ModuleCallbackRecord[] {
+    const out: ModuleCallbackRecord[] = [];
     for (const r of registrations.values()) out.push(...r.callbacks);
     return out;
   }
-  function voiceMessages(): ExtensionVoiceMessageRecord[] {
-    const out: ExtensionVoiceMessageRecord[] = [];
+  function voiceMessages(): ModuleVoiceMessageRecord[] {
+    const out: ModuleVoiceMessageRecord[] = [];
     for (const r of registrations.values()) out.push(...r.voiceMessages);
     return out;
   }
-  function authFlows(): ExtensionAuthRecord[] {
-    const out: ExtensionAuthRecord[] = [];
+  function authFlows(): ModuleAuthRecord[] {
+    const out: ModuleAuthRecord[] = [];
     for (const [name, r] of registrations.entries()) {
-      if (r.authFlow) out.push({ extension: name, flow: r.authFlow });
+      if (r.authFlow) out.push({ module: name, flow: r.authFlow });
     }
     return out;
   }
-  function chatSurfaces(): ExtensionChatSurfaceRecord[] {
-    const out: ExtensionChatSurfaceRecord[] = [];
+  function chatSurfaces(): ModuleChatSurfaceRecord[] {
+    const out: ModuleChatSurfaceRecord[] = [];
     for (const r of registrations.values()) out.push(...r.chatSurfaces);
     return out;
   }
 
-  // The shared inbound pipeline handed to chat-surface extensions via
+  // The shared inbound pipeline handed to chat-surface modules via
   // host.chat.dispatchInbound. Built lazily and memoized: it closes over the
   // live registry accessors above so hot-reloaded commands/intercepts are
   // picked up without rebuilding it. Null until an orchestrator is wired (tests
@@ -1697,17 +1697,17 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     return sharedChatDispatcher;
   }
 
-  function promptFragment(extensionFilter?: ReadonlySet<string>): string {
+  function promptFragment(moduleFilter?: ReadonlySet<string>): string {
     const parts: string[] = [];
     for (const name of [...registrations.keys()].sort()) {
-      if (extensionFilter && !extensionFilter.has(name)) continue;
+      if (moduleFilter && !moduleFilter.has(name)) continue;
       const f = registrations.get(name)?.promptFragment;
       if (f) parts.push(f);
     }
     return parts.join('\n\n');
   }
 
-  function relevantExtensions(message: string): string[] | null {
+  function relevantModules(message: string): string[] | null {
     if (!message) return null;
     const hasAnyPattern = [...registrations.values()].some((reg) => reg.intentPattern);
     if (!hasAnyPattern) return null;
@@ -1718,7 +1718,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       if (!reg.intentPattern) continue;
       // ReDoS budget: a single .test() over 50ms means the pattern is
       // catastrophic backtracking territory. We disable it for the rest of
-      // the extension's lifetime and skip this turn. Length-cap at load is
+      // the module's lifetime and skip this turn. Length-cap at load is
       // the first line of defense; this is the second.
       const startNs = process.hrtime.bigint();
       let matched_ = false;
@@ -1743,13 +1743,13 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       }
       if (matched_) matched.push(name);
     }
-    // No extensions declared a pattern → caller should fall back to all tools.
+    // No modules declared a pattern → caller should fall back to all tools.
     // Patterns existed but none matched → treat as chatter and skip the tool
     // manifest. Routing every "dang im tired today" through the heavy
     // tool-use profile (with the full schema block re-shipped each time) was
     // burning tokens and forcing chit-chat onto the slow model. False
-    // negatives — a tool-needing phrase that no extension's regex caught —
-    // are fixed by widening that extension's intent_pattern, not by spraying
+    // negatives — a tool-needing phrase that no module's regex caught —
+    // are fixed by widening that module's intent_pattern, not by spraying
     // tools at every unmatched line.
     if (matched.length === 0) return [];
     return matched;
@@ -1767,14 +1767,14 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       }
     }
     watchers.length = 0;
-    for (const close of extensionWatchers.values()) {
+    for (const close of moduleWatchers.values()) {
       try {
         close();
       } catch {
         /* ignore */
       }
     }
-    extensionWatchers.clear();
+    moduleWatchers.clear();
     await Promise.allSettled([...activeReloads]);
     for (const name of [...loaded.keys()]) await unloadInternal(name);
   }
@@ -1794,7 +1794,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     authFlows,
     chatSurfaces,
     promptFragment,
-    relevantExtensions,
+    relevantModules,
     shutdown,
   };
 }
@@ -1803,9 +1803,9 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
 // Helpers
 // ---------------------------------------------------------------------------
 
-function tableNameFor(extensionName: string): string {
+function tableNameFor(moduleName: string): string {
   // _mod_<safe>_migrations. Map any character outside [a-z0-9_] to underscore.
-  const safe = extensionName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+  const safe = moduleName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
   return `_mod_${safe}_migrations`;
 }
 

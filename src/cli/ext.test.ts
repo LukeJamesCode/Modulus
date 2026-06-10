@@ -33,7 +33,7 @@ function captureStdout(fn: () => Promise<void>): Promise<string> {
     });
 }
 
-test('ext.install copies a local folder into ~/.modulus/extensions/', async () => {
+test('ext.install copies a local folder into ~/.modulus/modules/', async () => {
   const home = mkHome();
   const oldHome = process.env['MODULUS_HOME'];
   process.env['MODULUS_HOME'] = home;
@@ -44,7 +44,7 @@ test('ext.install copies a local folder into ~/.modulus/extensions/', async () =
 
     const out = await captureStdout(() => ext.install(src));
     assert.match(out, /Installed 'modulus-fake'/);
-    const dest = join(home, 'extensions', 'modulus-fake');
+    const dest = join(home, 'modules', 'modulus-fake');
     assert.ok(existsSync(join(dest, 'manifest.json')));
     assert.ok(existsSync(join(dest, 'tools.ts')));
   } finally {
@@ -54,13 +54,13 @@ test('ext.install copies a local folder into ~/.modulus/extensions/', async () =
   }
 });
 
-test('ext.list shows installed extensions and their state', async () => {
+test('ext.list shows installed modules and their state', async () => {
   const home = mkHome();
   const oldHome = process.env['MODULUS_HOME'];
   process.env['MODULUS_HOME'] = home;
   try {
-    writeManifest(join(home, 'extensions', 'modulus-a'), 'modulus-a', '1.0.0');
-    writeManifest(join(home, 'extensions', 'modulus-b'), 'modulus-b', '2.0.0');
+    writeManifest(join(home, 'modules', 'modulus-a'), 'modulus-a', '1.0.0');
+    writeManifest(join(home, 'modules', 'modulus-b'), 'modulus-b', '2.0.0');
 
     // Open DB to apply migrations so module_state exists.
     const log = createLogger({ level: 'error', out: () => {}, err: () => {} });
@@ -87,7 +87,7 @@ test('ext.enable / ext.disable flip module_state.enabled', async () => {
   const oldHome = process.env['MODULUS_HOME'];
   process.env['MODULUS_HOME'] = home;
   try {
-    writeManifest(join(home, 'extensions', 'modulus-x'), 'modulus-x', '0.1.0');
+    writeManifest(join(home, 'modules', 'modulus-x'), 'modulus-x', '0.1.0');
 
     await captureStdout(() => ext.disable('modulus-x'));
     let log = createLogger({ level: 'error', out: () => {}, err: () => {} });
@@ -118,7 +118,7 @@ test('ext.uninstall --purge drops settings and state rows', async () => {
   const oldHome = process.env['MODULUS_HOME'];
   process.env['MODULUS_HOME'] = home;
   try {
-    const folder = join(home, 'extensions', 'modulus-y');
+    const folder = join(home, 'modules', 'modulus-y');
     writeManifest(folder, 'modulus-y', '0.1.0');
 
     const log = createLogger({ level: 'error', out: () => {}, err: () => {} });
@@ -156,7 +156,7 @@ test('ext.reload touches manifests so the file watcher fires', async () => {
   const oldHome = process.env['MODULUS_HOME'];
   process.env['MODULUS_HOME'] = home;
   try {
-    const folder = join(home, 'extensions', 'modulus-z');
+    const folder = join(home, 'modules', 'modulus-z');
     writeManifest(folder, 'modulus-z', '0.1.0');
     const before = readFileSync(join(folder, 'manifest.json'), 'utf8');
     await captureStdout(() => ext.reload('modulus-z'));
@@ -169,7 +169,7 @@ test('ext.reload touches manifests so the file watcher fires', async () => {
   }
 });
 
-test('ext.create scaffolds a runnable starter extension', async () => {
+test('ext.create scaffolds a runnable starter module', async () => {
   const parent = mkdtempSync(join(tmpdir(), 'modulus-ext-create-'));
   try {
     await captureStdout(() => ext.create('modulus-demo', parent));

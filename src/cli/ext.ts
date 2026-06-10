@@ -1,9 +1,9 @@
-// `modulus ext` — manage extensions.
+// `modulus ext` — manage modules.
 //
 // Subcommands:
 //   list                       — installed + enabled state
 //   install <name|url|path>    — registry name, git URL, or local folder
-//   create <name> [dir]        — scaffold a new extension folder ready to publish
+//   create <name> [dir]        — scaffold a new module folder ready to publish
 //   enable <name>              — flip module_state.enabled = 1
 //   disable <name>             — flip module_state.enabled = 0
 //   uninstall <name> [--purge] — remove the folder; --purge also drops settings
@@ -11,7 +11,7 @@
 //
 // install resolution order for a bare name:
 //   1. local path or git URL — direct
-//   2. repo-bundled extension under <repo>/extensions/<name>/
+//   2. repo-bundled module under <repo>/modules/<name>/
 //   3. a public registry: a JSON map of name → git URL, fetched once. The
 //      registry URL defaults to the official one and can be overridden with
 //      MODULUS_REGISTRY_URL for self-hosted forks.
@@ -29,21 +29,18 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
-import { extensionFolders, repoExtensionsRoot, userExtensionsRoot } from './extension-paths.js';
+import { moduleFolders, repoModulesRoot, userModulesRoot } from './module-paths.js';
 import { open as openDb } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import { ensurePrivateDir, homeDir } from './config-store.js';
 import {
-  configureNativeDepsForExtension,
+  configureNativeDepsForModule,
   fetchBotUsername,
-  setupExtensions,
+  setupModules,
   printTelegramCommandsGuide,
 } from './ext-setup.js';
-import type { Manifest } from '../core/extensions.js';
-import {
-  collectExtensionReadiness,
-  formatExtensionReadinessLine,
-} from '../core/extension-readiness.js';
+import type { Manifest } from '../core/modules.js';
+import { collectModuleReadiness, formatModuleReadinessLine } from '../core/module-readiness.js';
 
 interface InstalledExt {
   name: string;
@@ -56,13 +53,13 @@ interface InstalledExt {
 // `modulus ext install modulus-foo` works out of the box. Self-hosted forks can
 // override with MODULUS_REGISTRY_URL.
 const DEFAULT_REGISTRY_URL =
-  'https://raw.githubusercontent.com/LukeJamesCode/ModulusAgent/main/extensions/registry.json';
+  'https://raw.githubusercontent.com/LukeJamesCode/ModulusAgent/main/modules/registry.json';
 
 interface RegistryEntry {
   name: string;
   source: string; // a git URL we can clone
   // Optional path inside the cloned repo where manifest.json lives. Useful
-  // when one repo holds many extensions (the monorepo we ship).
+  // when one repo holds many modules (the monorepo we ship).
   subpath?: string;
   description?: string;
 }
@@ -70,7 +67,7 @@ interface RegistryEntry {
 async function resolveRegistryEntry(name: string): Promise<RegistryEntry | null> {
   const url = process.env['MODULUS_REGISTRY_URL']?.trim() || DEFAULT_REGISTRY_URL;
   // Try the local repo first so dev installs and offline tests work.
-  const localRegistry = join(repoExtensionsRoot(), 'registry.json');
+  const localRegistry = join(repoModulesRoot(), 'registry.json');
   if (existsSync(localRegistry)) {
     try {
       const entries = JSON.parse(readFileSync(localRegistry, 'utf8')) as RegistryEntry[];
@@ -93,7 +90,7 @@ async function resolveRegistryEntry(name: string): Promise<RegistryEntry | null>
 function listInstalled(home: string): InstalledExt[] {
   const out: InstalledExt[] = [];
   const seen = new Set<string>();
-  for (const { folder, source } of extensionFolders(home)) {
+  for (const { folder, source } of moduleFolders(home)) {
     try {
       const m = JSON.parse(readFileSync(join(folder, 'manifest.json'), 'utf8')) as {
         name?: string;
@@ -103,7 +100,7 @@ function listInstalled(home: string): InstalledExt[] {
       seen.add(m.name);
       out.push({ name: m.name, version: m.version, folder, source });
     } catch {
-      // not an extension or malformed manifest; ignore
+      // not an module or malformed manifest; ignore
     }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
@@ -122,13 +119,13 @@ function withDb<T>(home: string, fn: (db: ReturnType<typeof openDb>) => T): T {
 export async function list(): Promise<void> {
   const home = homeDir();
   const readiness = withDb(home, (db) =>
-    collectExtensionReadiness([userExtensionsRoot(home), repoExtensionsRoot()], db),
+    collectModuleReadiness([userModulesRoot(home), repoModulesRoot()], db),
   );
   if (readiness.length === 0) {
-    process.stdout.write('No extensions installed.\n');
+    process.stdout.write('No modules installed.\n');
     return;
   }
-  for (const e of readiness) process.stdout.write(formatExtensionReadinessLine(e) + '\n');
+  for (const e of readiness) process.stdout.write(formatModuleReadinessLine(e) + '\n');
 }
 
 export async function install(source: string | undefined): Promise<void> {
@@ -137,7 +134,7 @@ export async function install(source: string | undefined): Promise<void> {
     process.exit(2);
   }
   const home = homeDir();
-  const dest = userExtensionsRoot(home);
+  const dest = userModulesRoot(home);
   ensurePrivateDir(dest);
 
   let installedName: string;
@@ -148,7 +145,7 @@ export async function install(source: string | undefined): Promise<void> {
     installedName = installFromGit(source, dest);
   } else {
     // Bare name resolution: prefer repo-bundled, then registry lookup.
-    const repoCandidate = join(repoExtensionsRoot(), source);
+    const repoCandidate = join(repoModulesRoot(), source);
     if (existsSync(join(repoCandidate, 'manifest.json'))) {
       installedName = installFromFolder(repoCandidate, dest);
     } else {
@@ -159,14 +156,14 @@ export async function install(source: string | undefined): Promise<void> {
         installedName = installFromGit(entry.source, dest, entry.subpath);
       } else {
         process.stderr.write(
-          `Cannot resolve '${source}' as a local path, git URL, repo extension, or registry name.\n`,
+          `Cannot resolve '${source}' as a local path, git URL, repo module, or registry name.\n`,
         );
         process.exit(1);
       }
     }
   }
 
-  // Offer to walk through auth + settings for the newly installed extension.
+  // Offer to walk through auth + settings for the newly installed module.
   const extFolder = join(dest, installedName);
   let manifest: Manifest;
   try {
@@ -180,14 +177,14 @@ export async function install(source: string | undefined): Promise<void> {
       typeof raw['modulus'] !== 'string'
     ) {
       process.stderr.write(
-        `Installed extension has an invalid manifest.json (missing required fields: name, version, modulus).\n`,
+        `Installed module has an invalid manifest.json (missing required fields: name, version, modulus).\n`,
       );
       process.exit(1);
     }
     manifest = raw as unknown as Manifest;
   } catch (e) {
     process.stderr.write(
-      `Failed to read installed extension manifest: ${e instanceof Error ? e.message : String(e)}\n`,
+      `Failed to read installed module manifest: ${e instanceof Error ? e.message : String(e)}\n`,
     );
     process.exit(1);
   }
@@ -202,7 +199,7 @@ export async function install(source: string | undefined): Promise<void> {
     : false;
 
   if (doSetup) {
-    await setupExtensions(home, [ext]);
+    await setupModules(home, [ext]);
     const botUsername = await fetchBotUsername();
     printTelegramCommandsGuide([ext], botUsername, { includeCore: false });
   } else {
@@ -210,7 +207,7 @@ export async function install(source: string | undefined): Promise<void> {
       const log = createLogger({ level: 'warn' });
       const db = openDb({ path: join(home, 'modulus.db'), log });
       try {
-        await configureNativeDepsForExtension(ext, db, home);
+        await configureNativeDepsForModule(ext, db, home);
       } finally {
         db.close();
       }
@@ -229,16 +226,16 @@ function isLocalPath(s: string): boolean {
   return s.startsWith('.') || s.startsWith('/') || isAbsolute(s) || s.startsWith('~');
 }
 
-// Extension names land in `~/.modulus/extensions/<name>/`. The manifest is
+// Module names land in `~/.modulus/modules/<name>/`. The manifest is
 // untrusted (it's whatever a public repo or local folder shipped), so before
 // we join it into a path we have to refuse anything that could escape the
-// extensions root: path separators, parent references, leading dots, or
+// modules root: path separators, parent references, leading dots, or
 // anything that isn't a sensible package-name shape.
 const EXT_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/i;
 function assertSafeExtName(name: string): void {
   if (!EXT_NAME_RE.test(name) || name.includes('..')) {
     process.stderr.write(
-      `Manifest 'name' is not a safe extension identifier: ${JSON.stringify(name)}\n`,
+      `Manifest 'name' is not a safe module identifier: ${JSON.stringify(name)}\n`,
     );
     process.exit(1);
   }
@@ -252,7 +249,7 @@ function assertContained(child: string, parent: string): void {
   const p = resolve(parent);
   const rel = c.startsWith(p + (process.platform === 'win32' ? '\\' : '/'));
   if (!rel || c === p) {
-    process.stderr.write(`Refusing to write outside extensions root: ${c}\n`);
+    process.stderr.write(`Refusing to write outside modules root: ${c}\n`);
     process.exit(1);
   }
 }
@@ -374,7 +371,7 @@ async function setEnabled(name: string, enabled: boolean): Promise<void> {
   const home = homeDir();
   const installed = listInstalled(home).find((e) => e.name === name);
   if (!installed) {
-    process.stderr.write(`Extension '${name}' is not installed.\n`);
+    process.stderr.write(`Module '${name}' is not installed.\n`);
     process.exit(1);
   }
   withDb(home, (db) => {
@@ -404,10 +401,10 @@ export async function uninstall(
     process.exit(2);
   }
   const home = homeDir();
-  const userFolder = join(userExtensionsRoot(home), name);
+  const userFolder = join(userModulesRoot(home), name);
   if (!existsSync(userFolder)) {
     process.stderr.write(
-      `'${name}' is not installed under ${userExtensionsRoot(home)}. Repo-bundled extensions live under <repo>/extensions and aren't managed here.\n`,
+      `'${name}' is not installed under ${userModulesRoot(home)}. Repo-bundled modules live under <repo>/modules and aren't managed here.\n`,
     );
     process.exit(1);
   }
@@ -425,7 +422,7 @@ export async function uninstall(
 
 export async function reload(name: string | undefined): Promise<void> {
   // We can't reach into a running modulus process from a separate CLI process
-  // without IPC. For Phase 3, `reload` simply touches the extension folder so
+  // without IPC. For Phase 3, `reload` simply touches the module folder so
   // the file watcher in a running modulus picks up the change. If modulus isn't
   // running this is a no-op and we tell the user to start it.
   const home = homeDir();
@@ -433,7 +430,7 @@ export async function reload(name: string | undefined): Promise<void> {
   if (name) {
     const ext = installed.find((e) => e.name === name);
     if (!ext) {
-      process.stderr.write(`Extension '${name}' not installed.\n`);
+      process.stderr.write(`Module '${name}' not installed.\n`);
       process.exit(1);
     }
     touchFolder(ext.folder);
@@ -441,7 +438,7 @@ export async function reload(name: string | undefined): Promise<void> {
     return;
   }
   for (const ext of installed) touchFolder(ext.folder);
-  process.stdout.write(`✓ Touched ${installed.length} extension folder(s).\n`);
+  process.stdout.write(`✓ Touched ${installed.length} module folder(s).\n`);
 }
 
 function touchFolder(folder: string): void {
@@ -454,7 +451,7 @@ function touchFolder(folder: string): void {
   }
 }
 
-// `modulus ext create <name> [dir]` — drop a runnable starter extension into
+// `modulus ext create <name> [dir]` — drop a runnable starter module into
 // `<dir>/<name>/` (default: cwd). The result has a manifest, a tools entrypoint,
 // a Telegram command, a settings schema, and a README — enough that
 // `modulus ext install ./<name>` works immediately and the author can edit
@@ -469,7 +466,7 @@ export async function create(
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
     process.stderr.write(
-      `Invalid extension name '${name}'. Use lowercase letters, digits, and hyphens; start with a letter or digit.\n`,
+      `Invalid module name '${name}'. Use lowercase letters, digits, and hyphens; start with a letter or digit.\n`,
     );
     process.exit(1);
   }
@@ -505,7 +502,7 @@ export async function create(
 
   writeFileSync(
     join(dest, 'tools.ts'),
-    `import type { Host } from '../../src/core/extensions.js';\n\n` +
+    `import type { Host } from '../../src/core/modules.js';\n\n` +
       `export function register(host: Host): void {\n` +
       `  host.tools.register({\n` +
       `    name: '${slashCmd}_ping',\n` +
@@ -520,7 +517,7 @@ export async function create(
 
   writeFileSync(
     join(dest, 'commands.ts'),
-    `import type { Host } from '../../src/core/extensions.js';\n\n` +
+    `import type { Host } from '../../src/core/modules.js';\n\n` +
       `export function register(host: Host): void {\n` +
       `  host.telegram.command(\n` +
       `    '${slashCmd}',\n` +
@@ -555,7 +552,7 @@ export async function create(
   writeFileSync(
     join(dest, 'README.md'),
     `# ${name}\n\n` +
-      `One-line description of what this extension does.\n\n` +
+      `One-line description of what this module does.\n\n` +
       `## Install\n\n` +
       `From a local checkout:\n\n` +
       '```sh\n' +
@@ -573,7 +570,7 @@ export async function create(
       `## Publishing\n\n` +
       `Push this folder to its own git repo, then either:\n\n` +
       `- Tell users \`modulus ext install <git-url>\`, or\n` +
-      `- Open a PR to \`extensions/registry.json\` in the Modulus repo so \`modulus ext install ${name}\` resolves it by bare name.\n`,
+      `- Open a PR to \`modules/registry.json\` in the Modulus repo so \`modulus ext install ${name}\` resolves it by bare name.\n`,
     'utf8',
   );
 
@@ -583,7 +580,5 @@ export async function create(
   process.stdout.write(`  Next steps:\n`);
   process.stdout.write(`    1. Edit tools.ts / commands.ts to do something useful.\n`);
   process.stdout.write(`    2. modulus ext install ${dest}\n`);
-  process.stdout.write(
-    `    3. (optional) push to git, then open a PR to extensions/registry.json.\n`,
-  );
+  process.stdout.write(`    3. (optional) push to git, then open a PR to modules/registry.json.\n`);
 }

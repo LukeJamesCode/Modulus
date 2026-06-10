@@ -11,22 +11,22 @@
 // whether to annotate replies with devmode metadata (`getDevmode`).
 //
 // Two instances exist at runtime: the Telegram adapter builds one with its core
-// commands + devmode wired in; the extension loader builds a plain one and hands
-// it to chat-surface extensions via host.chat.dispatchInbound.
+// commands + devmode wired in; the module loader builds a plain one and hands
+// it to chat-surface modules via host.chat.dispatchInbound.
 
 import type { Logger } from '../util/log.js';
 import type { InstantResponder } from './instant-responses.js';
 import type {
   HostOrchestrator,
   HostReplyChunk,
-  ExtensionCommandRecord,
-  ExtensionInterceptRecord,
-  ExtensionAfterReplyRecord,
-  ExtensionAfterTurnRecord,
+  ModuleCommandRecord,
+  ModuleInterceptRecord,
+  ModuleAfterReplyRecord,
+  ModuleAfterTurnRecord,
   TelegramCommandContext,
   TelegramInterceptContext,
   AfterTurnContext,
-} from './extensions.js';
+} from './modules.js';
 
 export interface InboundMessage {
   chatId: number;
@@ -42,10 +42,10 @@ export interface InboundMessage {
 export interface ChatDispatcherDeps {
   orchestrator: HostOrchestrator;
   // Live registry accessors — called per message so hot-reload is visible.
-  commands: () => ExtensionCommandRecord[];
-  intercepts: () => ExtensionInterceptRecord[];
-  afterReplies: () => ExtensionAfterReplyRecord[];
-  afterTurns: () => ExtensionAfterTurnRecord[];
+  commands: () => ModuleCommandRecord[];
+  intercepts: () => ModuleInterceptRecord[];
+  afterReplies: () => ModuleAfterReplyRecord[];
+  afterTurns: () => ModuleAfterTurnRecord[];
   log: Logger;
   // Returns true if `head` (the word after the leading '/') names a core command
   // the surface already handles itself; the dispatcher then leaves it alone.
@@ -56,7 +56,7 @@ export interface ChatDispatcherDeps {
   getDevmode?: (chatId: number) => boolean;
   // Core instant responses (gated by `instantResponses.enabled`). When present,
   // free-form messages get a templated reply or a pre-answer ack before the
-  // extension intercept chain runs. Omit to disable.
+  // module intercept chain runs. Omit to disable.
   instantResponder?: InstantResponder;
 }
 
@@ -75,10 +75,10 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
           chatId,
           userId,
           text: reply,
-          log: log.child({ ext: h.extension, hook: 'afterReply' }),
+          log: log.child({ ext: h.module, hook: 'afterReply' }),
         });
       } catch (e) {
-        log.warn('afterReply hook failed', { ext: h.extension, error: errStr(e) });
+        log.warn('afterReply hook failed', { ext: h.module, error: errStr(e) });
       }
     }
   };
@@ -89,12 +89,12 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       try {
         await h.handler(turn);
       } catch (e) {
-        log.warn('afterTurn hook failed', { ext: h.extension, error: errStr(e) });
+        log.warn('afterTurn hook failed', { ext: h.module, error: errStr(e) });
       }
     }
   };
 
-  const invokeExtensionCommand = async (
+  const invokeModuleCommand = async (
     name: string,
     args: string,
     chatId: number,
@@ -114,8 +114,8 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
     try {
       await extCmd.handler(cctx);
     } catch (e) {
-      log.warn('extension command failed', {
-        ext: extCmd.extension,
+      log.warn('module command failed', {
+        ext: extCmd.module,
         command: name,
         error: errStr(e),
       });
@@ -192,15 +192,15 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       const head = (space === -1 ? text.slice(1) : text.slice(1, space)).split('@')[0]!;
       if (deps.isCoreCommand?.(head)) return; // surface handles its own core commands
       const args = space === -1 ? '' : text.slice(space + 1).trim();
-      await invokeExtensionCommand(head, args, chatId, userId, reply);
+      await invokeModuleCommand(head, args, chatId, userId, reply);
       // Unknown command falls through silently — matches Telegram behaviour.
       return;
     }
 
-    // Core instant responses, before any extension intercept. A 'reply' is
+    // Core instant responses, before any module intercept. A 'reply' is
     // terminal (templated chatter / a computed answer — the model never runs);
     // an 'ack' is sent now and the turn continues to the orchestrator. Both
-    // fire the afterReply chain so a voice extension speaks them, matching how
+    // fire the afterReply chain so a voice module speaks them, matching how
     // an intercept's reply behaved when this lived in gurney-instant-responses.
     const instant = deps.instantResponder?.respond(text, chatId);
     if (instant) {
@@ -248,7 +248,7 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       try {
         await item.handler(ictx);
       } catch (e) {
-        log.warn('intercept failed', { ext: item.extension, error: errStr(e) });
+        log.warn('intercept failed', { ext: item.module, error: errStr(e) });
       }
     };
     await runNext();

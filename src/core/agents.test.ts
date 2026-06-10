@@ -241,14 +241,14 @@ test('seedStarterAgents: adds the orchestrator to an existing fleet once', () =>
   }
 });
 
-test('filterToolRegistry: scopes by tool name or extension and fails closed on execute', async () => {
+test('filterToolRegistry: scopes by tool name or module and fails closed on execute', async () => {
   const base = createToolRegistry({ log: silentLogger() });
   base.register({
     name: 'echo',
     description: 'echo',
     parameters: {},
     tier: 'auto',
-    extension: 'extA',
+    module: 'extA',
     invoke: async () => 'echoed',
   });
   base.register({
@@ -256,11 +256,11 @@ test('filterToolRegistry: scopes by tool name or extension and fails closed on e
     description: 'secret',
     parameters: {},
     tier: 'auto',
-    extension: 'extB',
+    module: 'extB',
     invoke: async () => 'should never run',
   });
 
-  // Allow by extension name.
+  // Allow by module name.
   const byExt = filterToolRegistry(base, agentToolPredicate(['extA']));
   assert.deepEqual(
     byExt.list().map((h) => h.name),
@@ -526,7 +526,7 @@ test('AgentRuntime: the per-turn tool manifest is limited to the agent allowlist
       description: 'echo input',
       parameters: {},
       tier: 'auto',
-      extension: 'extA',
+      module: 'extA',
       selfReplying: true,
       invoke: async () => 'echoed: hi',
     });
@@ -535,7 +535,7 @@ test('AgentRuntime: the per-turn tool manifest is limited to the agent allowlist
       description: 'must stay hidden',
       parameters: {},
       tier: 'auto',
-      extension: 'extB',
+      module: 'extB',
       invoke: async () => 'leaked',
     });
     const runtime = createAgentRuntime({

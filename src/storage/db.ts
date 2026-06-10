@@ -24,7 +24,7 @@ export interface OpenOptions {
 
 export interface MigrateOptions {
   // Table that records applied versions. Defaults to `_migrations`. Per-
-  // extension migrations pass a unique table (e.g. `_mod_calendar_migrations`)
+  // module migrations pass a unique table (e.g. `_mod_calendar_migrations`)
   // so their version numbering doesn't collide with core's.
   table?: string;
 }

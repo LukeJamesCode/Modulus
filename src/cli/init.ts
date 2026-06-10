@@ -7,7 +7,7 @@
 //   4. Ollama URL (validated by listing models)
 //   5. Pick chat / reasoning profile models from the live model list
 //   6. Hardware tier (auto-suggested from RAM, overridable)
-//   7. Extension selection — choose which bundled extensions to enable,
+//   7. Module selection — choose which bundled modules to enable,
 //      then fill in their required settings and auth tokens on the spot.
 //
 // The wizard is idempotent: re-running it loads existing config and lets the
@@ -32,12 +32,12 @@ import { availableModelTags } from './model-options.js';
 import { open as openDb } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import {
-  setupExtensions,
-  configureNativeDepsForExtension,
+  setupModules,
+  configureNativeDepsForModule,
   printTelegramCommandsGuide,
-  type DiscoveredExtension,
+  type DiscoveredModule,
 } from './ext-setup.js';
-import type { Manifest } from '../core/extensions.js';
+import type { Manifest } from '../core/modules.js';
 
 const TELEGRAM_API = 'https://api.telegram.org';
 
@@ -58,13 +58,13 @@ async function validateBotToken(token: string): Promise<BotInfo> {
 }
 
 // ---------------------------------------------------------------------------
-// Extension discovery + setup
+// Module discovery + setup
 // ---------------------------------------------------------------------------
 
-function discoverBundledExtensions(): DiscoveredExtension[] {
+function discoverBundledModules(): DiscoveredModule[] {
   const here = dirname(fileURLToPath(import.meta.url));
-  const repoExt = resolve(here, '..', '..', 'extensions');
-  const out: DiscoveredExtension[] = [];
+  const repoExt = resolve(here, '..', '..', 'modules');
+  const out: DiscoveredModule[] = [];
   let entries: string[];
   try {
     entries = readdirSync(repoExt);
@@ -86,23 +86,23 @@ function discoverBundledExtensions(): DiscoveredExtension[] {
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export interface ExtensionSelectionPlan {
-  extensions: DiscoveredExtension[];
+export interface ModuleSelectionPlan {
+  modules: DiscoveredModule[];
   addedDependencies: string[];
-  missingDependencies: Array<{ extension: string; dependency: string }>;
+  missingDependencies: Array<{ module: string; dependency: string }>;
 }
 
-export function resolveExtensionSelection(
-  bundled: DiscoveredExtension[],
+export function resolveModuleSelection(
+  bundled: DiscoveredModule[],
   selectedNames: readonly string[],
-): ExtensionSelectionPlan {
+): ModuleSelectionPlan {
   const byName = new Map(bundled.map((ext) => [ext.name, ext]));
   const requested = new Set(selectedNames);
   const visiting = new Set<string>();
   const visited = new Set<string>();
-  const ordered: DiscoveredExtension[] = [];
+  const ordered: DiscoveredModule[] = [];
   const added = new Set<string>();
-  const missingDependencies: Array<{ extension: string; dependency: string }> = [];
+  const missingDependencies: Array<{ module: string; dependency: string }> = [];
 
   const visit = (name: string, parent?: string): void => {
     if (visited.has(name)) return;
@@ -110,7 +110,7 @@ export function resolveExtensionSelection(
 
     const ext = byName.get(name);
     if (!ext) {
-      if (parent) missingDependencies.push({ extension: parent, dependency: name });
+      if (parent) missingDependencies.push({ module: parent, dependency: name });
       return;
     }
 
@@ -127,18 +127,18 @@ export function resolveExtensionSelection(
   for (const name of selectedNames) visit(name);
 
   return {
-    extensions: ordered,
+    modules: ordered,
     addedDependencies: [...added].sort((a, b) => a.localeCompare(b)),
     missingDependencies,
   };
 }
 
-// Write module_state rows for every bundled extension BEFORE the loader
+// Write module_state rows for every bundled module BEFORE the loader
 // runs, so unselected ones don't get auto-enabled on first start. Selected
-// extensions get enabled=1; everything else gets enabled=0.
-function presetExtensionStates(
+// modules get enabled=1; everything else gets enabled=0.
+function presetModuleStates(
   home: string,
-  bundled: DiscoveredExtension[],
+  bundled: DiscoveredModule[],
   selectedNames: string[],
 ): void {
   const log = createLogger({ level: 'warn' });
@@ -167,13 +167,13 @@ function presetExtensionStates(
 // ---------------------------------------------------------------------------
 async function startWebSetup(
   home: string,
-  bundled: DiscoveredExtension[],
-  frontendExt: DiscoveredExtension,
+  bundled: DiscoveredModule[],
+  frontendExt: DiscoveredModule,
 ): Promise<void> {
   // Enable only the panel for now; the user picks the rest in the browser.
   // This also creates the DB and seeds module_state rows for every bundled
-  // extension (disabled), so the web Extensions tab can list and toggle them.
-  presetExtensionStates(home, bundled, [frontendExt.name]);
+  // module (disabled), so the web Modules tab can list and toggle them.
+  presetModuleStates(home, bundled, [frontendExt.name]);
 
   // The panel binds to loopback (127.0.0.1) by default — reachable only from
   // this machine. On a headless box (a Pi, a mini PC, a Proxmox VM) you open it
@@ -197,7 +197,7 @@ async function startWebSetup(
     // Run the panel's setup entrypoint (generates the access token and prints
     // the URL). We skip the generic settings prompts — the point of this path
     // is to NOT ask a pile of terminal questions.
-    await configureNativeDepsForExtension(frontendExt, db, home);
+    await configureNativeDepsForModule(frontendExt, db, home);
   } finally {
     try {
       db.close();
@@ -232,10 +232,10 @@ export async function run(): Promise<void> {
 
   // -- Web UI handoff ----------------------------------------------------
   // Before anything else, offer to do the whole setup in the browser. If the
-  // modulus-frontend extension is present and the user says yes, we enable it,
+  // modulus-frontend module is present and the user says yes, we enable it,
   // start the local panel, and hand the rest of setup off to the web wizard —
   // the terminal wizard below is skipped entirely. Saying no continues here.
-  const bundled = discoverBundledExtensions();
+  const bundled = discoverBundledModules();
   const frontendExt = bundled.find((e) => e.name === 'modulus-frontend');
   if (frontendExt && process.stdin.isTTY && process.stdout.isTTY) {
     const wantWeb = await confirm({
@@ -304,7 +304,7 @@ export async function run(): Promise<void> {
   }
   if (modelTags.length > 0) {
     if (probe.ok) process.stdout.write(`✓ ${probe.models.length} Ollama models available.\n`);
-    else process.stdout.write('Enabled extension model options available.\n');
+    else process.stdout.write('Enabled module model options available.\n');
 
     const chatChoices = [
       ...modelTags.map((m) => ({ name: m, value: m })),
@@ -388,37 +388,37 @@ export async function run(): Promise<void> {
     );
   }
 
-  // -- Extensions --------------------------------------------------------
+  // -- Modules --------------------------------------------------------
   if (bundled.length === 0) {
-    process.stdout.write('\nNo bundled extensions found — run `modulus start` to launch.\n');
+    process.stdout.write('\nNo bundled modules found — run `modulus start` to launch.\n');
     return;
   }
 
   process.stdout.write('\n');
   const selectedNames = await checkbox({
-    message: 'Select extensions to enable (Space to toggle, Enter to confirm):',
+    message: 'Select modules to enable (Space to toggle, Enter to confirm):',
     choices: bundled.map((ext) => ({
       name: `${ext.name}${ext.manifest.description ? '  —  ' + ext.manifest.description : ''}`,
       value: ext.name,
     })),
   });
 
-  const selection = resolveExtensionSelection(bundled, selectedNames);
-  const selected = selection.extensions;
+  const selection = resolveModuleSelection(bundled, selectedNames);
+  const selected = selection.modules;
   if (selection.addedDependencies.length > 0) {
     process.stdout.write(
-      `\nAlso enabling required extension${selection.addedDependencies.length === 1 ? '' : 's'}: ${selection.addedDependencies.join(', ')}\n`,
+      `\nAlso enabling required module${selection.addedDependencies.length === 1 ? '' : 's'}: ${selection.addedDependencies.join(', ')}\n`,
     );
   }
   for (const missing of selection.missingDependencies) {
     process.stdout.write(
-      `\nWarning: ${missing.extension} depends on ${missing.dependency}, but it is not bundled here. Install it before starting Modulus.\n`,
+      `\nWarning: ${missing.module} depends on ${missing.dependency}, but it is not bundled here. Install it before starting Modulus.\n`,
     );
   }
 
-  // Pre-seed module_state so unselected bundled extensions are disabled
+  // Pre-seed module_state so unselected bundled modules are disabled
   // from the first start rather than auto-enabled by the loader.
-  presetExtensionStates(
+  presetModuleStates(
     home,
     bundled,
     selected.map((ext) => ext.name),
@@ -426,16 +426,16 @@ export async function run(): Promise<void> {
 
   if (selected.length === 0) {
     process.stdout.write(
-      '\nNo extensions selected. You can add them later with:\n' +
-        '  modulus ext install <name>   — install an extension\n' +
-        '  modulus auth <extension>     — run an extension OAuth flow\n' +
+      '\nNo modules selected. You can add them later with:\n' +
+        '  modulus ext install <name>   — install an module\n' +
+        '  modulus auth <module>     — run an module OAuth flow\n' +
         '  modulus config               — edit settings interactively\n\n' +
         'Run `modulus start` to launch.\n',
     );
     return;
   }
 
-  await setupExtensions(home, selected);
+  await setupModules(home, selected);
   printTelegramCommandsGuide(selected, botUsername);
 
   process.stdout.write('\nAll done. Run `modulus start` to launch.\n');

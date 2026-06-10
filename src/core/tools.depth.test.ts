@@ -1,5 +1,5 @@
 // Regression: validateArgs() used to recurse without a depth bound. A
-// malicious extension schema (or deeply-nested user input) could blow the
+// malicious module schema (or deeply-nested user input) could blow the
 // stack before any tool ran. Now bounded at 32 levels.
 
 import { test } from 'node:test';

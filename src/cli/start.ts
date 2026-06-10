@@ -6,8 +6,8 @@
 //   3. Ollama LLM client
 //   4. tool registry
 //   5. core scheduler / proactive loop (cron tick + nudge dispatcher)
-//   6. extension loader — discovers + loads everything in
-//      <repo>/extensions and ~/.modulus/extensions, registers their hooks
+//   6. module loader — discovers + loads everything in
+//      <repo>/modules and ~/.modulus/modules, registers their hooks
 //   7. orchestrator (two queues, conversation pipeline)
 //   8. Telegram adapter (long-poll)
 //
@@ -50,16 +50,12 @@ import { setupAgentSchedules } from '../core/agent-schedules.js';
 import { createWorkflowRegistry, seedStarterWorkflows } from '../core/workflows.js';
 import { createWorkflowRunner } from '../core/workflow-runner.js';
 import type { Tier } from './profiles.js';
+import { createModuleLoader, type HostOrchestrator, type VoicePayload } from '../core/modules.js';
 import {
-  createExtensionLoader,
-  type HostOrchestrator,
-  type VoicePayload,
-} from '../core/extensions.js';
-import {
-  collectExtensionReadiness,
+  collectModuleReadiness,
   formatSetupIssuesNudge,
   setupIssuesForNudge,
-} from '../core/extension-readiness.js';
+} from '../core/module-readiness.js';
 import { createPrefsStore } from '../core/prefs.js';
 import { createMetricsWriter } from '../core/metrics.js';
 import { createTelegram } from '../adapters/telegram.js';
@@ -86,12 +82,12 @@ export interface StartRunOptions {
   agentOnly?: boolean;
 }
 
-function defaultExtensionRoots(home: string): string[] {
-  const userDir = join(home, 'extensions');
-  // First-party extensions live in <repo>/extensions in dev. Resolve relative
+function defaultModuleRoots(home: string): string[] {
+  const userDir = join(home, 'modules');
+  // First-party modules live in <repo>/modules in dev. Resolve relative
   // to this file, then fall back to the cwd if it doesn't exist.
   const here = dirname(fileURLToPath(import.meta.url));
-  const repoExt = resolve(here, '..', '..', 'extensions');
+  const repoExt = resolve(here, '..', '..', 'modules');
   return [userDir, repoExt];
 }
 
@@ -256,13 +252,13 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   });
 
   // Self-scheduled followups. Registers a core tool the model can call and a
-  // per-minute sweep job on the scheduler. Done before extensions load so the
-  // tool is in the registry by the time anything (extension or user) touches
+  // per-minute sweep job on the scheduler. Done before modules load so the
+  // tool is in the registry by the time anything (module or user) touches
   // it.
   const followups = setupFollowups({ db, scheduler, tools, log });
 
   // Hive-mind shared memory: one store every agent reads and writes. Registers
-  // the remember/forget core tools here (before extensions load, same reason
+  // the remember/forget core tools here (before modules load, same reason
   // as followups); the provider feeds recall into the main orchestrator AND
   // every per-agent orchestrator below, so the whole fleet shares one memory.
   const memory = setupMemory({ db, tools, log });
@@ -273,17 +269,17 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   // renderers on it; empty until a panel chat turn is live.
   const panelConfirmBus = createPanelConfirmBus();
 
-  const extensionsRoots = defaultExtensionRoots(home);
+  const modulesRoots = defaultModuleRoots(home);
   const stateRoot = join(home, 'module_state');
   ensurePrivateDir(stateRoot);
 
-  // Voice-note sink for extensions like modulus-voice. The Telegram adapter
+  // Voice-note sink for modules like modulus-voice. The Telegram adapter
   // hasn't been built yet, so we install a thunk that resolves to it once
   // adapter construction finishes below.
   let sendVoiceImpl: ((chatId: number, voice: VoicePayload) => Promise<void>) | null = null;
   let notifySetupIssues: (() => Promise<void>) | null = null;
-  // The orchestrator is built after the extension loader (it consumes
-  // promptFragmentProvider/toolIntentFilter on the loader). Extensions that
+  // The orchestrator is built after the module loader (it consumes
+  // promptFragmentProvider/toolIntentFilter on the loader). Modules that
   // call host.orchestrator therefore have to defer until first use; this
   // wrapper bridges that gap so the Host can hold a stable reference.
   let orchestratorImpl: ReturnType<typeof createOrchestrator> | null = null;
@@ -301,8 +297,8 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   // the fleet during loadAll. Only needs the DB, so the early construction is
   // free; all the run-time machinery (runtime, queue) still wires up below.
   const agentRegistry = createAgentRegistry(db);
-  const loader = createExtensionLoader({
-    roots: extensionsRoots,
+  const loader = createModuleLoader({
+    roots: modulesRoots,
     stateRoot,
     db,
     llm,
@@ -346,7 +342,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
     tools: chatTools,
     log,
     promptFragmentProvider: (filter) => loader.promptFragment(filter),
-    toolIntentFilter: (message) => loader.relevantExtensions(message),
+    toolIntentFilter: (message) => loader.relevantModules(message),
     memoryProvider,
     turnGuards: () => loader.turnGuards().map((r) => r.guard),
     budgetTokens,
@@ -527,13 +523,13 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
     logFilePath: logFilePath(home),
     schedulerStats: () => scheduler.stats(),
     schedulerList: () => [...scheduler.list()],
-    extensions: () => collectExtensionReadiness(extensionsRoots, db),
-    extensionCommands: () => loader.commands(),
-    extensionIntercepts: () => loader.intercepts(),
-    extensionAfterReplies: () => loader.afterReplies(),
-    extensionAfterTurns: () => loader.afterTurns(),
-    extensionCallbacks: () => loader.callbacks(),
-    extensionVoiceMessages: () => loader.voiceMessages(),
+    modules: () => collectModuleReadiness(modulesRoots, db),
+    moduleCommands: () => loader.commands(),
+    moduleIntercepts: () => loader.intercepts(),
+    moduleAfterReplies: () => loader.afterReplies(),
+    moduleAfterTurns: () => loader.afterTurns(),
+    moduleCallbacks: () => loader.callbacks(),
+    moduleVoiceMessages: () => loader.voiceMessages(),
     // Yes/No on an agent-approval prompt arrives here as a callback; resolve the
     // parked tool call. The allowlist middleware already gated the press.
     onAgentApproval: (id, approved, fromUserId) =>
@@ -557,7 +553,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
         await surface.deliverProactive(nudge);
       } catch (e) {
         log.warn('chat surface deliverProactive failed', {
-          ext: surface.extension,
+          ext: surface.module,
           error: e instanceof Error ? e.message : String(e),
         });
       }
@@ -570,7 +566,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   };
   // And the voice-note path now that the adapter exists.
   sendVoiceImpl = (chatId, voice) => telegram.sendVoice(chatId, voice);
-  // Point the tool registry's confirm hook at a surface router. Extensions
+  // Point the tool registry's confirm hook at a surface router. Modules
   // that own a chat surface (e.g. modulus-discord) register a renderer via
   // host.chat.registerConfirm, scoped to their own chatId namespace; the
   // router picks the first matching surface for the originating chatId and
@@ -610,7 +606,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
           owns = surface.ownsChat(ctx.chatId);
         } catch (e) {
           log.warn('chat surface ownsChat threw — skipping', {
-            ext: surface.extension,
+            ext: surface.module,
             error: e instanceof Error ? e.message : String(e),
           });
           continue;
@@ -635,7 +631,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
           // Fail closed on a renderer crash. A confirm-tier tool must never
           // run when its prompt couldn't be delivered.
           log.warn('chat surface confirm threw — failing closed', {
-            ext: surface.extension,
+            ext: surface.module,
             tool: handler.name,
             error: e instanceof Error ? e.message : String(e),
           });
@@ -647,7 +643,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   };
   let lastSetupIssueSignature = '';
   notifySetupIssues = async () => {
-    const issues = setupIssuesForNudge(collectExtensionReadiness(extensionsRoots, db));
+    const issues = setupIssuesForNudge(collectModuleReadiness(modulesRoots, db));
     const signature = JSON.stringify(
       issues.map((e) => [e.name, e.status, e.reasons, e.nextAction]).sort(),
     );
@@ -699,7 +695,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
         log,
         home,
         config: cfg,
-        extensionRoots: extensionsRoots,
+        moduleRoots: modulesRoots,
         scheduler,
         agentRegistry,
         agentQueue,
@@ -759,7 +755,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
 
   const shutdown = async (signal: string): Promise<void> => {
     log.info('shutdown signal received', { signal });
-    // If any of the awaited stages below hangs (extension watcher, grammY
+    // If any of the awaited stages below hangs (module watcher, grammY
     // long-poll drain, etc.) the process would otherwise sit forever and
     // /restart's helper would wait forever. Force-exit after a budget.
     const hardExit = setTimeout(() => {
@@ -792,7 +788,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
     try {
       await loader.shutdown();
     } catch (e) {
-      log.warn('extension loader shutdown failed', {
+      log.warn('module loader shutdown failed', {
         error: e instanceof Error ? e.message : String(e),
       });
     }

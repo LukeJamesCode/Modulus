@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert';
 import {
   buildTelegramButtonRows,
   buildTelegramHelp,
-  formatExtensionsText,
+  formatModulesText,
   formatPendingFollowups,
   handleFollowupCancel,
   handleFollowupClear,
@@ -20,15 +20,15 @@ test('/help lists core commands and excludes any codex commands', () => {
   assert.doesNotMatch(help, /codex/i);
 });
 
-test('/help groups installed extensions and their commands', () => {
+test('/help groups installed modules and their commands', () => {
   const help = buildTelegramHelp({
-    extensions: [
+    modules: [
       { name: 'modulus-google-calendar', enabled: true },
       { name: 'modulus-weather', enabled: false },
     ],
-    extensionCommands: [
+    moduleCommands: [
       {
-        extension: 'modulus-google-calendar',
+        module: 'modulus-google-calendar',
         name: 'events',
         description: "List today's events",
         handler: async () => undefined,
@@ -36,16 +36,16 @@ test('/help groups installed extensions and their commands', () => {
     ],
   });
 
-  assert.match(help, /Extensions:/);
+  assert.match(help, /Modules:/);
   assert.match(help, /modulus-google-calendar \(ready\)/);
   assert.match(help, /• modulus-weather \(disabled\)/);
-  assert.match(help, /Extension commands:/);
+  assert.match(help, /Module commands:/);
   assert.match(help, /\[modulus-google-calendar\]/);
   assert.match(help, /\/events — List today's events/);
 });
 
-test('/extensions formats readiness, reasons, and next actions', () => {
-  const text = formatExtensionsText([
+test('/modules formats readiness, reasons, and next actions', () => {
+  const text = formatModulesText([
     {
       name: 'modulus-everyday-assistant',
       version: '0.1.0',
@@ -68,11 +68,11 @@ test('each view has at most 4 buttons scoped to its own actions', () => {
   const helpFlat = buildTelegramButtonRows('help').flat();
   assert.deepEqual(helpFlat, [{ text: '💬 New chat', action: 'core:newchat' }]);
 
-  // extensions: refresh + up to 3 extension shortcuts, no nav buttons
-  const extFlat = buildTelegramButtonRows('extensions', {
-    extensionCommands: [
+  // modules: refresh + up to 3 module shortcuts, no nav buttons
+  const extFlat = buildTelegramButtonRows('modules', {
+    moduleCommands: [
       {
-        extension: 'modulus-weather',
+        module: 'modulus-weather',
         name: 'weather',
         description: 'Show weather',
         handler: async () => undefined,
@@ -80,7 +80,7 @@ test('each view has at most 4 buttons scoped to its own actions', () => {
     ],
   }).flat();
   assert.ok(extFlat.some((b) => b.action === 'ext:weather'));
-  assert.ok(extFlat.some((b) => b.action === 'core:extensions'));
+  assert.ok(extFlat.some((b) => b.action === 'core:modules'));
   assert.ok(extFlat.length <= 4);
   assert.ok(!extFlat.some((b) => b.action === 'core:help'));
   assert.ok(!extFlat.some((b) => b.action === 'core:model'));

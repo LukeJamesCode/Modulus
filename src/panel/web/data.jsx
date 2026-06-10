@@ -1,10 +1,10 @@
 /* global window */
 // Static labels + small offline fallbacks. Live data comes from the /api
 // endpoints (see api.js); these keep the panel legible if the server can't be
-// reached and give human labels to the raw capability strings extensions
+// reached and give human labels to the raw capability strings modules
 // declare in their manifests.
 
-// Capability strings as they actually appear in extension manifest.json files.
+// Capability strings as they actually appear in module manifest.json files.
 const CAP_LABELS = {
   network: { label: 'Network', tone: 'warn', hint: 'Talks to services over the internet.' },
   storage: { label: 'Local storage', tone: 'neutral', hint: 'Saves data on this machine.' },
@@ -23,7 +23,7 @@ const CAP_LABELS = {
   'cloud-model': { label: 'Cloud model', tone: 'err', hint: 'Can send data to a cloud AI model.' },
 };
 
-// Friendly one-liners for the bundled extensions, keyed by manifest name. Used
+// Friendly one-liners for the bundled modules, keyed by manifest name. Used
 // to enrich the gallery; falls back to the manifest description when absent.
 const EXT_BLURBS = {
   'modulus-everyday-assistant':

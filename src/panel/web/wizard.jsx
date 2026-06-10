@@ -3,7 +3,7 @@
 // same config.json the CLI does. Live checks hit real endpoints:
 //   token  → POST /api/telegram/validate
 //   ollama → POST /api/ollama/test (then GET model tags)
-//   finish → POST /api/config, then enable/disable chosen extensions
+//   finish → POST /api/config, then enable/disable chosen modules
 // The last step hands off to the hub with the agent starting.
 const { useState: useStateWiz, useEffect: useEffectWiz, useRef: useRefWiz } = React;
 
@@ -14,8 +14,8 @@ const STEPS = [
   { id: 'ollama', label: 'Model server' },
   { id: 'models', label: 'Choose models' },
   { id: 'hardware', label: 'Hardware tier' },
-  { id: 'extensions', label: 'Extensions' },
-  { id: 'ext-config', label: 'Configure extensions' },
+  { id: 'modules', label: 'Modules' },
+  { id: 'ext-config', label: 'Configure modules' },
   { id: 'review', label: 'Review & finish' },
 ];
 
@@ -228,7 +228,7 @@ function Wizard({ onFinish, onExit, suggestedTier, ramGb }) {
             {cur === 'hardware' && (
               <StepHardware data={data} set={set} suggestedTier={suggestedTier} ramGb={ramGb} />
             )}
-            {cur === 'extensions' && <StepExtensions />}
+            {cur === 'modules' && <StepModules />}
             {cur === 'ext-config' && <StepExtConfig saveRef={extConfigSaveRef} />}
             {cur === 'review' && <StepReview data={data} goto={setStep} />}
           </div>
@@ -366,7 +366,7 @@ function StepWelcome() {
     {
       icon: 'shield',
       title: 'Runs privately on this machine',
-      desc: 'Your conversations and data stay local. Nothing leaves unless an extension explicitly sends it.',
+      desc: 'Your conversations and data stay local. Nothing leaves unless an module explicitly sends it.',
     },
     {
       icon: 'send',
@@ -375,7 +375,7 @@ function StepWelcome() {
     },
     {
       icon: 'plug',
-      title: 'Grows with extensions',
+      title: 'Grows with modules',
       desc: 'Start minimal, then add calendar, voice, reminders and more whenever you like.',
     },
   ];
@@ -920,10 +920,10 @@ function StepHardware({ data, set, suggestedTier, ramGb }) {
   );
 }
 
-function StepExtensions() {
+function StepModules() {
   const [exts, setExts] = useStateWiz(null);
   const [busy, setBusy] = useStateWiz(null);
-  // Per-extension toggle result so the user can see whether the post-enable
+  // Per-module toggle result so the user can see whether the post-enable
   // setup (downloads, package-manager installs) actually succeeded — silently
   // failing here is what burned us with whisper.cpp on Windows.
   const [results, setResults] = useStateWiz({});
@@ -938,9 +938,9 @@ function StepExtensions() {
   const [voiceOk, setVoiceOk] = useStateWiz(true);
   const voiceStreamRef = useRefWiz(null);
   const load = async () => {
-    const r = await window.api.get('/api/extensions');
+    const r = await window.api.get('/api/modules');
     // Hide the panel itself — it's already running and can't be toggled here.
-    if (r.ok) setExts(r.data.extensions.filter((e) => !e.self));
+    if (r.ok) setExts(r.data.modules.filter((e) => !e.self));
     else setExts([]);
   };
   useEffectWiz(() => {
@@ -958,7 +958,7 @@ function StepExtensions() {
     }
     setBusy(e.name);
     const action = e.enabled ? 'disable' : 'enable';
-    const r = await window.api.post(`/api/extensions/${encodeURIComponent(e.name)}/${action}`);
+    const r = await window.api.post(`/api/modules/${encodeURIComponent(e.name)}/${action}`);
     const output = (r.data && r.data.output) || r.error || '';
     const ok = !!(r.ok && r.data && r.data.ok);
     setResults((prev) => ({ ...prev, [e.name]: { ok, output, action } }));
@@ -972,7 +972,7 @@ function StepExtensions() {
   const beginVoiceDownload = () => {
     setVoiceModal('streaming');
     setBusy('modulus-voice');
-    const es = window.api.streamSSE('/api/extensions/modulus-voice/enable-stream', {
+    const es = window.api.streamSSE('/api/modules/modulus-voice/enable-stream', {
       onMessage: (_evt, raw) => {
         let msg;
         try {
@@ -1031,16 +1031,16 @@ function StepExtensions() {
   const blurb = (e) => (window.EXT_BLURBS && window.EXT_BLURBS[e.name]) || e.description || '';
   return (
     <div>
-      <StepHead kicker="Step 6" title="Pick your extensions">
-        Turn on the capabilities you want now, or skip and add them later from the Extensions tab.
+      <StepHead kicker="Step 6" title="Pick your modules">
+        Turn on the capabilities you want now, or skip and add them later from the Modules tab.
         Codex and Everyday Assistant will walk you through connection on the next step.
       </StepHead>
       {exts === null && (
-        <div style={{ fontSize: 13.5, color: 'var(--text-3)' }}>Loading extensions…</div>
+        <div style={{ fontSize: 13.5, color: 'var(--text-3)' }}>Loading modules…</div>
       )}
       {exts && exts.length === 0 && (
         <div style={{ fontSize: 13.5, color: 'var(--text-3)' }}>
-          No extensions are installed yet. You can add them later with{' '}
+          No modules are installed yet. You can add them later with{' '}
           <span className="mono">modulus ext install</span>.
         </div>
       )}
@@ -1380,12 +1380,12 @@ function StepExtConfig({ saveRef }) {
     });
 
   const loadConfigurable = async () => {
-    const r = await window.api.get('/api/extensions');
+    const r = await window.api.get('/api/modules');
     if (!r.ok) {
       setExts([]);
       return;
     }
-    const configurable = configurableFrom(r.data.extensions || []);
+    const configurable = configurableFrom(r.data.modules || []);
     setExts(configurable);
     const init = {};
     for (const e of configurable) {
@@ -1406,7 +1406,7 @@ function StepExtConfig({ saveRef }) {
     if (!currentTask || currentTask.type !== 'setting') return true;
     const ext = currentTask.ext;
     const field = currentTask.field;
-    const r = await window.api.post(`/api/extensions/${encodeURIComponent(ext.name)}/settings`, {
+    const r = await window.api.post(`/api/modules/${encodeURIComponent(ext.name)}/settings`, {
       [field.key]: (vals[ext.name] || {})[field.key] ?? '',
     });
     if (!r.ok) {
@@ -1505,8 +1505,8 @@ function StepExtConfig({ saveRef }) {
   if (exts === null) {
     return (
       <div>
-        <StepHead kicker="Step 7" title="Configure your extensions">
-          Loading extension settings...
+        <StepHead kicker="Step 7" title="Configure your modules">
+          Loading module settings...
         </StepHead>
       </div>
     );
@@ -1515,7 +1515,7 @@ function StepExtConfig({ saveRef }) {
   if (exts.length === 0 || tasks.length === 0) {
     return (
       <div>
-        <StepHead kicker="Step 7" title="Configure your extensions">
+        <StepHead kicker="Step 7" title="Configure your modules">
           Everything you enabled is ready with its defaults - click <b>Save &amp; continue</b> to
           move on.
         </StepHead>
@@ -1529,8 +1529,8 @@ function StepExtConfig({ saveRef }) {
 
   return (
     <div>
-      <StepHead kicker="Step 7" title="Configure your extensions">
-        We'll walk through one extension setting at a time. Account connections come first for Codex
+      <StepHead kicker="Step 7" title="Configure your modules">
+        We'll walk through one module setting at a time. Account connections come first for Codex
         and Everyday Assistant.
       </StepHead>
       {err && (

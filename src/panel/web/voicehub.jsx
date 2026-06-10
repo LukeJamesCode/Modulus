@@ -283,7 +283,7 @@ function VoiceHub({ agent, onStart, onStop, health, activeModel, onLeave }) {
             setPartial('');
             if (finalText) appendTurnToStorage(text, finalText);
             if (!gotVoice) {
-              // No TTS clip is coming (extension off / synth failed) — just
+              // No TTS clip is coming (module off / synth failed) — just
               // settle and re-arm if continuous is on.
               settleAfterReply();
             }

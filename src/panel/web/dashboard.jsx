@@ -17,7 +17,7 @@ function useSurface(voiceEnabled) {
       return 'chat';
     }
   });
-  // Voice can be disabled out from under us (extension turned off) — fall back.
+  // Voice can be disabled out from under us (module turned off) — fall back.
   const effective = surface === 'voice' && !voiceEnabled ? 'chat' : surface;
   useEffect(() => {
     try {
@@ -98,7 +98,7 @@ function DashboardTab({
   lastError,
   scheduler,
   activity,
-  extensions,
+  modules,
   tier,
   allowlistCount,
   voiceEnabled,
@@ -162,7 +162,7 @@ function DashboardTab({
             lastError={lastError}
             scheduler={scheduler}
             activity={activity}
-            extensions={extensions}
+            modules={modules}
             tier={tier}
             allowlistCount={allowlistCount}
           />

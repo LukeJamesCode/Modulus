@@ -1,7 +1,7 @@
-// Regression tests for the pre-1.0 extension-loader security audit:
+// Regression tests for the pre-1.0 module-loader security audit:
 //   S1 — entrypoint path traversal
 //   S2 — intent_pattern ReDoS length cap
-//   S6 — extension state dir is created 0o700 on POSIX
+//   S6 — module state dir is created 0o700 on POSIX
 
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
@@ -12,7 +12,7 @@ import { open } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import { createScheduler } from './scheduler.js';
 import { createToolRegistry } from './tools.js';
-import { createExtensionLoader } from './extensions.js';
+import { createModuleLoader } from './modules.js';
 import type { LLM, ProfileConfig, ProfileName } from './llm.js';
 
 const log = createLogger({ level: 'error', out: () => {}, err: () => {} });
@@ -59,13 +59,13 @@ function writeExt(
   return folder;
 }
 
-test('S1: entrypoint that escapes the extension folder is refused', async () => {
+test('S1: entrypoint that escapes the module folder is refused', async () => {
   const dir = tmp();
   try {
     const db = open({ path: join(dir, 'g.db') });
     const root = join(dir, 'exts');
     mkdirSync(root);
-    // Plant a "victim" file outside the extension folder. importEntrypoint
+    // Plant a "victim" file outside the module folder. importEntrypoint
     // should never reach this even if the manifest tries to escape.
     writeFileSync(join(dir, 'escape.js'), 'export function register() {}');
     writeExt(root, 'evil', {
@@ -74,7 +74,7 @@ test('S1: entrypoint that escapes the extension folder is refused', async () => 
       modulus: '*',
       entrypoints: { tools: '../../escape.js' },
     });
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,
@@ -88,8 +88,8 @@ test('S1: entrypoint that escapes the extension folder is refused', async () => 
     });
     await loader.loadAll();
     const entry = loader.list().find((e) => e.name === 'evil');
-    assert.ok(entry, 'extension entry should be present even on failure');
-    assert.match(entry!.error ?? '', /escapes extension folder/);
+    assert.ok(entry, 'module entry should be present even on failure');
+    assert.match(entry!.error ?? '', /escapes module folder/);
     db.close();
   } finally {
     try {
@@ -126,7 +126,7 @@ test('S2: oversized intent_pattern is ignored, not compiled', async () => {
           '}\n',
       },
     );
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,
@@ -139,12 +139,12 @@ test('S2: oversized intent_pattern is ignored, not compiled', async () => {
       watch: false,
     });
     await loader.loadAll();
-    // No extension declared a usable pattern, so the orchestrator should fall
+    // No module declared a usable pattern, so the orchestrator should fall
     // back to "all tools" (returns null), not the "patterns present but no
     // match" empty array. That fallback is what tells us the over-length
     // pattern was rejected at load time. Avoid all-same-char messages because
     // isLowSignalMessage() short-circuits to [] before patterns are checked.
-    const matched = loader.relevantExtensions('please find me a recipe');
+    const matched = loader.relevantModules('please find me a recipe');
     assert.equal(matched, null);
     db.close();
   } finally {
@@ -156,7 +156,7 @@ test('S2: oversized intent_pattern is ignored, not compiled', async () => {
   }
 });
 
-test('S6: extension state directory is created 0o700 on POSIX', async (t) => {
+test('S6: module state directory is created 0o700 on POSIX', async (t) => {
   if (process.platform === 'win32') {
     t.skip('POSIX mode bits do not apply on Windows');
     return;
@@ -169,7 +169,7 @@ test('S6: extension state directory is created 0o700 on POSIX', async (t) => {
     mkdirSync(root);
     mkdirSync(stateRoot);
     writeExt(root, 'plain', { name: 'plain', version: '1.0.0', modulus: '*' });
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot,
       db,

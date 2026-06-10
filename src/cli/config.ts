@@ -3,16 +3,16 @@
 // Two layers:
 //   1. Core settings (`telegram.*`, `ollama.url`, `models.*`, `tier`, `logLevel`)
 //      stored in ~/.modulus/config.json.
-//   2. Per-extension settings declared via the extension's settings.schema.json,
+//   2. Per-module settings declared via the module's settings.schema.json,
 //      stored in the `module_settings` SQLite table.
 //
 // The TUI presents both in one menu organised by section so the user can move
-// between core and any installed extension without re-launching.
+// between core and any installed module without re-launching.
 
 import { confirm, input, password, select } from '@inquirer/prompts';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { extensionFolders } from './extension-paths.js';
+import { moduleFolders } from './module-paths.js';
 import { open as openDb } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import {
@@ -37,15 +37,15 @@ interface SettingsSchema {
   required?: string[];
 }
 
-interface ExtensionEntry {
+interface ModuleEntry {
   name: string;
   schema: SettingsSchema | undefined;
 }
 
-function discoverExtensionsForSettings(home: string): ExtensionEntry[] {
+function discoverModulesForSettings(home: string): ModuleEntry[] {
   const seen = new Set<string>();
-  const out: ExtensionEntry[] = [];
-  for (const { folder } of extensionFolders(home)) {
+  const out: ModuleEntry[] = [];
+  for (const { folder } of moduleFolders(home)) {
     try {
       const manifest = join(folder, 'manifest.json');
       if (!existsSync(manifest)) continue;
@@ -58,7 +58,7 @@ function discoverExtensionsForSettings(home: string): ExtensionEntry[] {
         : undefined;
       out.push({ name: m.name, schema });
     } catch {
-      // Skip malformed extension folders silently — `modulus doctor` covers
+      // Skip malformed module folders silently — `modulus doctor` covers
       // diagnostics. The config TUI shouldn't blow up because one folder
       // has bad JSON.
     }
@@ -68,7 +68,7 @@ function discoverExtensionsForSettings(home: string): ExtensionEntry[] {
 
 export async function run(): Promise<void> {
   const home = homeDir();
-  const exts = discoverExtensionsForSettings(home);
+  const exts = discoverModulesForSettings(home);
 
   for (;;) {
     const sectionChoices = [
@@ -83,7 +83,7 @@ export async function run(): Promise<void> {
     } else {
       const ext = exts.find((e) => e.name === pick);
       if (!ext) continue;
-      await editExtension(home, ext);
+      await editModule(home, ext);
     }
   }
 }
@@ -197,7 +197,7 @@ function effectiveDiffers(file: ModulusConfig, effective: ModulusConfig): boolea
   );
 }
 
-async function editExtension(home: string, ext: ExtensionEntry): Promise<void> {
+async function editModule(home: string, ext: ModuleEntry): Promise<void> {
   if (!ext.schema) {
     process.stdout.write(`(${ext.name} has no settings schema.)\n`);
     return;

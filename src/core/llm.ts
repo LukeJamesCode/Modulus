@@ -189,8 +189,8 @@ export interface LLM {
   // point on a RAM-constrained Pi. Optional so fakes/providers need no change;
   // a no-op when nothing heavy is resident.
   releaseHeavy?(): Promise<void>;
-  // Optional extension hook. Routed LLMs expose this so an enabled extension can
-  // contribute a model alias without core importing extension code.
+  // Optional module hook. Routed LLMs expose this so an enabled module can
+  // contribute a model alias without core importing module code.
   registerProvider?: (provider: LLMProvider) => () => void;
 }
 

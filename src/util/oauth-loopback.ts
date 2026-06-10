@@ -1,4 +1,4 @@
-// Loopback OAuth callback server shared by the extension auth flows
+// Loopback OAuth callback server shared by the module auth flows
 // (modulus-codex, modulus-everyday-assistant). Listens for the browser redirect,
 // verifies `state` to defend against a stray/forged callback, and resolves the
 // authorization `code`. Per-flow differences (callback path, completion page

@@ -5,13 +5,13 @@ import { createChatDispatcher, type ChatDispatcherDeps } from './chat-dispatch.j
 import type { InstantResponder, InstantResponse } from './instant-responses.js';
 import type {
   AfterTurnContext,
-  ExtensionAfterReplyRecord,
-  ExtensionAfterTurnRecord,
-  ExtensionCommandRecord,
-  ExtensionInterceptRecord,
+  ModuleAfterReplyRecord,
+  ModuleAfterTurnRecord,
+  ModuleCommandRecord,
+  ModuleInterceptRecord,
   HostOrchestrator,
   HostReplyChunk,
-} from './extensions.js';
+} from './modules.js';
 
 const log = createLogger({ level: 'error', out: () => {}, err: () => {} });
 
@@ -93,8 +93,8 @@ test('plain message reaches the orchestrator and replies', async () => {
 test('an intercept that does not call next() short-circuits the orchestrator', async () => {
   const { orchestrator, calls } = orchestratorEmitting('model answer');
   const replies: string[] = [];
-  const intercept: ExtensionInterceptRecord = {
-    extension: 'instant',
+  const intercept: ModuleInterceptRecord = {
+    module: 'instant',
     handler: async (ctx) => {
       // Handle "hi" itself; never call ctx.next() so the model is not invoked.
       if (ctx.text === 'hi') await ctx.reply('hey!');
@@ -116,8 +116,8 @@ test('an intercept that does not call next() short-circuits the orchestrator', a
 test('an intercept calling next() falls through to the orchestrator', async () => {
   const { orchestrator, calls } = orchestratorEmitting('real answer');
   const replies: string[] = [];
-  const intercept: ExtensionInterceptRecord = {
-    extension: 'ack',
+  const intercept: ModuleInterceptRecord = {
+    module: 'ack',
     handler: async (ctx) => {
       await ctx.reply('checking…');
       await ctx.next();
@@ -178,8 +178,8 @@ test('an instant ack is sent, then the orchestrator still runs and answers', asy
 
 test('an instant reply still fires the afterReply chain (so a voice ext speaks it)', async () => {
   const afterReplyText: string[] = [];
-  const afterReply: ExtensionAfterReplyRecord = {
-    extension: 'voice',
+  const afterReply: ModuleAfterReplyRecord = {
+    module: 'voice',
     handler: async (ctx) => void afterReplyText.push(ctx.text),
   };
   const d = createChatDispatcher(
@@ -194,12 +194,12 @@ test('an instant reply still fires the afterReply chain (so a voice ext speaks i
   assert.deepEqual(afterReplyText, ['Got it.']);
 });
 
-test('a /command routes to the matching extension command, not the orchestrator', async () => {
+test('a /command routes to the matching module command, not the orchestrator', async () => {
   const { orchestrator, calls } = orchestratorEmitting('should not run');
   const replies: string[] = [];
   let receivedArgs = '';
-  const cmd: ExtensionCommandRecord = {
-    extension: 'tasks',
+  const cmd: ModuleCommandRecord = {
+    module: 'tasks',
     name: 'tasks',
     description: 'list tasks',
     handler: async (ctx) => {
@@ -224,8 +224,8 @@ test('isCoreCommand leaves core commands for the surface to handle', async () =>
   const { orchestrator, calls } = orchestratorEmitting('x');
   const replies: string[] = [];
   let extCmdRan = false;
-  const cmd: ExtensionCommandRecord = {
-    extension: 'x',
+  const cmd: ModuleCommandRecord = {
+    module: 'x',
     name: 'help',
     description: '',
     handler: async () => {
@@ -242,7 +242,7 @@ test('isCoreCommand leaves core commands for the surface to handle', async () =>
     reply: async (t) => void replies.push(t),
   });
   await flush();
-  assert.equal(extCmdRan, false, 'core command must not be dispatched to an extension');
+  assert.equal(extCmdRan, false, 'core command must not be dispatched to an module');
   assert.deepEqual(calls, []);
   assert.deepEqual(replies, []);
 });
@@ -251,12 +251,12 @@ test('afterReply and afterTurn hooks fire after a completed orchestrator turn', 
   const { orchestrator } = orchestratorEmitting('final', { conversationId: 7 });
   const afterReplyText: string[] = [];
   const afterTurnSeen: AfterTurnContext[] = [];
-  const afterReply: ExtensionAfterReplyRecord = {
-    extension: 'voice',
+  const afterReply: ModuleAfterReplyRecord = {
+    module: 'voice',
     handler: async (ctx) => void afterReplyText.push(ctx.text),
   };
-  const afterTurn: ExtensionAfterTurnRecord = {
-    extension: 'routines',
+  const afterTurn: ModuleAfterTurnRecord = {
+    module: 'routines',
     handler: async (turn) => void afterTurnSeen.push(turn),
   };
   const d = createChatDispatcher(

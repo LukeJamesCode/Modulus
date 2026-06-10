@@ -4,13 +4,13 @@
 // in the browser via the confirm bus (fail-closed on disconnect/timeout).
 //
 // Deferred to follow-ups: voice in/out, chat file attachments, and the post-turn
-// afterReply/afterTurn hooks (they drive voice/learning extensions that need a
+// afterReply/afterTurn hooks (they drive voice/learning modules that need a
 // browser-side sink).
 
 import { randomUUID } from 'node:crypto';
 import type { DB } from '../../storage/db.js';
 import type { ModulusConfig } from '../../cli/config-store.js';
-import type { TelegramInterceptContext } from '../../core/extensions.js';
+import type { TelegramInterceptContext } from '../../core/modules.js';
 import type { ThinkMode } from '../../core/llm.js';
 import type { ToolContext, ToolHandler } from '../../core/tools.js';
 import { readJson, sendJson, sse as sseWrite, writeSseHead } from '../http.js';
@@ -147,7 +147,7 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
       });
     };
 
-    // Mirror the Telegram adapter: run the intercept chain first so extensions
+    // Mirror the Telegram adapter: run the intercept chain first so modules
     // (e.g. instant responses) get first crack. An intercept that fully handles
     // the turn replies and never calls next(); one that just acks calls next()
     // and we fall through to the orchestrator.
@@ -174,7 +174,7 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
         await item.handler(ictx);
       } catch (e) {
         deps.log.warn('panel chat intercept failed', {
-          ext: item.extension,
+          ext: item.module,
           error: e instanceof Error ? e.message : String(e),
         });
       }

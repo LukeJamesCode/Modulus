@@ -1,4 +1,4 @@
-// `modulus models` - list Ollama / enabled extension models and pick chat /
+// `modulus models` - list Ollama / enabled module models and pick chat /
 // reasoning / tools profiles.
 //
 // Distinct from `modulus init` in that it only touches the model fields and
@@ -33,7 +33,7 @@ export async function run(): Promise<void> {
     process.stdout.write(`ok ${probe.models.length} Ollama models found.\n\n`);
   } else {
     process.stdout.write(
-      `x Ollama unreachable (${probe.error ?? 'unknown error'}); showing enabled extension models.\n\n`,
+      `x Ollama unreachable (${probe.error ?? 'unknown error'}); showing enabled module models.\n\n`,
     );
   }
 

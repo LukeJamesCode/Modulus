@@ -46,7 +46,7 @@ async function call<T extends unknown[]>(
 const program = new Command();
 program
   .name('modulus')
-  .description('Small, terminal-first AI agent. CPU-only. Extensions turn it into anything.')
+  .description('Small, terminal-first AI agent. CPU-only. Modules turn it into anything.')
   .version('0.0.0');
 
 program
@@ -69,7 +69,7 @@ program
 
 program
   .command('config')
-  .description('Interactive settings TUI (core + extensions)')
+  .description('Interactive settings TUI (core + modules)')
   .action(async () => {
     const { run } = await import('./config.js');
     await call('config', run);
@@ -77,11 +77,11 @@ program
 
 program
   .command('auth')
-  .argument('<extension>', 'Extension name to authorize')
-  .description('Run an extension auth flow')
-  .action(async (extension: string) => {
+  .argument('<module>', 'Module name to authorize')
+  .description('Run an module auth flow')
+  .action(async (module: string) => {
     const { run } = await import('./auth.js');
-    await call('auth', run, extension);
+    await call('auth', run, module);
   });
 
 program
@@ -112,7 +112,7 @@ program
 program
   .command('status')
   .option('--json', 'Emit a single JSON object instead of two-column text')
-  .description('One-shot summary of bot health (config, ollama, extensions)')
+  .description('One-shot summary of bot health (config, ollama, modules)')
   .action(async (opts: { json?: boolean }) => {
     const { run } = await import('./status.js');
     await call('status', run, { json: !!opts.json });
@@ -120,7 +120,7 @@ program
 
 program
   .command('doctor')
-  .description('Run preflight diagnostics (config, telegram, ollama, ram, extensions)')
+  .description('Run preflight diagnostics (config, telegram, ollama, ram, modules)')
   .action(async () => {
     const { run } = await import('./doctor.js');
     await call('doctor', run);
@@ -158,12 +158,12 @@ program
     're-run only the tests that failed or errored in the most recent ~/.modulus/ability-test-*.md report (forces --tier full so filter spans every tier)',
   )
   .action(async (opts: { tier?: string; filter?: string; out?: string; fails?: boolean }) => {
-    // The runner lives in the modulus-abilitytest extension (so it can ship,
+    // The runner lives in the modulus-abilitytest module (so it can ship,
     // be hot-reloaded, and own its catalog). The CLI is a thin shim that
     // resolves the .ts file by absolute path and dynamically imports it —
     // tsx handles the on-the-fly transpile.
     const here = dirname(fileURLToPath(import.meta.url));
-    const runnerPath = resolve(here, '..', '..', 'extensions', 'modulus-abilitytest', 'runner.ts');
+    const runnerPath = resolve(here, '..', '..', 'modules', 'modulus-abilitytest', 'runner.ts');
     const mod = (await import(pathToFileURL(runnerPath).href)) as {
       run: (opts: {
         tier: 'smoke' | 'standard' | 'full';
@@ -234,18 +234,18 @@ program
     });
   });
 
-const extCmd = program.command('ext').description('Manage extensions');
+const extCmd = program.command('ext').description('Manage modules');
 extCmd
   .command('list')
-  .description('List installed extensions and their state')
+  .description('List installed modules and their state')
   .action(async () => {
     const ext = await import('./ext.js');
     await call('ext list', ext.list);
   });
 extCmd
   .command('install')
-  .argument('<source>', 'Local path, git URL, or repo extension name')
-  .description('Install an extension')
+  .argument('<source>', 'Local path, git URL, or repo module name')
+  .description('Install an module')
   .action(async (source: string) => {
     const ext = await import('./ext.js');
     await call('ext install', ext.install, source);
@@ -253,7 +253,7 @@ extCmd
 extCmd
   .command('enable')
   .argument('<name>')
-  .description('Enable an installed extension')
+  .description('Enable an installed module')
   .action(async (name: string) => {
     const ext = await import('./ext.js');
     await call('ext enable', ext.enable, name);
@@ -261,7 +261,7 @@ extCmd
 extCmd
   .command('disable')
   .argument('<name>')
-  .description('Disable an installed extension')
+  .description('Disable an installed module')
   .action(async (name: string) => {
     const ext = await import('./ext.js');
     await call('ext disable', ext.disable, name);
@@ -269,8 +269,8 @@ extCmd
 extCmd
   .command('uninstall')
   .argument('<name>')
-  .option('--purge', 'Also drop the extension settings and state')
-  .description('Uninstall an extension installed under ~/.modulus/extensions/')
+  .option('--purge', 'Also drop the module settings and state')
+  .description('Uninstall an module installed under ~/.modulus/modules/')
   .action(async (name: string, opts: { purge?: boolean }) => {
     const ext = await import('./ext.js');
     await call('ext uninstall', ext.uninstall, name, { purge: !!opts.purge });
@@ -278,16 +278,16 @@ extCmd
 extCmd
   .command('reload')
   .argument('[name]')
-  .description('Touch extension folders so a running modulus hot-reloads them')
+  .description('Touch module folders so a running modulus hot-reloads them')
   .action(async (name: string | undefined) => {
     const ext = await import('./ext.js');
     await call('ext reload', ext.reload, name);
   });
 extCmd
   .command('create')
-  .argument('<name>', 'Extension name (e.g. modulus-todo)')
+  .argument('<name>', 'Module name (e.g. modulus-todo)')
   .argument('[dir]', 'Parent directory (default: current working directory)')
-  .description('Scaffold a runnable starter extension you can edit and publish')
+  .description('Scaffold a runnable starter module you can edit and publish')
   .action(async (name: string, dir: string | undefined) => {
     const ext = await import('./ext.js');
     await call('ext create', ext.create, name, dir);

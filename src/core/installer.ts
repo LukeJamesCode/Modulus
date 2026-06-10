@@ -9,7 +9,7 @@
 // pinned by sha256 in the index, so a swapped or tampered tarball fails closed
 // before a byte of it is interpreted. Extraction is a deliberately minimal
 // ustar reader that accepts ONLY regular files and directories with safe
-// relative paths — symlinks, hardlinks, devices, pax/gnu extensions, absolute
+// relative paths — symlinks, hardlinks, devices, pax/gnu modules, absolute
 // paths, and `..` traversal are hard errors, not skipped entries. That
 // strictness (not a full tar implementation) is the security boundary, and it
 // keeps core free of a tar dependency.
@@ -255,7 +255,7 @@ export function extractTarGz(
     off += dataBlocks;
 
     // Strictness IS the security boundary: a module tarball has no business
-    // containing symlinks, hardlinks, devices, or pax/gnu extension records.
+    // containing symlinks, hardlinks, devices, or pax/gnu module records.
     // Reject the whole archive rather than skip — a "mostly fine" artifact
     // from a curated registry is a publishing bug or an attack, not a module.
     if (type !== '0' && type !== '\0' && type !== '5') {

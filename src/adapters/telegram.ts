@@ -7,11 +7,11 @@
 // Telegram with editMessageText calls and sidesteps its edit rate limits.
 //
 // Core commands wired here:
-//   /start /help /newchat /stop /model /status /lasterror /extensions /devmode
+//   /start /help /newchat /stop /model /status /lasterror /modules /devmode
 //   /followups /followup_cancel /followup_clear /doctor /logs /quiet /proactive
 //   /nudges /why
 //
-// Extension commands and message intercepts are pulled from the loader on
+// Module commands and message intercepts are pulled from the loader on
 // every Telegram update, so hot-reload reflects without restarting the bot.
 // `sendMessage(chatId, text)` is exposed for the scheduler's nudge dispatcher.
 
@@ -40,21 +40,21 @@ import {
 import { formatWindow, parseDuration, parseWindow } from '../core/prefs.js';
 import type { Nudge, NudgeAction, SchedulerStats } from '../core/scheduler.js';
 import {
-  formatExtensionReadinessForTelegram,
-  type ExtensionReadiness,
-} from '../core/extension-readiness.js';
+  formatModuleReadinessForTelegram,
+  type ModuleReadiness,
+} from '../core/module-readiness.js';
 import type {
-  ExtensionAfterReplyRecord,
-  ExtensionAfterTurnRecord,
-  ExtensionCallbackRecord,
-  ExtensionVoiceMessageRecord,
+  ModuleAfterReplyRecord,
+  ModuleAfterTurnRecord,
+  ModuleCallbackRecord,
+  ModuleVoiceMessageRecord,
   TelegramVoiceMessage,
-  ExtensionCommandRecord,
-  ExtensionInterceptRecord,
+  ModuleCommandRecord,
+  ModuleInterceptRecord,
   TelegramCallbackContext,
   TelegramCommandContext,
   VoicePayload,
-} from '../core/extensions.js';
+} from '../core/modules.js';
 
 export interface TelegramOptions {
   token: string;
@@ -84,25 +84,25 @@ export interface TelegramOptions {
   schedulerList?: () => SchedulerJobSummary[];
   // For tests: a Bot factory override.
   botFactory?: (token: string) => Bot;
-  // Names of installed extensions for /status and /extensions.
-  extensions?: () => ExtensionReadiness[];
-  // Live registry of extension commands and intercepts. Called on each
+  // Names of installed modules for /status and /modules.
+  modules?: () => ModuleReadiness[];
+  // Live registry of module commands and intercepts. Called on each
   // update — hot-reload picks up additions/removals without restart.
-  extensionCommands?: () => ExtensionCommandRecord[];
-  extensionIntercepts?: () => ExtensionInterceptRecord[];
+  moduleCommands?: () => ModuleCommandRecord[];
+  moduleIntercepts?: () => ModuleInterceptRecord[];
   // After-reply hooks. Fired sequentially once a streamed reply finishes;
   // modulus-voice uses this to ship a voice note alongside the text reply.
-  extensionAfterReplies?: () => ExtensionAfterReplyRecord[];
+  moduleAfterReplies?: () => ModuleAfterReplyRecord[];
   // Rich after-turn hooks. Fired after the visible Telegram reply is sent;
-  // learning/routine extensions use this instead of entering the hot path.
-  extensionAfterTurns?: () => ExtensionAfterTurnRecord[];
+  // learning/routine modules use this instead of entering the hot path.
+  moduleAfterTurns?: () => ModuleAfterTurnRecord[];
   // Inline-button callback handlers. Buttons emitted with callbackData
   // `cb:<prefix>:<...>` are routed to the handler registered for that prefix.
-  extensionCallbacks?: () => ExtensionCallbackRecord[];
+  moduleCallbacks?: () => ModuleCallbackRecord[];
   // Inbound voice-message handlers. The adapter downloads the OGG/Opus voice
   // note and walks handlers in registration order; the first one returning
   // `{ transcript }` wins and the text is injected into the orchestrator path.
-  extensionVoiceMessages?: () => ExtensionVoiceMessageRecord[];
+  moduleVoiceMessages?: () => ModuleVoiceMessageRecord[];
   // Path to ~/.modulus/log/modulus.log for /logs.
   logFilePath?: string;
   // Resolve a Yes/No press on an agent-approval prompt. Wired to the
@@ -122,8 +122,8 @@ export interface TelegramAdapter {
   sendNudge(nudge: Nudge): Promise<void>;
   // Lower-level helper retained for compatibility with direct Telegram sends.
   sendMessage(chatId: number, text: string): Promise<void>;
-  // Voice notes for extensions like modulus-voice. Wired into the loader as
-  // host.telegram.sendVoice so extensions never touch grammY directly.
+  // Voice notes for modules like modulus-voice. Wired into the loader as
+  // host.telegram.sendVoice so modules never touch grammY directly.
   sendVoice(chatId: number, voice: VoicePayload): Promise<void>;
   // Confirm-tier tool gate. Wired into the tool registry as its `confirm` hook:
   // pops a Yes/No prompt in the originating chat and resolves to the user's
@@ -190,8 +190,8 @@ const CORE_COMMAND_DEFS: readonly CoreCommandDef[] = [
   },
   {
     name: 'status',
-    help: 'bot uptime, Ollama health, installed extensions',
-    advertised: 'Bot uptime, Ollama health, extensions',
+    help: 'bot uptime, Ollama health, installed modules',
+    advertised: 'Bot uptime, Ollama health, modules',
   },
   {
     name: 'lasterror',
@@ -199,9 +199,9 @@ const CORE_COMMAND_DEFS: readonly CoreCommandDef[] = [
     advertised: 'Last orchestrator error',
   },
   {
-    name: 'extensions',
-    help: 'list installed extensions',
-    advertised: 'List installed extensions',
+    name: 'modules',
+    help: 'list installed modules',
+    advertised: 'List installed modules',
   },
   {
     name: 'devmode',
@@ -250,18 +250,18 @@ const CORE_COMMAND_HELP = CORE_COMMAND_DEFS.map((c) => ({
 const CORE_COMMANDS = new Set(CORE_COMMAND_DEFS.map((c) => c.name));
 
 export interface TelegramHelpOptions {
-  extensions?: Array<Pick<ExtensionReadiness, 'name' | 'enabled'> & { status?: string }>;
-  extensionCommands?: ExtensionCommandRecord[];
+  modules?: Array<Pick<ModuleReadiness, 'name' | 'enabled'> & { status?: string }>;
+  moduleCommands?: ModuleCommandRecord[];
 }
 
 export interface SchedulerJobSummary {
-  extension: string;
+  module: string;
   name: string;
   cron: string;
 }
 
 export interface NudgeLogRow {
-  extension: string;
+  module: string;
   job: string;
   key: string | null;
   reason: string | null;
@@ -272,7 +272,7 @@ export type TelegramButton = { text: string; action: string };
 export type TelegramButtonRows = TelegramButton[][];
 
 export function buildTelegramButtonRows(
-  view: 'home' | 'help' | 'status' | 'model' | 'extensions' | 'quiet' | 'devmode' | 'owner',
+  view: 'home' | 'help' | 'status' | 'model' | 'modules' | 'quiet' | 'devmode' | 'owner',
   opts: TelegramHelpOptions = {},
 ): TelegramButtonRows {
   if (view === 'home') {
@@ -297,11 +297,11 @@ export function buildTelegramButtonRows(
     return [[{ text: '🔄 Refresh models', action: 'core:model' }]];
   }
 
-  if (view === 'extensions') {
-    const extensionRows = (opts.extensionCommands ?? [])
+  if (view === 'modules') {
+    const moduleRows = (opts.moduleCommands ?? [])
       .slice(0, 3)
       .map((c) => [{ text: `Run /${c.name}`, action: `ext:${c.name}` }]);
-    return [[{ text: '🔄 Refresh extensions', action: 'core:extensions' }], ...extensionRows];
+    return [[{ text: '🔄 Refresh modules', action: 'core:modules' }], ...moduleRows];
   }
 
   if (view === 'quiet') {
@@ -387,20 +387,20 @@ export function buildTelegramHelp(opts: TelegramHelpOptions = {}): string {
     'Core commands:',
     ...CORE_COMMAND_HELP.map((c) => `/${c.command} — ${c.description}`),
   ];
-  const exts = opts.extensions ?? [];
-  const cmds = opts.extensionCommands ?? [];
+  const exts = opts.modules ?? [];
+  const cmds = opts.moduleCommands ?? [];
   if (exts.length > 0) {
-    lines.push('', 'Extensions:');
+    lines.push('', 'Modules:');
     for (const e of exts)
       lines.push(`• ${e.name} (${e.status ?? (e.enabled ? 'ready' : 'disabled')})`);
   }
   if (cmds.length > 0) {
-    lines.push('', 'Extension commands:');
-    const byExt = new Map<string, ExtensionCommandRecord[]>();
+    lines.push('', 'Module commands:');
+    const byExt = new Map<string, ModuleCommandRecord[]>();
     for (const c of cmds) {
-      const arr = byExt.get(c.extension) ?? [];
+      const arr = byExt.get(c.module) ?? [];
       arr.push(c);
-      byExt.set(c.extension, arr);
+      byExt.set(c.module, arr);
     }
     for (const [ext, list] of byExt) {
       lines.push(`  [${ext}]`);
@@ -437,7 +437,7 @@ export function formatProactiveText(
     lines.push('jobs: none');
   } else {
     lines.push(`jobs: ${jobs.length}`);
-    for (const j of jobs) lines.push(`• ${j.extension}:${j.name} — ${j.cron}`);
+    for (const j of jobs) lines.push(`• ${j.module}:${j.name} — ${j.cron}`);
   }
   lines.push('', 'Quiet state:', ...quietStateLines(prefs, chatId, now));
   return lines.join('\n');
@@ -446,21 +446,21 @@ export function formatProactiveText(
 function readRecentNudges(db: DB, chatId: number, limit: number): NudgeLogRow[] {
   const rows = db
     .prepare(
-      `SELECT extension, job, key, reason, sent_at
+      `SELECT module, job, key, reason, sent_at
        FROM nudge_log
        WHERE chat_id = ?
        ORDER BY sent_at DESC, id DESC
        LIMIT ?`,
     )
     .all(chatId, limit) as Array<{
-    extension: string;
+    module: string;
     job: string;
     key: string | null;
     reason: string | null;
     sent_at: number;
   }>;
   return rows.map((r) => ({
-    extension: r.extension,
+    module: r.module,
     job: r.job,
     key: r.key,
     reason: r.reason,
@@ -475,7 +475,7 @@ export function formatNudgesText(rows: readonly NudgeLogRow[]): string {
     ...rows.map((r) => {
       const key = r.key ? ` key=${r.key}` : '';
       const reason = r.reason ? ` — ${r.reason}` : '';
-      return `• ${new Date(r.sentAt).toISOString()} ${r.extension}:${r.job}${key}${reason}`;
+      return `• ${new Date(r.sentAt).toISOString()} ${r.module}:${r.job}${key}${reason}`;
     }),
   ].join('\n');
 }
@@ -488,7 +488,7 @@ export function formatWhyText(row: NudgeLogRow | null): string {
   if (!row) return 'No proactive nudges have been sent in this chat yet.';
   return [
     'Most recent nudge:',
-    `extension: ${row.extension}`,
+    `module: ${row.module}`,
     `job: ${row.job}`,
     `key: ${row.key ?? '(none)'}`,
     `sent_at: ${new Date(row.sentAt).toISOString()}`,
@@ -500,8 +500,8 @@ export function handleWhy(db: DB, chatId: number): string {
   return formatWhyText(readRecentNudges(db, chatId, 1)[0] ?? null);
 }
 
-export function formatExtensionsText(extensions: readonly ExtensionReadiness[]): string {
-  return formatExtensionReadinessForTelegram(extensions);
+export function formatModulesText(modules: readonly ModuleReadiness[]): string {
+  return formatModuleReadinessForTelegram(modules);
 }
 
 export function createTelegram(opts: TelegramOptions): TelegramAdapter {
@@ -536,8 +536,8 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
   function keyboardFor(view: Parameters<typeof buildTelegramButtonRows>[0]): InlineKeyboard {
     return buildTelegramKeyboard(
       buildTelegramButtonRows(view, {
-        extensions: opts.extensions?.() ?? [],
-        extensionCommands: opts.extensionCommands?.() ?? [],
+        modules: opts.modules?.() ?? [],
+        moduleCommands: opts.moduleCommands?.() ?? [],
       }),
     );
   }
@@ -671,13 +671,13 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
 
   async function statusText(): Promise<string> {
     const health = await opts.llm.health();
-    const exts = opts.extensions?.() ?? [];
+    const exts = opts.modules?.() ?? [];
     const uptimeS = Math.round((Date.now() - startedAt) / 1000);
     const lines = [
       `uptime: ${uptimeS}s`,
       `llm: ${health.ok ? 'ok' : 'down'} (${health.models.length} models)`,
       `tools: ${opts.tools.list().length}`,
-      `extensions: ${exts.length === 0 ? 'none' : exts.map((e) => e.name).join(', ')}`,
+      `modules: ${exts.length === 0 ? 'none' : exts.map((e) => e.name).join(', ')}`,
     ];
     const s = opts.schedulerStats?.();
     if (s) {
@@ -696,15 +696,15 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     return lines.join('\n');
   }
 
-  function extensionsText(): string {
-    return formatExtensionsText(opts.extensions?.() ?? []);
+  function modulesText(): string {
+    return formatModulesText(opts.modules?.() ?? []);
   }
 
-  // Dispatch `cb:<prefix>:<rest>` callbacks to the extension handler registered
+  // Dispatch `cb:<prefix>:<rest>` callbacks to the module handler registered
   // for `<prefix>`. The trailing `<rest>` (may itself contain `:`) is handed to
-  // the extension as `data` so it can pack small payloads — e.g. proposal ids,
+  // the module as `data` so it can pack small payloads — e.g. proposal ids,
   // slot indices — without a per-button server registry.
-  async function dispatchExtensionCallback(ctx: Context, payload: string): Promise<void> {
+  async function dispatchModuleCallback(ctx: Context, payload: string): Promise<void> {
     if (!ctx.chat || !ctx.from) {
       await answerCallback(ctx);
       return;
@@ -712,9 +712,9 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     const sep = payload.indexOf(':');
     const prefix = sep === -1 ? payload : payload.slice(0, sep);
     const data = sep === -1 ? '' : payload.slice(sep + 1);
-    const record = (opts.extensionCallbacks?.() ?? []).find((c) => c.prefix === prefix);
+    const record = (opts.moduleCallbacks?.() ?? []).find((c) => c.prefix === prefix);
     if (!record) {
-      log.warn('no extension callback handler for prefix', { prefix });
+      log.warn('no module callback handler for prefix', { prefix });
       await answerCallback(ctx);
       return;
     }
@@ -745,8 +745,8 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     try {
       await record.handler(cctx);
     } catch (e) {
-      log.warn('extension callback handler threw', {
-        ext: record.extension,
+      log.warn('module callback handler threw', {
+        ext: record.module,
         prefix,
         error: e instanceof Error ? e.message : String(e),
       });
@@ -754,14 +754,14 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     }
   }
 
-  async function invokeExtensionCommand(
+  async function invokeModuleCommand(
     name: string,
     args: string,
     chatId: number,
     userId: number,
     reply: (text: string) => Promise<unknown>,
   ): Promise<boolean> {
-    const extCmd = (opts.extensionCommands?.() ?? []).find((c) => c.name === name);
+    const extCmd = (opts.moduleCommands?.() ?? []).find((c) => c.name === name);
     if (!extCmd) return false;
     const cctx: TelegramCommandContext = {
       chatId,
@@ -774,8 +774,8 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     try {
       await extCmd.handler(cctx);
     } catch (e) {
-      log.warn('extension command failed', {
-        ext: extCmd.extension,
+      log.warn('module command failed', {
+        ext: extCmd.module,
         command: name,
         error: e instanceof Error ? e.message : String(e),
       });
@@ -803,10 +803,10 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
   // reply renderer (splitForTelegram), the core-command guard, and devmode.
   const chatDispatcher = createChatDispatcher({
     orchestrator: opts.orchestrator,
-    commands: () => opts.extensionCommands?.() ?? [],
-    intercepts: () => opts.extensionIntercepts?.() ?? [],
-    afterReplies: () => opts.extensionAfterReplies?.() ?? [],
-    afterTurns: () => opts.extensionAfterTurns?.() ?? [],
+    commands: () => opts.moduleCommands?.() ?? [],
+    intercepts: () => opts.moduleIntercepts?.() ?? [],
+    afterReplies: () => opts.moduleAfterReplies?.() ?? [],
+    afterTurns: () => opts.moduleAfterTurns?.() ?? [],
     log,
     isCoreCommand: (head) => CORE_COMMANDS.has(head),
     getDevmode,
@@ -821,8 +821,8 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     await replyWithButtons(
       ctx,
       buildTelegramHelp({
-        extensions: opts.extensions?.() ?? [],
-        extensionCommands: opts.extensionCommands?.() ?? [],
+        modules: opts.modules?.() ?? [],
+        moduleCommands: opts.moduleCommands?.() ?? [],
       }),
       'help',
     );
@@ -894,13 +894,13 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
   // /quiet handler is testable in isolation; the bot.command wrapper just
   // does I/O. Returns the reply text.
 
-  bot.command('extensions', async (ctx) => {
-    const exts = opts.extensions?.() ?? [];
+  bot.command('modules', async (ctx) => {
+    const exts = opts.modules?.() ?? [];
     if (exts.length === 0) {
-      await replyWithButtons(ctx, 'No extensions installed yet.', 'extensions');
+      await replyWithButtons(ctx, 'No modules installed yet.', 'modules');
       return;
     }
-    await replyWithButtons(ctx, extensionsText(), 'extensions');
+    await replyWithButtons(ctx, modulesText(), 'modules');
   });
 
   bot.command('devmode', async (ctx) => {
@@ -998,16 +998,16 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     if (data.startsWith('ext:')) {
       const command = data.slice('ext:'.length);
       await answerCallback(ctx, `Running /${command}`);
-      const handled = await invokeExtensionCommand(command, '', ctx.chat.id, ctx.from.id, (t) =>
-        ctx.reply(t, { reply_markup: keyboardFor('extensions') }),
+      const handled = await invokeModuleCommand(command, '', ctx.chat.id, ctx.from.id, (t) =>
+        ctx.reply(t, { reply_markup: keyboardFor('modules') }),
       );
       if (!handled)
-        await replyWithButtons(ctx, `Extension command /${command} is not loaded.`, 'extensions');
+        await replyWithButtons(ctx, `Module command /${command} is not loaded.`, 'modules');
       return;
     }
 
     if (data.startsWith('cb:')) {
-      await dispatchExtensionCallback(ctx, data.slice('cb:'.length));
+      await dispatchModuleCallback(ctx, data.slice('cb:'.length));
       return;
     }
 
@@ -1058,8 +1058,8 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
         await replyWithButtons(
           ctx,
           buildTelegramHelp({
-            extensions: opts.extensions?.() ?? [],
-            extensionCommands: opts.extensionCommands?.() ?? [],
+            modules: opts.modules?.() ?? [],
+            moduleCommands: opts.moduleCommands?.() ?? [],
           }),
           'help',
         );
@@ -1079,8 +1079,8 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
       case 'status':
         await replyWithButtons(ctx, await statusText(), 'status');
         break;
-      case 'extensions':
-        await replyWithButtons(ctx, extensionsText(), 'extensions');
+      case 'modules':
+        await replyWithButtons(ctx, modulesText(), 'modules');
         break;
       case 'lasterror': {
         const e = opts.orchestrator.lastError(ctx.chat.id);
@@ -1142,7 +1142,7 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     });
   };
 
-  // Free-form text + extension command dispatch + intercept chain.
+  // Free-form text + module command dispatch + intercept chain.
   bot.on('message:text', async (ctx) => {
     await dispatchTextMessage(ctx, ctx.message.text);
   });
@@ -1151,11 +1151,11 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
   // first one returning a transcript wins, and the transcript is injected
   // back into the orchestrator path the same way a typed message would be.
   // Handlers are responsible for their own gating (per-chat pref, duration
-  // caps, language). Errors are caught locally so a single extension misbehave
+  // caps, language). Errors are caught locally so a single module misbehave
   // can't take the long-poll loop down.
   bot.on('message:voice', async (ctx) => {
     if (!ctx.chat || !ctx.from || !ctx.message.voice) return;
-    const handlers = opts.extensionVoiceMessages?.() ?? [];
+    const handlers = opts.moduleVoiceMessages?.() ?? [];
     if (handlers.length === 0) {
       await ctx.reply(
         "I can't transcribe voice notes yet — install modulus-voice and /voice transcribe on.",
@@ -1164,8 +1164,8 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     }
 
     const voice = ctx.message.voice;
-    // The extension passes destPath (its own temp file); we just stream the
-    // file id's bytes into it. Cleanup is the extension's responsibility —
+    // The module passes destPath (its own temp file); we just stream the
+    // file id's bytes into it. Cleanup is the module's responsibility —
     // the adapter never owns the destination.
     const downloadToFile = async (destPath: string): Promise<void> => {
       const file = await ctx.api.getFile(voice.file_id);
@@ -1211,7 +1211,7 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
         }
       } catch (e) {
         log.warn('voice handler failed', {
-          ext: h.extension,
+          ext: h.module,
           error: e instanceof Error ? e.message : String(e),
         });
       }

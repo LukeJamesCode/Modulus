@@ -1,5 +1,5 @@
 // Instant responses — templated replies shipped before the orchestrator runs
-// the LLM. Ported from the gurney-instant-responses extension into core, gated
+// the LLM. Ported from the gurney-instant-responses module into core, gated
 // by the `instantResponses.enabled` setting and wired into both chat surfaces
 // (the Telegram chat-dispatch pipeline and the panel's SSE chat route).
 //

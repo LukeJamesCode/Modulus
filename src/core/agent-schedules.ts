@@ -233,7 +233,7 @@ export function setupAgentSchedules(opts: AgentSchedulesOptions): AgentScheduleS
   const store = createAgentScheduleStore(opts.db, opts.registry);
   const log = opts.log.child({ mod: 'agent-schedules' });
   opts.scheduler.register({
-    extension: 'core',
+    module: 'core',
     name: 'agent-schedules-sweep',
     cron: SWEEP_CRON,
     handler: async ({ firedAt }) => {

@@ -6,7 +6,7 @@
 //                        possible via AbortController, and streams the LLM
 //                        reply back through the supplied sink.
 //  after-turn hooks    — the Telegram adapter forwards post-turn metadata to
-//                        extensions after the visible reply is done, so
+//                        modules after the visible reply is done, so
 //                        learning/routine work stays off the hot path.
 
 import type { DB } from '../storage/db.js';
@@ -67,7 +67,7 @@ function isMalformedToolCallError(e: unknown): boolean {
 }
 import { toSchema, type ToolRegistry } from './tools.js';
 import { build as buildContext, type HistoryMessage } from './context.js';
-import type { AfterTurnContext, AfterTurnToolCallSummary, TurnGuard } from './extensions.js';
+import type { AfterTurnContext, AfterTurnToolCallSummary, TurnGuard } from './modules.js';
 
 // Cap on how much of a tool's output we re-feed to the model on the next
 // round. Verbose tool output (a 5KB web-search dump, a 30-event calendar
@@ -151,14 +151,14 @@ export interface OrchestratorOptions {
   // calendar conflict resolution can want 5–6 rounds while plain Q&A bots
   // want 2.
   maxToolRounds?: number;
-  // Returns the concatenated prompt fragments contributed by extensions.
-  // Called fresh on each turn so hot-reloaded extensions show up without an
+  // Returns the concatenated prompt fragments contributed by modules.
+  // Called fresh on each turn so hot-reloaded modules show up without an
   // orchestrator restart. The filter (when supplied) limits the fragments to
-  // a subset of extensions — used to keep the system prompt aligned with the
+  // a subset of modules — used to keep the system prompt aligned with the
   // intent-pruned tool manifest.
-  promptFragmentProvider?: (extensionFilter?: ReadonlySet<string>) => string;
+  promptFragmentProvider?: (moduleFilter?: ReadonlySet<string>) => string;
   // Per-turn intent filter for the tool manifest. Returns the names of
-  // extensions whose tools should be exposed to the model for this message,
+  // modules whose tools should be exposed to the model for this message,
   // or null to expose every tool (legacy behaviour). An empty array means
   // "no tools" — used for trivial chatter like "hi", "thanks".
   // Without this provider, the orchestrator always exposes every tool.
@@ -176,7 +176,7 @@ export interface OrchestratorOptions {
   // with its own model and tool grant, so a global autoRoute (e.g. codex
   // escalating on the word "research") must not hijack its turn.
   autoRouteEnabled?: boolean;
-  // Post-turn reply guards. Called fresh each turn (so hot-reloaded extensions
+  // Post-turn reply guards. Called fresh each turn (so hot-reloaded modules
   // show up without an orchestrator restart) to get the active guard list. Each
   // guard may overwrite the finalized reply — used to catch domain-specific
   // hallucinations (e.g. "I deleted it" with no destructive tool call). First
@@ -599,7 +599,7 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
     if (intent && intent.length > 0) {
       cl.debug('tool manifest pruned by intent', {
         kept: toolSchemas.length,
-        extensions: intent,
+        modules: intent,
       });
     } else if (intent && intent.length === 0) {
       cl.debug('tool manifest skipped — message looks like trivial chatter');
@@ -966,7 +966,7 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
       slot.abort = null;
     }
 
-    // Post-turn reply guards. Extensions register these (host.guards.register)
+    // Post-turn reply guards. Modules register these (host.guards.register)
     // to catch domain-specific hallucinations — e.g. the model replying "I
     // removed it" without ever calling a destructive tool, or fabricating a
     // forecast instead of calling weather_get. A guard's replacement REPLACES

@@ -4,8 +4,8 @@
 //   • the pid file (running yes/no, uptime if we can read /proc/<pid>/stat)
 //   • the config (chat/reason model tags, ollama URL, allowlisted IDs)
 //   • Ollama /api/tags (reachable + model count)
-//   • the SQLite DB (enabled extension count)
-//   • installed extensions and their enabled state
+//   • the SQLite DB (enabled module count)
+//   • installed modules and their enabled state
 // Default output is plain text, two columns. Pass `--json` for a single
 // JSON object on stdout — useful for cron, Prometheus textfile collectors,
 // or any monitoring shim that just needs one shell call. Both modes read
@@ -14,7 +14,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
-import { extensionFolders } from './extension-paths.js';
+import { moduleFolders } from './module-paths.js';
 import { open as openDb } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import { readMetrics } from '../core/metrics.js';
@@ -46,7 +46,7 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
 
   // DB-derived fields. Held in their own variables so JSON mode can include
   // structured values without re-deriving from the formatted strings.
-  let enabledExtensions: number | null = null;
+  let enabledModules: number | null = null;
   let dbStatus: 'ok' | 'absent' | 'unreadable' = 'absent';
   let dbError: string | null = null;
   const dbPath = join(home, 'modulus.db');
@@ -58,7 +58,7 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
         const exts = db
           .prepare(`SELECT COUNT(*) AS n FROM module_state WHERE enabled = 1`)
           .get() as { n: number } | undefined;
-        enabledExtensions = exts?.n ?? 0;
+        enabledModules = exts?.n ?? 0;
         dbStatus = 'ok';
       } finally {
         db.close();
@@ -97,9 +97,9 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
       telegram: {
         allowlistSize: cfg.telegram.allowedIds.length,
       },
-      extensions: {
+      modules: {
         installed: installed.map((e) => e.name),
-        enabledCount: enabledExtensions,
+        enabledCount: enabledModules,
       },
       db: {
         status: dbStatus,
@@ -156,12 +156,12 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
   });
   rows.push({ label: 'allowlist', value: cfg.telegram.allowedIds.join(',') || '(empty)' });
   rows.push({
-    label: 'extensions',
+    label: 'modules',
     value: installed.length === 0 ? '(none)' : installed.map((e) => e.name).join(', '),
   });
 
   if (dbStatus === 'ok') {
-    rows.push({ label: 'enabled extensions', value: String(enabledExtensions ?? 0) });
+    rows.push({ label: 'enabled modules', value: String(enabledModules ?? 0) });
   } else if (dbStatus === 'unreadable') {
     rows.push({ label: 'db', value: `unreadable: ${dbError}` });
   } else {
@@ -236,7 +236,7 @@ function panelHost(bind: string): string {
 function listInstalled(home: string): Array<{ name: string }> {
   const seen = new Set<string>();
   const out: Array<{ name: string }> = [];
-  for (const { folder } of extensionFolders(home)) {
+  for (const { folder } of moduleFolders(home)) {
     try {
       const m = JSON.parse(readFileSync(join(folder, 'manifest.json'), 'utf8')) as {
         name?: string;

@@ -1,4 +1,4 @@
-// Minimal 5-field cron parser. Supports the subset extensions actually need
+// Minimal 5-field cron parser. Supports the subset modules actually need
 // for nudges and sweeps: `*`, `*/N`, `N`, `N-M`, `N,M,P`. No `@daily` aliases,
 // no seconds field. Day-of-week 0-6 with 0 = Sunday.
 //
@@ -88,7 +88,7 @@ export interface CronDateParts {
 
 // Returns true if `date` matches the cron expression at minute granularity.
 // By default this uses the process local timezone. Passing an IANA timezone
-// lets an extension schedule user-facing jobs by the user/calendar timezone
+// lets an module schedule user-facing jobs by the user/calendar timezone
 // even when Modulus itself runs in a UTC container.
 export function matchesCron(parsed: ParsedCron, date: Date, timeZone?: string): boolean {
   const parts = timeZone ? datePartsInTimeZone(date, timeZone) : localDateParts(date);

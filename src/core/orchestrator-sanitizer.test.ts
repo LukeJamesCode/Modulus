@@ -66,4 +66,4 @@ test('does NOT flag the empty string', () => {
 // The domain hallucination guards (fake delete-confirmation, fake weather
 // forecast) moved out of core into modulus-everyday-assistant, which owns the
 // tools they guard. Their tests live alongside them in
-// extensions/modulus-everyday-assistant/guards.test.ts.
+// modules/modulus-everyday-assistant/guards.test.ts.

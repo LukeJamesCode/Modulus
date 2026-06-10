@@ -1,4 +1,4 @@
-// Fast-cache. A small in-memory TTL cache the scheduler hands to extensions
+// Fast-cache. A small in-memory TTL cache the scheduler hands to modules
 // (and core) so per-tick work doesn't recompute things every minute.
 //
 // Phase 6 — PLAN names this in two places:
@@ -80,7 +80,7 @@ export function createFastCache(opts: FastCacheOptions = {}): FastCache {
 
 // Wrap a base cache so all keys are prefixed with `<namespace>:`. Stats are
 // shared with the base — that's intentional: the metrics file reports a
-// single hit-rate for the whole process, not per-extension.
+// single hit-rate for the whole process, not per-module.
 export function namespacedCache(namespace: string, base: FastCache): FastCache {
   const keys = new Set<string>();
   const p = (k: string): string => `${namespace}:${k}`;

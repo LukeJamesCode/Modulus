@@ -53,7 +53,7 @@ async function ingestText(
   return ingestAttachment({ registry, baseDir, taskId, relPath, bytes: Buffer.from(body) });
 }
 
-test('classifyKind keys off extension/mime', () => {
+test('classifyKind keys off module/mime', () => {
   assert.equal(classifyKind('a.png'), 'image');
   assert.equal(classifyKind('a.PDF'), 'pdf');
   assert.equal(classifyKind('a.ts'), 'file');

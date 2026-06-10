@@ -1,22 +1,22 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DB } from '../storage/db.js';
-import type { Manifest, SettingsSchema } from './extensions.js';
+import type { Manifest, SettingsSchema } from './modules.js';
 
-export type ExtensionReadinessStatus = 'ready' | 'needs_auth' | 'needs_settings' | 'disabled';
+export type ModuleReadinessStatus = 'ready' | 'needs_auth' | 'needs_settings' | 'disabled';
 
-export interface ExtensionReadiness {
+export interface ModuleReadiness {
   name: string;
   version: string;
   folder: string;
   source: 'user' | 'repo';
   enabled: boolean;
-  status: ExtensionReadinessStatus;
+  status: ModuleReadinessStatus;
   reasons: string[];
   nextAction?: string;
 }
 
-interface InstalledExtension {
+interface InstalledModule {
   name: string;
   version: string;
   folder: string;
@@ -25,8 +25,8 @@ interface InstalledExtension {
   schema?: SettingsSchema;
 }
 
-export function collectExtensionReadiness(roots: readonly string[], db: DB): ExtensionReadiness[] {
-  const installed = discoverInstalledExtensions(roots);
+export function collectModuleReadiness(roots: readonly string[], db: DB): ModuleReadiness[] {
+  const installed = discoverInstalledModules(roots);
   const enabledByName = readEnabledMap(db);
   const settingsByExt = readSettingsMap(db);
 
@@ -86,20 +86,20 @@ export function collectExtensionReadiness(roots: readonly string[], db: DB): Ext
   });
 }
 
-export function formatExtensionReadinessLine(ext: ExtensionReadiness): string {
+export function formatModuleReadinessLine(ext: ModuleReadiness): string {
   const reason = ext.reasons.length > 0 ? ` — ${ext.reasons.join('; ')}` : '';
   const action = ext.nextAction ? ` — next: ${ext.nextAction}` : '';
   return `${ext.name}@${ext.version}  [${ext.status}]  (${ext.source}) ${ext.folder}${reason}${action}`;
 }
 
-export function formatExtensionReadinessForTelegram(
-  extensions: readonly Pick<
-    ExtensionReadiness,
+export function formatModuleReadinessForTelegram(
+  modules: readonly Pick<
+    ModuleReadiness,
     'name' | 'status' | 'reasons' | 'nextAction' | 'enabled'
   >[],
 ): string {
-  if (extensions.length === 0) return 'No extensions installed yet.';
-  return extensions
+  if (modules.length === 0) return 'No modules installed yet.';
+  return modules
     .map((ext) => {
       const reason = ext.reasons.length > 0 ? ` — ${ext.reasons.join('; ')}` : '';
       const action = ext.nextAction ? `\n  next: ${ext.nextAction}` : '';
@@ -108,16 +108,14 @@ export function formatExtensionReadinessForTelegram(
     .join('\n');
 }
 
-export function setupIssuesForNudge(
-  extensions: readonly ExtensionReadiness[],
-): ExtensionReadiness[] {
-  return extensions.filter((ext) => ext.enabled && ext.status !== 'ready');
+export function setupIssuesForNudge(modules: readonly ModuleReadiness[]): ModuleReadiness[] {
+  return modules.filter((ext) => ext.enabled && ext.status !== 'ready');
 }
 
-export function formatSetupIssuesNudge(issues: readonly ExtensionReadiness[]): string {
+export function formatSetupIssuesNudge(issues: readonly ModuleReadiness[]): string {
   if (issues.length === 0) return '';
   const lines = [
-    `Modulus has ${issues.length} extension setup issue${issues.length === 1 ? '' : 's'}:`,
+    `Modulus has ${issues.length} module setup issue${issues.length === 1 ? '' : 's'}:`,
   ];
   for (const ext of issues.slice(0, 8)) {
     const reason = ext.reasons[0] ? ` — ${ext.reasons[0]}` : '';
@@ -125,12 +123,12 @@ export function formatSetupIssuesNudge(issues: readonly ExtensionReadiness[]): s
     lines.push(`• ${ext.name}: ${ext.status}${reason}.${action}`);
   }
   if (issues.length > 8) lines.push(`• …and ${issues.length - 8} more.`);
-  lines.push('Use /extensions for the current list.');
+  lines.push('Use /modules for the current list.');
   return lines.join('\n');
 }
 
-function discoverInstalledExtensions(roots: readonly string[]): InstalledExtension[] {
-  const out: InstalledExtension[] = [];
+function discoverInstalledModules(roots: readonly string[]): InstalledModule[] {
+  const out: InstalledModule[] = [];
   const seen = new Set<string>();
   roots.forEach((root, index) => {
     const source: 'user' | 'repo' = index === 0 ? 'user' : 'repo';
@@ -193,7 +191,7 @@ function readSettingsMap(db: DB): Map<string, Map<string, string>> {
 }
 
 function missingRequiredSettings(
-  ext: Pick<InstalledExtension, 'schema'>,
+  ext: Pick<InstalledModule, 'schema'>,
   settings: ReadonlyMap<string, string>,
 ): string[] {
   const schema = ext.schema;
@@ -207,7 +205,7 @@ function missingRequiredSettings(
 }
 
 function missingAuthSettings(
-  ext: Pick<InstalledExtension, 'manifest' | 'schema'>,
+  ext: Pick<InstalledModule, 'manifest' | 'schema'>,
   settings: ReadonlyMap<string, string>,
 ): string[] {
   if (!ext.manifest.entrypoints?.auth || !ext.schema) return [];

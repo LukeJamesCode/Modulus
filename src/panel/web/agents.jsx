@@ -1870,7 +1870,7 @@ function AgentEditor({ initial, agents, onClose, onSave, error }) {
         </Field>
         <Field
           label="Tool allowlist"
-          hint="Comma-separated extension or tool names. Leave blank for ALL tools; a single space-cleared value means none."
+          hint="Comma-separated module or tool names. Leave blank for ALL tools; a single space-cleared value means none."
         >
           <window.Input
             value={allowlistText}

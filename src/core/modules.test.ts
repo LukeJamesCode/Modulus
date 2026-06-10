@@ -7,7 +7,7 @@ import { open } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import { createScheduler } from './scheduler.js';
 import { createToolRegistry } from './tools.js';
-import { createExtensionLoader, satisfiesModulusRange } from './extensions.js';
+import { createModuleLoader, satisfiesModulusRange } from './modules.js';
 import type { LLM, ProfileConfig, ProfileName } from './llm.js';
 
 const log = createLogger({ level: 'error', out: () => {}, err: () => {} });
@@ -69,8 +69,8 @@ async function waitFor(
   assert.ok(await assertion(), 'condition did not become true before timeout');
 }
 
-// Hot-reload re-imports an extension entrypoint with a cache-busting query
-// string (see importEntrypoint in extensions.ts). Native Node's ESM loader
+// Hot-reload re-imports an module entrypoint with a cache-busting query
+// string (see importEntrypoint in modules.ts). Native Node's ESM loader
 // honors that query and returns the fresh module, so the content reload below
 // works in production. The test harness, however, runs under tsx
 // (`node --import tsx/dist/loader.mjs`), whose loader transforms and caches
@@ -113,7 +113,7 @@ test('satisfiesModulusRange handles common cases', () => {
   assert.equal(satisfiesModulusRange('0.1.1', '0.1.0'), false);
 });
 
-test('loader: discovers extension, runs migrations, registers tool/command/job/auth/prompt', async () => {
+test('loader: discovers module, runs migrations, registers tool/command/job/auth/prompt', async () => {
   const dir = tmp();
   try {
     const db = open({ path: join(dir, 'g.db') });
@@ -124,7 +124,7 @@ test('loader: discovers extension, runs migrations, registers tool/command/job/a
     const stateRoot = join(dir, 'state');
     mkdirSync(stateRoot);
 
-    // Write a self-contained extension with all entrypoints.
+    // Write a self-contained module with all entrypoints.
     const extFolder = writeExt(
       root,
       'demo',
@@ -170,7 +170,7 @@ test('loader: discovers extension, runs migrations, registers tool/command/job/a
     );
     void extFolder;
 
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot,
       db,
@@ -207,7 +207,7 @@ test('loader: discovers extension, runs migrations, registers tool/command/job/a
     // Scheduler job registered
     assert.equal(sched.list().length, 1);
 
-    // Per-extension migration applied — confirm the demo_seen table exists.
+    // Per-module migration applied — confirm the demo_seen table exists.
     const tablesBefore = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'demo_seen'")
       .all() as Array<{ name: string }>;
@@ -259,7 +259,7 @@ test('host.telegram.onCallback: registers handler, exposed via loader.callbacks(
       },
     );
 
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,
@@ -276,7 +276,7 @@ test('host.telegram.onCallback: registers handler, exposed via loader.callbacks(
     const cbs = loader.callbacks();
     assert.equal(cbs.length, 1, 'one callback handler should be registered');
     assert.equal(cbs[0]!.prefix, 'demoP');
-    assert.equal(cbs[0]!.extension, 'cbdemo');
+    assert.equal(cbs[0]!.module, 'cbdemo');
 
     await loader.unload('cbdemo');
     assert.equal(
@@ -317,7 +317,7 @@ test('host.telegram.onCallback: rejects prefixes with characters that break disp
       },
     );
 
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,
@@ -339,7 +339,7 @@ test('host.telegram.onCallback: rejects prefixes with characters that break disp
   }
 });
 
-test('loader: rejects extension whose modulus range exceeds host version', async () => {
+test('loader: rejects module whose modulus range exceeds host version', async () => {
   const dir = tmp();
   try {
     const db = open({ path: join(dir, 'g.db') });
@@ -348,7 +348,7 @@ test('loader: rejects extension whose modulus range exceeds host version', async
     const root = join(dir, 'exts');
     mkdirSync(root);
     writeExt(root, 'too-new', { name: 'too-new', version: '1.0.0', modulus: '>=99.0.0' });
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,
@@ -369,7 +369,7 @@ test('loader: rejects extension whose modulus range exceeds host version', async
   }
 });
 
-test('loader: disabled extension is recorded but not registered', async () => {
+test('loader: disabled module is recorded but not registered', async () => {
   const dir = tmp();
   try {
     const db = open({ path: join(dir, 'g.db') });
@@ -398,7 +398,7 @@ test('loader: disabled extension is recorded but not registered', async () => {
       `INSERT INTO module_state (name, version, enabled, installed_at) VALUES (?, ?, 0, ?)`,
     ).run('disabled', '1.0.0', Date.now());
 
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,
@@ -453,7 +453,7 @@ test('loader: settings reads defaults from schema and writes round-trip', async 
           '}\n',
       },
     );
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,
@@ -477,7 +477,7 @@ test('loader: settings reads defaults from schema and writes round-trip', async 
   }
 });
 
-test('loader: settings sees auth written outside the running extension host', async () => {
+test('loader: settings sees auth written outside the running module host', async () => {
   const dir = tmp();
   try {
     const db = open({ path: join(dir, 'g.db') });
@@ -507,7 +507,7 @@ test('loader: settings sees auth written outside the running extension host', as
           '}\n',
       },
     );
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,
@@ -557,7 +557,7 @@ test('loader: intent filter skips trivial and low-signal messages', async () => 
       intent_pattern: '\\b(weather|forecast)\\b',
     });
 
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,
@@ -571,13 +571,13 @@ test('loader: intent filter skips trivial and low-signal messages', async () => 
     });
     await loader.loadAll();
 
-    assert.deepEqual(loader.relevantExtensions('what is on my calendar?'), ['calendarish']);
-    assert.deepEqual(loader.relevantExtensions('hi'), []);
-    assert.deepEqual(loader.relevantExtensions('aaaaa'), []);
-    assert.deepEqual(loader.relevantExtensions('???'), []);
+    assert.deepEqual(loader.relevantModules('what is on my calendar?'), ['calendarish']);
+    assert.deepEqual(loader.relevantModules('hi'), []);
+    assert.deepEqual(loader.relevantModules('aaaaa'), []);
+    assert.deepEqual(loader.relevantModules('???'), []);
     // Patterns exist but none match → skip tools entirely (chatter path).
-    assert.deepEqual(loader.relevantExtensions('can you help me think this through?'), []);
-    assert.deepEqual(loader.relevantExtensions('dang im tired today'), []);
+    assert.deepEqual(loader.relevantModules('can you help me think this through?'), []);
+    assert.deepEqual(loader.relevantModules('dang im tired today'), []);
     db.close();
   } finally {
     await rmTempDir(dir);
@@ -588,7 +588,7 @@ test('loader: a mid-load throw rolls back tool/command/intercept/prompt fragment
   // Regression for A1: previously only tools were unregistered on a partial
   // load failure, which left orphaned commands and prompt fragments in the
   // registry. With per-load disposers the rollback should be total — every
-  // surface the failed extension touched is undone.
+  // surface the failed module touched is undone.
   const dir = tmp();
   try {
     const db = open({ path: join(dir, 'g.db') });
@@ -597,7 +597,7 @@ test('loader: a mid-load throw rolls back tool/command/intercept/prompt fragment
     const root = join(dir, 'exts');
     mkdirSync(root);
 
-    // The extension registers a tool, command, intercept, prompt fragment,
+    // The module registers a tool, command, intercept, prompt fragment,
     // AND a scheduler job, then explodes from an auth-entrypoint throw.
     // After load all of that should be gone.
     writeExt(
@@ -634,7 +634,7 @@ test('loader: a mid-load throw rolls back tool/command/intercept/prompt fragment
       },
     );
 
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,
@@ -650,7 +650,7 @@ test('loader: a mid-load throw rolls back tool/command/intercept/prompt fragment
 
     // Loader recorded the failure but rolled back every registry.
     const entry = loader.list().find((e) => e.name === 'broken');
-    assert.ok(entry, 'broken extension should be tracked');
+    assert.ok(entry, 'broken module should be tracked');
     assert.match(entry!.error ?? '', /boom from auth/);
 
     assert.equal(tools.get('broken_tool'), undefined, 'tool should be rolled back');
@@ -706,7 +706,7 @@ test('host telegram knownChats exposes only allowlisted chats and default fallba
       },
     );
 
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,
@@ -755,7 +755,7 @@ test('host telegram knownChats exposes only allowlisted chats and default fallba
   }
 });
 
-test('loader: hot-reloads when a nested extension file changes', async (t) => {
+test('loader: hot-reloads when a nested module file changes', async (t) => {
   if (!dynamicImportCacheBustWorks()) {
     t.skip(
       'runtime loader ignores dynamic-import cache-busting (e.g. tsx); hot-reload is verified under native Node',
@@ -786,7 +786,7 @@ test('loader: hot-reloads when a nested extension file changes', async (t) => {
       },
     );
 
-    const loader = createExtensionLoader({
+    const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
       db,

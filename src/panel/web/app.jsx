@@ -11,7 +11,7 @@ const { useState, useEffect, useCallback, useRef } = React;
 const NAV = [
   { id: 'dashboard', label: 'Dashboard', icon: 'home' },
   { id: 'agents', label: 'Agents', icon: 'spark' },
-  { id: 'extensions', label: 'Modules', icon: 'plug' },
+  { id: 'modules', label: 'Modules', icon: 'plug' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
   { id: 'system', label: 'System', icon: 'pulse' },
 ];
@@ -210,12 +210,12 @@ function App() {
 
   const health = state.health || {};
   const models = state.models || {};
-  const enabledExts = (state.extensions && state.extensions.enabledNames) || [];
-  const needsSetup = (state.extensions && state.extensions.needsSetup) || [];
+  const enabledExts = (state.modules && state.modules.enabledNames) || [];
+  const needsSetup = (state.modules && state.modules.needsSetup) || [];
   const panelEnabled = enabledExts.indexOf('modulus-frontend') !== -1;
   const visibleExtCount = Math.max(
     0,
-    ((state.extensions && state.extensions.enabled) || 0) - (panelEnabled ? 1 : 0),
+    ((state.modules && state.modules.enabled) || 0) - (panelEnabled ? 1 : 0),
   );
   const voiceEnabled = enabledExts.indexOf('modulus-voice') !== -1;
 
@@ -231,7 +231,7 @@ function App() {
         extCount={visibleExtCount}
         enabledExts={enabledExts}
         needsSetup={needsSetup}
-        onOpenExtensions={() => setRoute('extensions')}
+        onOpenModules={() => setRoute('modules')}
         theme={theme}
         setTheme={setTheme}
         density={density}
@@ -258,14 +258,14 @@ function App() {
               lastError={state.lastError || null}
               scheduler={state.scheduler}
               activity={state.activity}
-              extensions={state.extensions}
+              modules={state.modules}
               tier={state.tier}
               allowlistCount={state.allowlistCount}
               voiceEnabled={voiceEnabled}
             />
           )}
           {route === 'agents' && <window.AgentsTab state={state} />}
-          {route === 'extensions' && <window.ExtensionsTab />}
+          {route === 'modules' && <window.ModulesTab />}
           {route === 'settings' && (
             <window.SettingsTab onReRunWizard={() => setForcedView('wizard')} onSaved={refresh} />
           )}
@@ -331,7 +331,7 @@ function Topbar({ state, setRoute, offline, agentStatus }) {
     };
   }, [open]);
 
-  const needsSetup = (state && state.extensions && state.extensions.needsSetup) || [];
+  const needsSetup = (state && state.modules && state.modules.needsSetup) || [];
   const activeTasks = tasks
     .filter((t) => t.status === 'running' || t.status === 'error')
     .slice(0, 5);
@@ -340,9 +340,9 @@ function Topbar({ state, setRoute, offline, agentStatus }) {
     ...needsSetup.map((ext) => ({
       id: `setup-${ext.name}`,
       icon: 'plug',
-      title: 'Extension Needs Setup',
+      title: 'Module Needs Setup',
       desc: `${ext.name.replace(/^modulus-/, '')} requires configuration.`,
-      action: () => setRoute('extensions'),
+      action: () => setRoute('modules'),
     })),
     ...activeTasks.map((t) => ({
       id: `task-${t.id}`,
@@ -636,7 +636,7 @@ function Sidebar({
   extCount,
   enabledExts,
   needsSetup,
-  onOpenExtensions,
+  onOpenModules,
   theme,
   setTheme,
   density,
@@ -648,7 +648,7 @@ function Sidebar({
   const setupList = needsSetup || [];
   const setupCount = setupList.length;
   // Dismiss persists per setup fingerprint — re-shows if the unfinished list
-  // changes, but stays quiet while the same extensions are pending.
+  // changes, but stays quiet while the same modules are pending.
   const setupKey = setupList
     .map((s) => s.name)
     .sort()
@@ -660,7 +660,7 @@ function Sidebar({
       return '';
     }
   });
-  const showPopup = setupCount > 0 && route !== 'extensions' && dismissedKey !== setupKey;
+  const showPopup = setupCount > 0 && route !== 'modules' && dismissedKey !== setupKey;
   const dismissPopup = () => {
     try {
       localStorage.setItem('modulus_ext_setup_dismissed', setupKey);
@@ -737,9 +737,9 @@ function Sidebar({
                 style={{ color: on ? 'var(--accent-strong)' : 'var(--text-3)' }}
               />
               <span style={{ flex: 1 }}>{n.label}</span>
-              {n.id === 'extensions' && setupCount > 0 && (
+              {n.id === 'modules' && setupCount > 0 && (
                 <span
-                  title={`${setupCount} extension${setupCount === 1 ? '' : 's'} need setup: ${setupList
+                  title={`${setupCount} module${setupCount === 1 ? '' : 's'} need setup: ${setupList
                     .map((s) => s.name.replace(/^modulus-/, ''))
                     .join(', ')}`}
                   style={{
@@ -760,7 +760,7 @@ function Sidebar({
                   {setupCount}
                 </span>
               )}
-              {n.id === 'extensions' && setupCount === 0 && extCount > 0 && (
+              {n.id === 'modules' && setupCount === 0 && extCount > 0 && (
                 <span
                   style={{
                     fontSize: 11.5,
@@ -781,7 +781,7 @@ function Sidebar({
           items={setupList}
           onOpen={() => {
             dismissPopup();
-            onOpenExtensions && onOpenExtensions();
+            onOpenModules && onOpenModules();
           }}
           onDismiss={dismissPopup}
         />
@@ -833,7 +833,7 @@ function SetupPopup({ items, onOpen, onDismiss }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <window.Icon name="alert" size={15} style={{ color: 'var(--warn)' }} />
         <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>
-          Finish extension setup
+          Finish module setup
         </span>
         <button
           onClick={onDismiss}
@@ -860,7 +860,7 @@ function SetupPopup({ items, onOpen, onDismiss }) {
           </>
         ) : (
           <>
-            {items.length} extensions still need setup:{' '}
+            {items.length} modules still need setup:{' '}
             <strong>{items.map((s) => pretty(s.name)).join(', ')}</strong>.
           </>
         )}
@@ -879,7 +879,7 @@ function SetupPopup({ items, onOpen, onDismiss }) {
           cursor: 'pointer',
         }}
       >
-        Open Extensions →
+        Open Modules →
       </button>
     </div>
   );

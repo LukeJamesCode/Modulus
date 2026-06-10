@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { open as openDb } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
-import { setupExtension, type DiscoveredExtension } from './ext-setup.js';
+import { setupModule, type DiscoveredModule } from './ext-setup.js';
 
-test('setupExtension runs optional extension setup entrypoint', async () => {
+test('setupModule runs optional module setup entrypoint', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'modulus-ext-setup-'));
   try {
     const folder = join(dir, 'demo');
@@ -21,7 +21,7 @@ test('setupExtension runs optional extension setup entrypoint', async () => {
         '}',
       ].join('\n'),
     );
-    const ext: DiscoveredExtension = {
+    const ext: DiscoveredModule = {
       name: 'demo',
       folder,
       manifest: {
@@ -36,7 +36,7 @@ test('setupExtension runs optional extension setup entrypoint', async () => {
       log: createLogger({ level: 'error', out: () => {}, err: () => {} }),
     });
     try {
-      await setupExtension(ext, db, dir);
+      await setupModule(ext, db, dir);
       const row = db
         .prepare(`SELECT value FROM module_settings WHERE module = ? AND key = ?`)
         .get('demo', 'native_ready') as { value: string } | undefined;

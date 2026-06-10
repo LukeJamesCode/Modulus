@@ -21,8 +21,8 @@ export async function run(options: FreshOptions = {}): Promise<void> {
   const shouldRunInit = options.init !== false;
 
   process.stdout.write(
-    'Fresh install will erase all Modulus config, the database, logs, installed extensions,\n' +
-      'and extension state, including Modulus-managed Piper binaries, ffmpeg paths, and voice\n' +
+    'Fresh install will erase all Modulus config, the database, logs, installed modules,\n' +
+      'and module state, including Modulus-managed Piper binaries, ffmpeg paths, and voice\n' +
       'models. The web panel stops with the daemon below.\n' +
       'Ollama models in ~/.ollama are NOT touched — re-pull only if you want to.\n' +
       `Data directory: ${home}\n\n`,

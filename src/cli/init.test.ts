@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { resolveExtensionSelection, type ExtensionSelectionPlan } from './init.js';
-import type { DiscoveredExtension } from './ext-setup.js';
+import { resolveModuleSelection, type ModuleSelectionPlan } from './init.js';
+import type { DiscoveredModule } from './ext-setup.js';
 
-function ext(name: string, deps: string[] = []): DiscoveredExtension {
+function ext(name: string, deps: string[] = []): DiscoveredModule {
   return {
     name,
     folder: `/tmp/${name}`,
@@ -16,12 +16,12 @@ function ext(name: string, deps: string[] = []): DiscoveredExtension {
   };
 }
 
-function names(plan: ExtensionSelectionPlan): string[] {
-  return plan.extensions.map((e) => e.name);
+function names(plan: ModuleSelectionPlan): string[] {
+  return plan.modules.map((e) => e.name);
 }
 
-test('resolveExtensionSelection adds bundled dependencies before selected extensions', () => {
-  const plan = resolveExtensionSelection(
+test('resolveModuleSelection adds bundled dependencies before selected modules', () => {
+  const plan = resolveModuleSelection(
     [ext('modulus-dependent', ['modulus-voice']), ext('modulus-voice')],
     ['modulus-dependent'],
   );
@@ -31,8 +31,8 @@ test('resolveExtensionSelection adds bundled dependencies before selected extens
   assert.deepEqual(plan.missingDependencies, []);
 });
 
-test('resolveExtensionSelection reports dependencies that are not bundled', () => {
-  const plan = resolveExtensionSelection(
+test('resolveModuleSelection reports dependencies that are not bundled', () => {
+  const plan = resolveModuleSelection(
     [ext('modulus-front', ['modulus-missing'])],
     ['modulus-front'],
   );
@@ -40,6 +40,6 @@ test('resolveExtensionSelection reports dependencies that are not bundled', () =
   assert.deepEqual(names(plan), ['modulus-front']);
   assert.deepEqual(plan.addedDependencies, []);
   assert.deepEqual(plan.missingDependencies, [
-    { extension: 'modulus-front', dependency: 'modulus-missing' },
+    { module: 'modulus-front', dependency: 'modulus-missing' },
   ]);
 });

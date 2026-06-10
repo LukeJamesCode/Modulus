@@ -4,7 +4,7 @@
 //   Doctor  → /api/doctor           (modulus doctor)
 //   Logs    → /api/logs/stream SSE  (modulus logs -f)
 //   Maint.  → /api/maintenance/update + Reset hand-off (modulus update / fresh)
-//   Commands→ /api/commands         (the real core + extension Telegram commands)
+//   Commands→ /api/commands         (the real core + module Telegram commands)
 const { useState: useStateSys, useEffect: useEffectSys, useRef: useRefSys } = React;
 
 const SYSTEM_COMMAND_LABELS = {
@@ -226,7 +226,7 @@ function StatusDashboard({ state }) {
   const agent = s.agent || {};
   const health = s.health || {};
   const models = s.models || {};
-  const exts = s.extensions || {};
+  const exts = s.modules || {};
   const agentState = agent.running ? 'running' : 'stopped';
   const cards = [
     {
@@ -244,7 +244,7 @@ function StatusDashboard({ state }) {
     { label: 'Models loaded', value: models.loaded ?? 0, sub: models.chat || '—' },
     { label: 'Allowlist', value: s.allowlistCount ?? 0, sub: 'users allowed' },
     {
-      label: 'Extensions enabled',
+      label: 'Modules enabled',
       value: exts.enabled ?? 0,
       sub: `${exts.installed ?? 0} installed`,
     },
@@ -759,7 +759,7 @@ function Maintenance({ state, onUpdate, onFresh }) {
         </div>
         <p style={{ fontSize: 13.5, color: 'var(--text-2)', lineHeight: 1.55, marginBottom: 14 }}>
           A fresh install (<span className="mono">modulus fresh</span>) wipes{' '}
-          <b>all configuration, extensions, and stored data</b> and re-runs first-time setup. This
+          <b>all configuration, modules, and stored data</b> and re-runs first-time setup. This
           cannot be undone.
         </p>
         <window.Button
@@ -799,10 +799,9 @@ function Maintenance({ state, onUpdate, onFresh }) {
         }
       >
         <p>
-          This permanently deletes your bot token, allowlist, model choices, every installed
-          extension, and all stored data. It runs <span className="mono">modulus fresh</span>,
-          redownloads the current checkout, rebuilds, then returns you to the in-browser setup
-          wizard.
+          This permanently deletes your bot token, allowlist, model choices, every installed module,
+          and all stored data. It runs <span className="mono">modulus fresh</span>, redownloads the
+          current checkout, rebuilds, then returns you to the in-browser setup wizard.
         </p>
         <div style={{ marginTop: 16 }}>
           <window.Label hint="This is a safety check so it can’t happen by accident.">
@@ -846,7 +845,7 @@ function Commands() {
     return <div style={{ maxWidth: 680, color: 'var(--text-3)', fontSize: 13.5 }}>Loading…</div>;
   const groups = [
     { title: 'Core commands', items: data.core || [] },
-    { title: 'From extensions', items: data.extensions || [] },
+    { title: 'From modules', items: data.modules || [] },
   ].filter((g) => g.items.length);
   return (
     <div style={{ maxWidth: 680 }}>
@@ -1502,14 +1501,14 @@ function ScheduleView() {
               fontSize: 13.5,
             }}
           >
-            No scheduled jobs. Extensions like the everyday assistant register briefings and
-            reminders here.
+            No scheduled jobs. Modules like the everyday assistant register briefings and reminders
+            here.
           </div>
         ) : (
           <window.Card pad={0}>
             {jobs.map((j, i) => (
               <div
-                key={j.extension + ':' + j.name}
+                key={j.module + ':' + j.name}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -1555,7 +1554,7 @@ function ScheduleView() {
                     {j.cron}
                   </div>
                 </div>
-                <window.Badge tone="neutral">{prettyExt(j.extension)}</window.Badge>
+                <window.Badge tone="neutral">{prettyExt(j.module)}</window.Badge>
               </div>
             ))}
           </window.Card>

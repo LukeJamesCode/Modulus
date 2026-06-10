@@ -125,7 +125,7 @@ before(async () => {
       telegram: { token: 'x', allowedIds: [123] },
       panel: { enabled: true, port: 0, bind: '127.0.0.1' },
     },
-    extensionRoots: [],
+    moduleRoots: [],
     scheduler,
     agentRegistry: createAgentRegistry(db),
     // The exercised routes don't touch the queue or llm; stub them.
@@ -353,12 +353,12 @@ test('run-view stream for a missing task reports gone and ends', async () => {
 });
 
 test('modules: list and command reference respond', async () => {
-  const exts = await authed('/api/extensions');
+  const exts = await authed('/api/modules');
   assert.equal(exts.status, 200);
-  assert.ok(Array.isArray(((await exts.json()) as { extensions: unknown[] }).extensions));
+  assert.ok(Array.isArray(((await exts.json()) as { modules: unknown[] }).modules));
   const cmds = await authed('/api/commands');
   assert.equal(cmds.status, 200);
-  const body = (await cmds.json()) as { core: unknown[]; extensions: unknown[] };
+  const body = (await cmds.json()) as { core: unknown[]; modules: unknown[] };
   assert.ok(Array.isArray(body.core) && body.core.length > 0);
 });
 
@@ -400,7 +400,7 @@ test('command: an unknown command is 404 and an empty one is 400', async () => {
 });
 
 test('upload: stages bytes under the module uploads dir; a traversing name cannot escape', async () => {
-  const res = await authed('/api/extensions/test-mod/upload', {
+  const res = await authed('/api/modules/test-mod/upload', {
     method: 'POST',
     headers: { 'x-filename': 'note.bin' },
     body: 'audio-bytes',
@@ -408,12 +408,12 @@ test('upload: stages bytes under the module uploads dir; a traversing name canno
   assert.equal(res.status, 200);
   const { path } = (await res.json()) as { path: string };
   assert.equal(readFileSync(path, 'utf8'), 'audio-bytes');
-  const uploadsDir = join(home, 'extensions', 'test-mod', 'uploads');
+  const uploadsDir = join(home, 'modules', 'test-mod', 'uploads');
   assert.equal(dirname(path), uploadsDir);
 
   // A path-traversal filename is reduced to its basename — it must land inside
   // the uploads dir, never above it.
-  const evil = await authed('/api/extensions/test-mod/upload', {
+  const evil = await authed('/api/modules/test-mod/upload', {
     method: 'POST',
     headers: { 'x-filename': '../../escape.bin' },
     body: 'x',
@@ -427,7 +427,7 @@ test('enable-stream ends with an unnamed done frame when the CLI run fails', asy
   // cliEntry points at a stub that exits non-zero, so the spawned CLI run
   // fails — the route must still surface that as done ok:false.
   const res = await fetch(
-    `${base}/api/extensions/no-such-module/enable-stream?token=${encodeURIComponent(token)}`,
+    `${base}/api/modules/no-such-module/enable-stream?token=${encodeURIComponent(token)}`,
   );
   assert.equal(res.status, 200);
   const frames = sseFrames(res);
@@ -446,10 +446,10 @@ test('enable-stream ends with an unnamed done frame when the CLI run fails', asy
 });
 
 test('auth: start for an unknown module is 404; stream of a dead session errors', async () => {
-  const start = await authed('/api/extensions/no-such-module/auth/start', { method: 'POST' });
+  const start = await authed('/api/modules/no-such-module/auth/start', { method: 'POST' });
   assert.equal(start.status, 404);
   const res = await fetch(
-    `${base}/api/extensions/x/auth/stream?session=nope&token=${encodeURIComponent(token)}`,
+    `${base}/api/modules/x/auth/stream?session=nope&token=${encodeURIComponent(token)}`,
   );
   assert.equal(res.status, 200);
   const frames = sseFrames(res);
@@ -459,7 +459,7 @@ test('auth: start for an unknown module is 404; stream of a dead session errors'
 });
 
 test('auth: answer with no waiting question is 409 (fail-closed)', async () => {
-  const res = await authed('/api/extensions/x/auth/answer', {
+  const res = await authed('/api/modules/x/auth/answer', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ session: 'nope', value: 'secret' }),
@@ -468,7 +468,7 @@ test('auth: answer with no waiting question is 409 (fail-closed)', async () => {
 });
 
 test('module settings for an unknown module is 404', async () => {
-  const res = await authed('/api/extensions/does-not-exist/settings');
+  const res = await authed('/api/modules/does-not-exist/settings');
   assert.equal(res.status, 404);
 });
 

@@ -1,4 +1,4 @@
-// Modules (extensions) routes: list installed modules with manifest + readiness
+// Modules (modules) routes: list installed modules with manifest + readiness
 // + settings schema, edit settings, and enable/disable/install/uninstall via the
 // CLI (the same path `modulus ext` uses, so native-dep setup runs too). The
 // daemon stays the install owner; the panel just drives it.
@@ -16,9 +16,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, join } from 'node:path';
 import { discover, runAuthForExt, type AuthRunnerIO } from '../../cli/auth.js';
 import { ensurePrivateDir } from '../../cli/config-store.js';
-import { configureNativeDepsForExtension } from '../../cli/ext-setup.js';
-import { collectExtensionReadiness } from '../../core/extension-readiness.js';
-import type { Manifest, SettingsSchema, TelegramCommandContext } from '../../core/extensions.js';
+import { configureNativeDepsForModule } from '../../cli/ext-setup.js';
+import { collectModuleReadiness } from '../../core/module-readiness.js';
+import type { Manifest, SettingsSchema, TelegramCommandContext } from '../../core/modules.js';
 import { readJson, readRawBody, sendJson, sse, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
 import { runModulus, runModulusStreaming } from '../spawn.js';
@@ -109,8 +109,8 @@ function findExtFolder(roots: readonly string[], name: string): string | null {
   return null;
 }
 
-function listExtensions(deps: PanelDeps): unknown[] {
-  const readiness = collectExtensionReadiness(deps.extensionRoots, deps.db);
+function listModules(deps: PanelDeps): unknown[] {
+  const readiness = collectModuleReadiness(deps.moduleRoots, deps.db);
   return readiness
     .map((r) => {
       const manifest = readManifest(r.folder);
@@ -157,7 +157,7 @@ const CORE_COMMANDS = [
   { cmd: '/model', desc: 'Show the active model profiles (chat / reason / tools)' },
   { cmd: '/status', desc: 'Bot uptime, Ollama health, modules, queue depth' },
   { cmd: '/lasterror', desc: 'Show the last orchestrator error for this chat' },
-  { cmd: '/extensions', desc: 'List installed modules and their state' },
+  { cmd: '/modules', desc: 'List installed modules and their state' },
   { cmd: '/devmode', desc: 'Append per-reply diagnostics to each response' },
   { cmd: '/setup', desc: 'Owner-only setup wizard inside Telegram' },
   { cmd: '/fresh', desc: 'Owner-only destructive fresh rebuild from Telegram' },
@@ -165,7 +165,7 @@ const CORE_COMMANDS = [
 
 // The core text commands the panel answers itself (no orchestrator turn) — the
 // rest fall through to a module command handler.
-const CORE_TEXT_COMMANDS = new Set(['help', 'model', 'status', 'extensions', 'lasterror']);
+const CORE_TEXT_COMMANDS = new Set(['help', 'model', 'status', 'modules', 'lasterror']);
 
 interface ExtListItem {
   name: string;
@@ -178,12 +178,12 @@ interface ExtListItem {
 // /api/commands reference and the /help text command.
 function commandReference(deps: PanelDeps): {
   core: typeof CORE_COMMANDS;
-  extensions: Array<{ cmd: string; desc: string }>;
+  modules: Array<{ cmd: string; desc: string }>;
 } {
-  const extensions = (listExtensions(deps) as ExtListItem[])
+  const modules = (listModules(deps) as ExtListItem[])
     .filter((e) => e.enabled)
     .flatMap((e) => e.commands);
-  return { core: CORE_COMMANDS, extensions };
+  return { core: CORE_COMMANDS, modules };
 }
 
 // The owner chat/user a panel-run command speaks as — the most recently seen
@@ -210,9 +210,9 @@ async function coreCommandText(deps: PanelDeps, name: string, chatId: number): P
     case 'help': {
       const ref = commandReference(deps);
       const lines = ['Core commands:', ...ref.core.map((c) => `${c.cmd} — ${c.desc}`)];
-      if (ref.extensions.length > 0) {
+      if (ref.modules.length > 0) {
         lines.push('', 'Module commands:');
-        for (const c of ref.extensions) lines.push(`${c.cmd}${c.desc ? ' — ' + c.desc : ''}`);
+        for (const c of ref.modules) lines.push(`${c.cmd}${c.desc ? ' — ' + c.desc : ''}`);
       }
       return lines.join('\n');
     }
@@ -225,14 +225,14 @@ async function coreCommandText(deps: PanelDeps, name: string, chatId: number): P
     }
     case 'status': {
       const health = await deps.llm.health();
-      const exts = (listExtensions(deps) as ExtListItem[]).filter((e) => e.enabled);
+      const exts = (listModules(deps) as ExtListItem[]).filter((e) => e.enabled);
       return [
         `llm: ${health.ok ? 'ok' : 'down'} (${health.models.length} models)`,
         `modules: ${exts.length === 0 ? 'none' : exts.map((e) => e.name).join(', ')}`,
       ].join('\n');
     }
-    case 'extensions': {
-      const exts = listExtensions(deps) as ExtListItem[];
+    case 'modules': {
+      const exts = listModules(deps) as ExtListItem[];
       if (exts.length === 0) return 'No modules installed.';
       return [
         'Modules:',
@@ -276,7 +276,7 @@ async function runCommand(
     await rec.handler(cctx);
   } catch (e) {
     deps.log.warn('module command failed', {
-      ext: rec.extension,
+      ext: rec.module,
       command: lower,
       error: e instanceof Error ? e.message : String(e),
     });
@@ -292,7 +292,7 @@ async function runExtSetup(
   name: string,
   onChunk?: (text: string) => void,
 ): Promise<{ ok: boolean; output: string }> {
-  const folder = findExtFolder(deps.extensionRoots, name);
+  const folder = findExtFolder(deps.moduleRoots, name);
   if (!folder) return { ok: false, output: `module '${name}' not found` };
   let manifest: Manifest;
   try {
@@ -303,7 +303,7 @@ async function runExtSetup(
   if (!manifest.entrypoints?.setup) return { ok: true, output: '' };
   let captured = '';
   try {
-    await configureNativeDepsForExtension({ name, folder, manifest }, deps.db, deps.home, {
+    await configureNativeDepsForModule({ name, folder, manifest }, deps.db, deps.home, {
       interactive: false,
       stdout: (text) => {
         captured += text;
@@ -317,7 +317,7 @@ async function runExtSetup(
 }
 
 function saveExtSettings(deps: PanelDeps, name: string, body: Record<string, unknown>): boolean {
-  const folder = findExtFolder(deps.extensionRoots, name);
+  const folder = findExtFolder(deps.moduleRoots, name);
   if (!folder) return false;
   const schema = readSchema(folder);
   if (!schema) return false;
@@ -487,8 +487,8 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
   }
 
   return async ({ req, res, url, path, method }) => {
-    if (path === '/api/extensions' && method === 'GET') {
-      sendJson(res, 200, { extensions: listExtensions(deps) });
+    if (path === '/api/modules' && method === 'GET') {
+      sendJson(res, 200, { modules: listModules(deps) });
       return true;
     }
 
@@ -522,7 +522,7 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
     // at a 150 MB model download sees lines arriving instead of a frozen
     // "Setting up…" spinner. Unnamed frames with a `type` field — the browser
     // reads this through native EventSource.onmessage.
-    const extStream = /^\/api\/extensions\/([a-z0-9._-]+)\/enable-stream$/i.exec(path);
+    const extStream = /^\/api\/modules\/([a-z0-9._-]+)\/enable-stream$/i.exec(path);
     if (extStream && method === 'GET') {
       const name = extStream[1]!;
       writeSseHead(res);
@@ -565,14 +565,14 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
     // private uploads dir, returning the saved path for a follow-up tool call.
     // The filename is reduced to a basename so an x-filename header can't escape
     // the uploads dir via path traversal.
-    const extUpload = /^\/api\/extensions\/([a-z0-9._-]+)\/upload$/i.exec(path);
+    const extUpload = /^\/api\/modules\/([a-z0-9._-]+)\/upload$/i.exec(path);
     if (extUpload && method === 'POST') {
       const name = extUpload[1]!;
       const bytes = await readRawBody(req);
       const header = req.headers['x-filename'];
       const safe = basename(typeof header === 'string' ? header : '').replace(/^\.+/, '');
       const filename = safe || `upload_${Date.now()}.bin`;
-      const uploadDir = join(deps.home, 'extensions', name, 'uploads');
+      const uploadDir = join(deps.home, 'modules', name, 'uploads');
       ensurePrivateDir(uploadDir);
       const filePath = join(uploadDir, filename);
       writeFileSync(filePath, bytes);
@@ -581,14 +581,14 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
     }
 
     const extAction =
-      /^\/api\/extensions\/([a-z0-9._-]+)\/(enable|disable|install|uninstall|settings|setup)$/i.exec(
+      /^\/api\/modules\/([a-z0-9._-]+)\/(enable|disable|install|uninstall|settings|setup)$/i.exec(
         path,
       );
     if (extAction) {
       const name = extAction[1]!;
       const action = extAction[2]!;
       if (action === 'settings' && method === 'GET') {
-        const folder = findExtFolder(deps.extensionRoots, name);
+        const folder = findExtFolder(deps.moduleRoots, name);
         if (!folder) {
           sendJson(res, 404, { error: `module '${name}' not found` });
           return true;
@@ -631,8 +631,9 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
       }
     }
 
-    const authAction =
-      /^\/api\/extensions\/([a-z0-9._-]+)\/auth\/(start|stream|answer|cancel)$/i.exec(path);
+    const authAction = /^\/api\/modules\/([a-z0-9._-]+)\/auth\/(start|stream|answer|cancel)$/i.exec(
+      path,
+    );
     if (authAction) {
       const name = authAction[1]!;
       const action = authAction[2]!;

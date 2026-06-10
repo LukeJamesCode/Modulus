@@ -1,6 +1,6 @@
-// Shared filesystem layout for installed extensions. Both the repo-bundled
-// extensions (shipped alongside the CLI) and user-installed ones (under
-// ~/.modulus/extensions) are scanned by several commands (status, doctor,
+// Shared filesystem layout for installed modules. Both the repo-bundled
+// modules (shipped alongside the CLI) and user-installed ones (under
+// ~/.modulus/modules) are scanned by several commands (status, doctor,
 // config, auth, ext). This module owns the roots and the directory walk so
 // those commands don't each re-implement the same readdir/stat skeleton.
 
@@ -8,27 +8,27 @@ import { readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export function repoExtensionsRoot(): string {
+export function repoModulesRoot(): string {
   const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(here, '..', '..', 'extensions');
+  return resolve(here, '..', '..', 'modules');
 }
 
-export function userExtensionsRoot(home: string): string {
-  return join(home, 'extensions');
+export function userModulesRoot(home: string): string {
+  return join(home, 'modules');
 }
 
-export interface ExtensionFolder {
+export interface ModuleFolder {
   folder: string;
   source: 'user' | 'repo';
 }
 
-// Yield each candidate extension directory, user installs first then bundled.
+// Yield each candidate module directory, user installs first then bundled.
 // Unreadable roots and non-directory entries are skipped; callers do their own
 // manifest.json reading/parsing on the yielded folders.
-export function* extensionFolders(home: string): Generator<ExtensionFolder> {
+export function* moduleFolders(home: string): Generator<ModuleFolder> {
   for (const [root, source] of [
-    [userExtensionsRoot(home), 'user'] as const,
-    [repoExtensionsRoot(), 'repo'] as const,
+    [userModulesRoot(home), 'user'] as const,
+    [repoModulesRoot(), 'repo'] as const,
   ]) {
     let entries: string[];
     try {
