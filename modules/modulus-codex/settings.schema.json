@@ -1,0 +1,69 @@
+{
+  "type": "object",
+  "properties": {
+    "codex_access_token": {
+      "type": "string",
+      "secret": true,
+      "description": "OAuth access token for the ChatGPT/Codex backend. Set by `modulus auth modulus-codex`; refreshed automatically at runtime."
+    },
+    "codex_refresh_token": {
+      "type": "string",
+      "secret": true,
+      "description": "OAuth refresh token used to mint new access tokens. Set by `modulus auth modulus-codex`."
+    },
+    "codex_id_token": {
+      "type": "string",
+      "secret": true,
+      "description": "OAuth id_token (JWT). Kept so the ChatGPT account id can be re-derived after a refresh."
+    },
+    "codex_expires_at": {
+      "type": "number",
+      "default": 0,
+      "description": "Epoch milliseconds at which the access token expires. Managed automatically."
+    },
+    "codex_account_id": {
+      "type": "string",
+      "description": "ChatGPT account id sent as the chatgpt-account-id header. Derived from the id_token during auth."
+    },
+    "model": {
+      "type": "string",
+      "default": "gpt-5.5",
+      "description": "Codex model to route handoffs to."
+    },
+    "base_url": {
+      "type": "string",
+      "default": "https://chatgpt.com/backend-api/codex",
+      "description": "Codex backend base URL. Handoffs POST to `<base_url>/responses`. Change only if OpenAI moves the endpoint."
+    },
+    "daily_call_ceiling": {
+      "type": "number",
+      "default": 20,
+      "description": "Maximum Codex calls allowed per local day. Once hit, handoffs are refused until midnight. Hard cap on spend."
+    },
+    "max_output_tokens": {
+      "type": "number",
+      "default": 4096,
+      "description": "Upper bound on Codex completion length per call."
+    },
+    "context_turns": {
+      "type": "number",
+      "default": 6,
+      "description": "How many recent conversation turns to attach to each handoff so Codex has context it can't otherwise see. 0 disables (Codex sees only the task). Higher = better continuity but more tokens and more chat sent to OpenAI."
+    },
+    "context_max_chars": {
+      "type": "number",
+      "default": 4000,
+      "description": "Upper bound on the characters of recent-conversation context attached to a handoff. Oldest turns are dropped to fit."
+    },
+    "request_timeout_ms": {
+      "type": "number",
+      "default": 120000,
+      "description": "How long to wait for a single Codex response before giving up (ms). Codex tasks can be slow."
+    },
+    "time_zone": {
+      "type": "string",
+      "description": "IANA timezone used to bucket the daily call ceiling (e.g. America/New_York). Defaults to system timezone."
+    }
+  },
+  "required": []
+}
