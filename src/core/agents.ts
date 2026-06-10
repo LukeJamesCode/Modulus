@@ -110,7 +110,7 @@ export const AUTONOMOUS_PREAMBLE = [
 
 // Intersect two tool grants. null means "all tools". The result never grants
 // more than either input (fail-safe): the AND of two ceilings. For two
-// explicit lists it's a string-set intersection — conservative if an module
+// explicit lists it's a string-set intersection — conservative if a module
 // name and one of its tool names are split across the two, which only ever
 // over-restricts.
 export function intersectGrants(a: string[] | null, b: string[] | null): string[] | null {

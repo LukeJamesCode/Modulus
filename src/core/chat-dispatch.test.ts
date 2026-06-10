@@ -242,7 +242,7 @@ test('isCoreCommand leaves core commands for the surface to handle', async () =>
     reply: async (t) => void replies.push(t),
   });
   await flush();
-  assert.equal(extCmdRan, false, 'core command must not be dispatched to an module');
+  assert.equal(extCmdRan, false, 'core command must not be dispatched to a module');
   assert.deepEqual(calls, []);
   assert.deepEqual(replies, []);
 });

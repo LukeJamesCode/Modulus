@@ -73,7 +73,7 @@ test('ext.list shows installed modules and their state', async () => {
 
     const out = await captureStdout(() => ext.list());
     assert.match(out, /modulus-a@1\.0\.0\s+\[disabled\]/);
-    assert.match(out, /next: modulus ext enable modulus-a/);
+    assert.match(out, /next: modulus mod enable modulus-a/);
     assert.match(out, /modulus-b@2\.0\.0\s+\[ready\]/);
   } finally {
     if (oldHome === undefined) delete process.env['MODULUS_HOME'];

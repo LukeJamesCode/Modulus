@@ -105,7 +105,7 @@ test('long-running job does not block the next tick on a different job', async (
   await t1;
 });
 
-test('unregisterByModule drops all of an modules jobs', () => {
+test('unregisterByModule drops all of a modules jobs', () => {
   const s = createScheduler({ log });
   s.register({
     module: 'cal',

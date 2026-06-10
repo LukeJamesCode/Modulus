@@ -88,7 +88,7 @@ export interface CronDateParts {
 
 // Returns true if `date` matches the cron expression at minute granularity.
 // By default this uses the process local timezone. Passing an IANA timezone
-// lets an module schedule user-facing jobs by the user/calendar timezone
+// lets a module schedule user-facing jobs by the user/calendar timezone
 // even when Modulus itself runs in a UTC container.
 export function matchesCron(parsed: ParsedCron, date: Date, timeZone?: string): boolean {
   const parts = timeZone ? datePartsInTimeZone(date, timeZone) : localDateParts(date);

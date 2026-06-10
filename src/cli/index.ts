@@ -78,7 +78,7 @@ program
 program
   .command('auth')
   .argument('<module>', 'Module name to authorize')
-  .description('Run an module auth flow')
+  .description('Run a module auth flow')
   .action(async (module: string) => {
     const { run } = await import('./auth.js');
     await call('auth', run, module);
@@ -234,63 +234,65 @@ program
     });
   });
 
-const extCmd = program.command('ext').description('Manage modules');
-extCmd
+// `modulus mod` is the command; `ext` stays as a hidden alias so existing
+// scripts and muscle memory from the extension era keep working.
+const modCmd = program.command('mod').alias('ext').description('Manage modules');
+modCmd
   .command('list')
   .description('List installed modules and their state')
   .action(async () => {
     const ext = await import('./ext.js');
-    await call('ext list', ext.list);
+    await call('mod list', ext.list);
   });
-extCmd
+modCmd
   .command('install')
   .argument('<source>', 'Local path, git URL, or repo module name')
-  .description('Install an module')
+  .description('Install a module')
   .action(async (source: string) => {
     const ext = await import('./ext.js');
-    await call('ext install', ext.install, source);
+    await call('mod install', ext.install, source);
   });
-extCmd
+modCmd
   .command('enable')
   .argument('<name>')
   .description('Enable an installed module')
   .action(async (name: string) => {
     const ext = await import('./ext.js');
-    await call('ext enable', ext.enable, name);
+    await call('mod enable', ext.enable, name);
   });
-extCmd
+modCmd
   .command('disable')
   .argument('<name>')
   .description('Disable an installed module')
   .action(async (name: string) => {
     const ext = await import('./ext.js');
-    await call('ext disable', ext.disable, name);
+    await call('mod disable', ext.disable, name);
   });
-extCmd
+modCmd
   .command('uninstall')
   .argument('<name>')
   .option('--purge', 'Also drop the module settings and state')
-  .description('Uninstall an module installed under ~/.modulus/modules/')
+  .description('Uninstall a module installed under ~/.modulus/modules/')
   .action(async (name: string, opts: { purge?: boolean }) => {
     const ext = await import('./ext.js');
-    await call('ext uninstall', ext.uninstall, name, { purge: !!opts.purge });
+    await call('mod uninstall', ext.uninstall, name, { purge: !!opts.purge });
   });
-extCmd
+modCmd
   .command('reload')
   .argument('[name]')
   .description('Touch module folders so a running modulus hot-reloads them')
   .action(async (name: string | undefined) => {
     const ext = await import('./ext.js');
-    await call('ext reload', ext.reload, name);
+    await call('mod reload', ext.reload, name);
   });
-extCmd
+modCmd
   .command('create')
   .argument('<name>', 'Module name (e.g. modulus-todo)')
   .argument('[dir]', 'Parent directory (default: current working directory)')
   .description('Scaffold a runnable starter module you can edit and publish')
   .action(async (name: string, dir: string | undefined) => {
     const ext = await import('./ext.js');
-    await call('ext create', ext.create, name, dir);
+    await call('mod create', ext.create, name, dir);
   });
 
 program.parseAsync(process.argv).catch((e) => {

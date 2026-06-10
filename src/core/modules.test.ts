@@ -69,7 +69,7 @@ async function waitFor(
   assert.ok(await assertion(), 'condition did not become true before timeout');
 }
 
-// Hot-reload re-imports an module entrypoint with a cache-busting query
+// Hot-reload re-imports a module entrypoint with a cache-busting query
 // string (see importEntrypoint in modules.ts). Native Node's ESM loader
 // honors that query and returns the fresh module, so the content reload below
 // works in production. The test harness, however, runs under tsx

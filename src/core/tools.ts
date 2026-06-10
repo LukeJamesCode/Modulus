@@ -44,7 +44,7 @@ export interface ToolHandler {
   // Optional: module that registered this tool. Used for /help grouping.
   module?: string;
   // Optional per-tool intent filter. Module-level intent pruning decides
-  // whether an module is in scope at all; this narrows large modules
+  // whether a module is in scope at all; this narrows large modules
   // to just the relevant tools for the user's current message. This keeps
   // Ollama's native tool manifest small enough for CPU-sized tool models and
   // reduces malformed tool-call XML from tiny models.

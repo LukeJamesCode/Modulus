@@ -4,7 +4,7 @@
 // minute, picks rows whose due_at has arrived, and emits Nudges for the
 // scheduler to dispatch.
 //
-// Why this lives in core, not an module:
+// Why this lives in core, not a module:
 // - It's the smallest possible step from "answers when asked" to "thinks
 //   across time" — the agent gap discussion in CLAUDE.md.
 // - Every module benefits: the calendar module can ask the model to

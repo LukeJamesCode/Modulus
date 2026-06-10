@@ -151,7 +151,7 @@ export interface ModuleSettings {
   all(): Record<string, string | number | boolean>;
 }
 
-// What a Telegram command handler looks like from an module's perspective.
+// What a Telegram command handler looks like from a module's perspective.
 // Modules don't depend on grammY directly — the adapter wraps grammY's
 // Context into this richer, neutral shape.
 export interface TelegramCommandContext {
@@ -223,7 +223,7 @@ export interface TurnGuardInput {
 }
 export type TurnGuard = (input: TurnGuardInput) => string | null;
 
-// Voice-note payload an module hands the Telegram adapter. Either an
+// Voice-note payload a module hands the Telegram adapter. Either an
 // in-memory buffer or a path to a file the adapter can stream from disk.
 export interface VoicePayload {
   data?: Buffer;
@@ -326,7 +326,7 @@ export interface SetupEntrypointModule {
   run?: (ctx: ModuleSetupContext) => void | Promise<void>;
 }
 
-// Streamed reply chunk an module receives from host.orchestrator. Mirrors
+// Streamed reply chunk a module receives from host.orchestrator. Mirrors
 // orchestrator.ReplyChunk but is redeclared here to avoid an import cycle
 // between modules.ts and orchestrator.ts.
 export interface HostReplyChunk {
@@ -670,7 +670,7 @@ const KNOWN_CAPABILITIES = new Set([
   'auth:token',
   'llm',
   // Declared by modules that own a chat surface other than Telegram
-  // (Discord, Matrix, …). Such an module feeds user turns into
+  // (Discord, Matrix, …). Such a module feeds user turns into
   // host.orchestrator and registers a confirm renderer via
   // host.chat.registerConfirm so confirm-tier tools can pop a per-surface
   // approval prompt instead of routing back to Telegram.
@@ -888,7 +888,7 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
   async function importEntrypoint(folder: string, rel: string): Promise<EntrypointModule> {
     const abs = resolve(folder, rel);
     // Containment: a manifest with `"entrypoint": "../../etc/passwd.js"` must
-    // not let an module import code outside its own folder.
+    // not let a module import code outside its own folder.
     const within = relative(folder, abs);
     if (within.startsWith('..') || isAbsolute(within)) {
       throw new Error(`entrypoint escapes module folder: ${rel}`);
@@ -1264,7 +1264,7 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
       // flow registered before the error are all cleaned up.
       await runDisposers(reg, manifest.name);
       // Defensive: also drop scheduler jobs by module in case the cron
-      // disposer above missed any (e.g. an module that registered jobs
+      // disposer above missed any (e.g. a module that registered jobs
       // through a different path in a future refactor).
       opts.scheduler.unregisterByModule(manifest.name);
       // A failed load means the module's tools aren't registered; don't leave

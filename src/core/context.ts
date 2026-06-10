@@ -24,7 +24,7 @@ export interface HistoryMessage {
 
 export interface BuildOptions {
   systemPrompt: string;
-  // Natural-language tool fragment (e.g. an module's prompt.md). The
+  // Natural-language tool fragment (e.g. a module's prompt.md). The
   // OpenAI-shaped tool schemas go into ChatOptions.tools, not here.
   toolPrompt?: string;
   // Long-term memory results retrieved for this turn (populated by whichever

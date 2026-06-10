@@ -427,8 +427,8 @@ export async function run(): Promise<void> {
   if (selected.length === 0) {
     process.stdout.write(
       '\nNo modules selected. You can add them later with:\n' +
-        '  modulus ext install <name>   — install an module\n' +
-        '  modulus auth <module>     — run an module OAuth flow\n' +
+        '  modulus mod install <name>   — install a module\n' +
+        '  modulus auth <module>     — run a module OAuth flow\n' +
         '  modulus config               — edit settings interactively\n\n' +
         'Run `modulus start` to launch.\n',
     );

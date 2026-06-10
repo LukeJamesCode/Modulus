@@ -1,7 +1,7 @@
-// Shared module setup logic used by both `modulus init` and `modulus ext install`.
+// Shared module setup logic used by both `modulus init` and `modulus mod install`.
 //
 // Covers:
-//   - Running an module's auth flow (if it declares one)
+//   - Running a module's auth flow (if it declares one)
 //   - Prompting for remaining non-secret, no-default settings
 //   - Printing the BotFather /setcommands guide for all active modules
 
@@ -276,7 +276,7 @@ export async function fetchBotUsername(): Promise<string | undefined> {
 export interface CommandGuideOptions {
   // Include the core /start command in the printed list. True for `modulus
   // init` (first-time setup); false for follow-on runs like `modulus auth` or
-  // `modulus ext install` where /start is already in BotFather.
+  // `modulus mod install` where /start is already in BotFather.
   includeCore?: boolean;
 }
 

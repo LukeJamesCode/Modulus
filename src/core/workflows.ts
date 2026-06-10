@@ -660,7 +660,7 @@ export function seedStarterWorkflows(workflows: WorkflowRegistry, agents: AgentR
   // The tool surface a reviewer actually needs: the read-only filesystem tools
   // to read the code under review, web search for unfamiliar APIs, and
   // codex_handoff to escalate the hard reasoning. fs-tool names are listed
-  // directly (they're core tools, not from an module); the module names
+  // directly (they're core tools, not from a module); the module names
   // grant every tool those modules ship.
   const reviewerTools = ['read_file', 'list_dir', 'modulus-websearch', 'modulus-codex'];
 

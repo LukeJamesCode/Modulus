@@ -41,7 +41,7 @@ export function collectModuleReadiness(roots: readonly string[], db: DB): Module
         enabled: false,
         status: 'disabled',
         reasons: ['disabled in module_state'],
-        nextAction: `modulus ext enable ${ext.name}`,
+        nextAction: `modulus mod enable ${ext.name}`,
       };
     }
 

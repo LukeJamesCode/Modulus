@@ -50,7 +50,7 @@ interface InstalledExt {
 }
 
 // Default registry URL. The repo ships a registry.json at this path so a fresh
-// `modulus ext install modulus-foo` works out of the box. Self-hosted forks can
+// `modulus mod install modulus-foo` works out of the box. Self-hosted forks can
 // override with MODULUS_REGISTRY_URL.
 const DEFAULT_REGISTRY_URL =
   'https://raw.githubusercontent.com/LukeJamesCode/ModulusAgent/main/modules/registry.json';
@@ -100,7 +100,7 @@ function listInstalled(home: string): InstalledExt[] {
       seen.add(m.name);
       out.push({ name: m.name, version: m.version, folder, source });
     } catch {
-      // not an module or malformed manifest; ignore
+      // not a module or malformed manifest; ignore
     }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
@@ -130,7 +130,7 @@ export async function list(): Promise<void> {
 
 export async function install(source: string | undefined): Promise<void> {
   if (!source) {
-    process.stderr.write('Usage: modulus ext install <path|git-url|name>\n');
+    process.stderr.write('Usage: modulus mod install <path|git-url|name>\n');
     process.exit(2);
   }
   const home = homeDir();
@@ -293,7 +293,7 @@ function installFromFolder(src: string, destRoot: string): string {
 
 // Conservative shape check on a Git URL. Accepts http(s):// and git@host:path
 // forms; rejects file:// and bare local paths to head off accidents like
-// `modulus ext install ../whatever`. Git itself wouldn't be tricked here, but
+// `modulus mod install ../whatever`. Git itself wouldn't be tricked here, but
 // the wrong path silently bypasses the rest of installFromGit's manifest
 // validation and leaves a stray clone in destRoot.
 const GIT_URL_RE = /^(https?:\/\/|git@)[A-Za-z0-9._-]+(:[0-9]+)?[/:][A-Za-z0-9._\-/]+(\.git)?$/;
@@ -353,7 +353,7 @@ function installFromGit(url: string, destRoot: string, subpath?: string): string
 
 export async function enable(name: string | undefined): Promise<void> {
   if (!name) {
-    process.stderr.write('Usage: modulus ext enable <name>\n');
+    process.stderr.write('Usage: modulus mod enable <name>\n');
     process.exit(2);
   }
   await setEnabled(name, true);
@@ -361,7 +361,7 @@ export async function enable(name: string | undefined): Promise<void> {
 
 export async function disable(name: string | undefined): Promise<void> {
   if (!name) {
-    process.stderr.write('Usage: modulus ext disable <name>\n');
+    process.stderr.write('Usage: modulus mod disable <name>\n');
     process.exit(2);
   }
   await setEnabled(name, false);
@@ -397,7 +397,7 @@ export async function uninstall(
   opts: { purge?: boolean } = {},
 ): Promise<void> {
   if (!name) {
-    process.stderr.write('Usage: modulus ext uninstall <name> [--purge]\n');
+    process.stderr.write('Usage: modulus mod uninstall <name> [--purge]\n');
     process.exit(2);
   }
   const home = homeDir();
@@ -451,17 +451,17 @@ function touchFolder(folder: string): void {
   }
 }
 
-// `modulus ext create <name> [dir]` — drop a runnable starter module into
+// `modulus mod create <name> [dir]` — drop a runnable starter module into
 // `<dir>/<name>/` (default: cwd). The result has a manifest, a tools entrypoint,
 // a Telegram command, a settings schema, and a README — enough that
-// `modulus ext install ./<name>` works immediately and the author can edit
+// `modulus mod install ./<name>` works immediately and the author can edit
 // from there.
 export async function create(
   name: string | undefined,
   parentDir: string | undefined,
 ): Promise<void> {
   if (!name) {
-    process.stderr.write('Usage: modulus ext create <name> [dir]\n');
+    process.stderr.write('Usage: modulus mod create <name> [dir]\n');
     process.exit(2);
   }
   if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
@@ -556,11 +556,11 @@ export async function create(
       `## Install\n\n` +
       `From a local checkout:\n\n` +
       '```sh\n' +
-      `modulus ext install ./${name}\n` +
+      `modulus mod install ./${name}\n` +
       '```\n\n' +
       `From a git URL (after you push):\n\n` +
       '```sh\n' +
-      `modulus ext install https://github.com/<you>/${name}.git\n` +
+      `modulus mod install https://github.com/<you>/${name}.git\n` +
       '```\n\n' +
       `## What it ships\n\n` +
       `- Tool: \`${slashCmd}_ping\` — sample LLM tool, replace it\n` +
@@ -569,8 +569,8 @@ export async function create(
       `See \`settings.schema.json\`. Edit values via \`modulus config\`.\n\n` +
       `## Publishing\n\n` +
       `Push this folder to its own git repo, then either:\n\n` +
-      `- Tell users \`modulus ext install <git-url>\`, or\n` +
-      `- Open a PR to \`modules/registry.json\` in the Modulus repo so \`modulus ext install ${name}\` resolves it by bare name.\n`,
+      `- Tell users \`modulus mod install <git-url>\`, or\n` +
+      `- Open a PR to \`modules/registry.json\` in the Modulus repo so \`modulus mod install ${name}\` resolves it by bare name.\n`,
     'utf8',
   );
 
@@ -579,6 +579,6 @@ export async function create(
   process.stdout.write(`✓ Scaffolded '${name}' at ${dest}\n`);
   process.stdout.write(`  Next steps:\n`);
   process.stdout.write(`    1. Edit tools.ts / commands.ts to do something useful.\n`);
-  process.stdout.write(`    2. modulus ext install ${dest}\n`);
+  process.stdout.write(`    2. modulus mod install ${dest}\n`);
   process.stdout.write(`    3. (optional) push to git, then open a PR to modules/registry.json.\n`);
 }
