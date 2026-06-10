@@ -15,6 +15,7 @@
 // it to chat-surface extensions via host.chat.dispatchInbound.
 
 import type { Logger } from '../util/log.js';
+import type { InstantResponder } from './instant-responses.js';
 import type {
   HostOrchestrator,
   HostReplyChunk,
@@ -53,6 +54,10 @@ export interface ChatDispatcherDeps {
   // Per-chat devmode flag. When true the orchestrator reply is annotated with
   // model/timing/tool metadata. Telegram only; omit elsewhere.
   getDevmode?: (chatId: number) => boolean;
+  // Core instant responses (gated by `instantResponses.enabled`). When present,
+  // free-form messages get a templated reply or a pre-answer ack before the
+  // extension intercept chain runs. Omit to disable.
+  instantResponder?: InstantResponder;
 }
 
 export interface ChatDispatcher {
@@ -190,6 +195,20 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       await invokeExtensionCommand(head, args, chatId, userId, reply);
       // Unknown command falls through silently — matches Telegram behaviour.
       return;
+    }
+
+    // Core instant responses, before any extension intercept. A 'reply' is
+    // terminal (templated chatter / a computed answer — the model never runs);
+    // an 'ack' is sent now and the turn continues to the orchestrator. Both
+    // fire the afterReply chain so a voice extension speaks them, matching how
+    // an intercept's reply behaved when this lived in gurney-instant-responses.
+    const instant = deps.instantResponder?.respond(text, chatId);
+    if (instant) {
+      await reply(instant.text);
+      void runAfterReplies(chatId, userId, instant.text).catch((e) =>
+        log.warn('afterReply chain failed (instant)', { error: errStr(e) }),
+      );
+      if (instant.mode === 'reply') return;
     }
 
     // Intercept chain. Each intercept can call next() to fall through to the

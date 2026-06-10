@@ -25,6 +25,7 @@ import { createToolRegistry } from '../core/tools.js';
 import { effectiveConfig } from '../cli/config-store.js';
 import { logFilePath, panelTokenPath } from '../cli/daemon.js';
 import { createPanelConfirmBus } from './confirm-bus.js';
+import type { InstantResponse } from '../core/instant-responses.js';
 import { createPanel, type PanelDeps, type PanelHandle } from './server.js';
 
 let home: string;
@@ -35,6 +36,10 @@ let base: string;
 let token: string;
 let stopCalls = 0;
 let restartCalls = 0;
+// Drives deps.instantResponder. Default null → the responder stays out of the
+// way of every other chat test; an instant test sets it for one request and
+// resets after. Mirrors the stopCalls/restartCalls mutable-state pattern above.
+let instantStub: InstantResponse | null = null;
 
 function authed(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${base}${path}`, {
@@ -163,6 +168,7 @@ before(async () => {
     } as unknown as PanelDeps['orchestrator'],
     loader: { intercepts: () => [], commands: () => [] } as unknown as PanelDeps['loader'],
     confirmBus: createPanelConfirmBus(),
+    instantResponder: { respond: () => instantStub },
     cliEntry: cliStub,
     onStop: () => {
       stopCalls += 1;
@@ -540,6 +546,47 @@ test('chat streams orchestrator deltas then done over SSE', async () => {
   assert.match(text, /event: delta/);
   assert.match(text, /"delta":"hi /);
   assert.match(text, /event: done/);
+});
+
+test('chat: an instant ack lands as its own frame, then the orchestrator still streams', async () => {
+  instantStub = { mode: 'ack', text: 'On it.' };
+  try {
+    const res = await authed('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'add milk to my list' }),
+    });
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.match(text, /event: instant/);
+    assert.match(text, /"text":"On it\."/);
+    // ack is not terminal — the orchestrator deltas + done must still follow.
+    assert.match(text, /event: delta/);
+    assert.match(text, /event: done/);
+  } finally {
+    instantStub = null;
+  }
+});
+
+test('chat: an instant reply is terminal — its frame ships and the orchestrator never runs', async () => {
+  instantStub = { mode: 'reply', text: 'Morning.' };
+  try {
+    const res = await authed('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'hi' }),
+    });
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.match(text, /event: instant/);
+    assert.match(text, /"text":"Morning\."/);
+    // No orchestrator turn: no deltas, and done carries an empty answer.
+    assert.doesNotMatch(text, /event: delta/);
+    assert.match(text, /event: done/);
+    assert.match(text, /"text":""/);
+  } finally {
+    instantStub = null;
+  }
 });
 
 test('chat/confirm with an unknown id is 409 (fail-closed)', async () => {

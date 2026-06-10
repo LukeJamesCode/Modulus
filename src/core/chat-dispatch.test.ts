@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { createLogger } from '../util/log.js';
 import { createChatDispatcher, type ChatDispatcherDeps } from './chat-dispatch.js';
+import type { InstantResponder, InstantResponse } from './instant-responses.js';
 import type {
   AfterTurnContext,
   ExtensionAfterReplyRecord,
@@ -132,6 +133,65 @@ test('an intercept calling next() falls through to the orchestrator', async () =
   await flush();
   assert.deepEqual(calls, ['what is 2+2']);
   assert.deepEqual(replies, ['checking…', 'real answer']);
+});
+
+// A canned instant-responder so these tests pin the dispatch wiring (reply is
+// terminal, ack continues) rather than the regex classification, which
+// instant-responses.test.ts covers.
+function fixedResponder(out: InstantResponse | null): InstantResponder {
+  return { respond: () => out };
+}
+
+test('an instant reply is terminal — sent, and the orchestrator never runs', async () => {
+  const { orchestrator, calls } = orchestratorEmitting('model answer');
+  const replies: string[] = [];
+  const d = createChatDispatcher(
+    deps({ orchestrator, instantResponder: fixedResponder({ mode: 'reply', text: 'Morning.' }) }),
+  );
+  await d.dispatchInbound({
+    chatId: 1,
+    userId: 2,
+    text: 'hi',
+    reply: async (t) => void replies.push(t),
+  });
+  await flush();
+  assert.deepEqual(calls, [], 'orchestrator must not run after a terminal instant reply');
+  assert.deepEqual(replies, ['Morning.']);
+});
+
+test('an instant ack is sent, then the orchestrator still runs and answers', async () => {
+  const { orchestrator, calls } = orchestratorEmitting('real answer');
+  const replies: string[] = [];
+  const d = createChatDispatcher(
+    deps({ orchestrator, instantResponder: fixedResponder({ mode: 'ack', text: 'On it.' }) }),
+  );
+  await d.dispatchInbound({
+    chatId: 1,
+    userId: 2,
+    text: 'add milk to my list',
+    reply: async (t) => void replies.push(t),
+  });
+  await flush();
+  assert.deepEqual(calls, ['add milk to my list'], 'orchestrator must run after an ack');
+  assert.deepEqual(replies, ['On it.', 'real answer']);
+});
+
+test('an instant reply still fires the afterReply chain (so a voice ext speaks it)', async () => {
+  const afterReplyText: string[] = [];
+  const afterReply: ExtensionAfterReplyRecord = {
+    extension: 'voice',
+    handler: async (ctx) => void afterReplyText.push(ctx.text),
+  };
+  const d = createChatDispatcher(
+    deps({
+      instantResponder: fixedResponder({ mode: 'reply', text: 'Got it.' }),
+      afterReplies: () => [afterReply],
+    }),
+  );
+  await d.dispatchInbound({ chatId: 1, userId: 2, text: 'ok', reply: async () => {} });
+  await flush();
+  await flush();
+  assert.deepEqual(afterReplyText, ['Got it.']);
 });
 
 test('a /command routes to the matching extension command, not the orchestrator', async () => {

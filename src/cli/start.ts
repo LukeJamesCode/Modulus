@@ -63,6 +63,7 @@ import {
 import { createPrefsStore } from '../core/prefs.js';
 import { createMetricsWriter } from '../core/metrics.js';
 import { createTelegram } from '../adapters/telegram.js';
+import { createInstantResponder } from '../core/instant-responses.js';
 import { effectiveConfig, ensurePrivateDir, homeDir } from './config-store.js';
 import {
   clearPid,
@@ -502,6 +503,12 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   });
   workflowRunner.start();
 
+  // One instant-responder shared by both chat surfaces (Telegram + panel) so
+  // their anti-repeat variant history is shared. Off entirely when the setting
+  // is disabled. Config changes take effect on the next restart.
+  const instantResponder =
+    cfg.instantResponses?.enabled !== false ? createInstantResponder() : undefined;
+
   const telegram = createTelegram({
     token: cfg.telegram.token,
     allowedUserIds: cfg.telegram.allowedIds,
@@ -511,6 +518,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
     llm,
     tools,
     db,
+    instantResponder,
     prefs,
     followups,
     agentRegistry,
@@ -701,6 +709,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
         orchestrator,
         loader,
         confirmBus: panelConfirmBus,
+        ...(instantResponder ? { instantResponder } : {}),
         ...(process.argv[1] ? { cliEntry: process.argv[1] } : {}),
         execArgv: process.execArgv,
         onStop: () => void shutdown('panel-stop'),

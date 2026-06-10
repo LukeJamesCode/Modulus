@@ -10,6 +10,7 @@ import type { createRoutedLLM } from '../core/llm-router.js';
 import type { MemoryStore } from '../core/memory.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ExtensionLoader } from '../core/extensions.js';
+import type { InstantResponder } from '../core/instant-responses.js';
 import type { ModulusConfig } from '../cli/config-store.js';
 import type { PanelConfirmBus } from './confirm-bus.js';
 
@@ -44,6 +45,10 @@ export interface PanelDeps {
   // Shared with the daemon's confirm router so a confirm-tier tool fired during
   // a browser turn prompts inline in the browser (fail-closed otherwise).
   confirmBus: PanelConfirmBus;
+  // Core instant responses (templated chatter replies / pre-answer acks). Shared
+  // with the Telegram surface so anti-repeat history is shared. Absent when the
+  // `instantResponses.enabled` setting is off.
+  instantResponder?: InstantResponder;
   // argv[1] + execArgv of the daemon, so a panel-triggered restart re-execs the
   // same entrypoint under the same loader (tsx in dev, node in prod).
   cliEntry?: string;

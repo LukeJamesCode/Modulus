@@ -180,8 +180,19 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
       }
     };
 
+    // Core instant response, mirroring the Telegram path: a 'reply' is terminal
+    // (the orchestrator never runs); an 'ack' lands as its own bubble, then the
+    // turn streams normally. The web renders an 'instant' frame as its own
+    // message, so there's no double-reply race with the streamed answer.
+    let instantTerminal = false;
+    const instant = deps.instantResponder?.respond(text, chatId);
+    if (instant) {
+      sse('instant', { text: instant.text });
+      if (instant.mode === 'reply') instantTerminal = true;
+    }
+
     try {
-      await runNext();
+      if (!instantTerminal) await runNext();
       sse('done', { text: orchestratorRan ? full : '' });
     } catch (e) {
       sse('error', { message: e instanceof Error ? e.message : String(e) });

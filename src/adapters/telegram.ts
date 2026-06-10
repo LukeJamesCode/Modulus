@@ -23,6 +23,7 @@ import { collectDoctorReply } from './telegram-maintenance.js';
 import type { Logger } from '../util/log.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import { createChatDispatcher } from '../core/chat-dispatch.js';
+import type { InstantResponder } from '../core/instant-responses.js';
 import type { LLM } from '../core/llm.js';
 import type { ToolRegistry, ToolHandler, ToolContext } from '../core/tools.js';
 import type { DB } from '../storage/db.js';
@@ -107,6 +108,10 @@ export interface TelegramOptions {
   // Resolve a Yes/No press on an agent-approval prompt. Wired to the
   // ApprovalManager; the allowlist middleware has already vetted the presser.
   onAgentApproval?: (id: number, approved: boolean, fromUserId: number) => void;
+  // Core instant responses, when `instantResponses.enabled` is on. Created in
+  // start.ts and shared with the panel so both surfaces share anti-repeat
+  // history; omitted (undefined) when the setting is off.
+  instantResponder?: InstantResponder;
 }
 
 export interface TelegramAdapter {
@@ -805,6 +810,7 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     log,
     isCoreCommand: (head) => CORE_COMMANDS.has(head),
     getDevmode,
+    instantResponder: opts.instantResponder,
   });
 
   bot.command('start', async (ctx) => {
