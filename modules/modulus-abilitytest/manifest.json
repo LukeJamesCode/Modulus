@@ -1,0 +1,9 @@
+{
+  "name": "modulus-abilitytest",
+  "version": "1.0.0",
+  "description": "Scripted ability tests for the Modulus agent pipeline. A deterministic FakeLLM subset (no Ollama, no network) boots a throwaway in-process orchestrator per test, drives a message through the real dispatch loop, and scores tool-selection, delegation, and end-to-end outcomes. Invoked via 'modulus abilitytest'.",
+  "modulus": ">=0.1.0",
+  "deps": [],
+  "capabilities": [],
+  "entrypoints": {}
+}
