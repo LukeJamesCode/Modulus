@@ -10,22 +10,21 @@
 // back. In-process the flow runs against the daemon's live DB, and a finished
 // auth hot-reloads the module so fresh credentials take effect immediately.
 
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { basename, join } from 'node:path';
 import { discover, runAuthForExt, type AuthRunnerIO } from '../../cli/auth.js';
+import { ensurePrivateDir } from '../../cli/config-store.js';
 import { configureNativeDepsForExtension } from '../../cli/ext-setup.js';
 import { collectExtensionReadiness } from '../../core/extension-readiness.js';
-import type { Manifest, SettingsSchema } from '../../core/extensions.js';
-import { readJson, sendJson, sse, writeSseHead } from '../http.js';
+import type { Manifest, SettingsSchema, TelegramCommandContext } from '../../core/extensions.js';
+import { readJson, readRawBody, sendJson, sse, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
+import { runModulus, runModulusStreaming } from '../spawn.js';
 import type { PanelDeps } from '../types.js';
 import type { DB } from '../../storage/db.js';
-
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+import type { ModulusConfig } from '../../cli/config-store.js';
 
 interface FieldView {
   key: string;
@@ -164,82 +163,126 @@ const CORE_COMMANDS = [
   { cmd: '/fresh', desc: 'Owner-only destructive fresh rebuild from Telegram' },
 ];
 
-// The CLI entrypoint to re-exec for `modulus ext …` actions. Prefers the one we
-// were launched with; falls back to the built or source entry.
-function cliEntryPath(deps: PanelDeps): string {
-  if (deps.cliEntry && existsSync(deps.cliEntry)) return deps.cliEntry;
-  const built = join(REPO_ROOT, 'dist', 'cli', 'index.js');
-  if (existsSync(built)) return built;
-  return join(REPO_ROOT, 'src', 'cli', 'index.ts');
+// The core text commands the panel answers itself (no orchestrator turn) — the
+// rest fall through to a module command handler.
+const CORE_TEXT_COMMANDS = new Set(['help', 'model', 'status', 'extensions', 'lasterror']);
+
+interface ExtListItem {
+  name: string;
+  enabled: boolean;
+  status: string;
+  commands: Array<{ cmd: string; desc: string }>;
 }
 
-function runModulus(
-  deps: PanelDeps,
-  args: string[],
-  timeoutMs = 120_000,
-): Promise<{ code: number; out: string; err: string }> {
-  return new Promise((resolveRun) => {
-    const child = spawn(process.execPath, [...(deps.execArgv ?? []), cliEntryPath(deps), ...args], {
-      cwd: REPO_ROOT,
-      env: process.env,
-    });
-    let out = '';
-    let err = '';
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* ignore */
-      }
-    }, timeoutMs);
-    timer.unref();
-    child.stdout.on('data', (d: Buffer) => (out += d.toString('utf8')));
-    child.stderr.on('data', (d: Buffer) => (err += d.toString('utf8')));
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolveRun({ code: code ?? -1, out, err });
-    });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      resolveRun({ code: -1, out, err: err + String(e) });
-    });
-  });
+// Core commands plus every enabled module's commands — shared by the GET
+// /api/commands reference and the /help text command.
+function commandReference(deps: PanelDeps): {
+  core: typeof CORE_COMMANDS;
+  extensions: Array<{ cmd: string; desc: string }>;
+} {
+  const extensions = (listExtensions(deps) as ExtListItem[])
+    .filter((e) => e.enabled)
+    .flatMap((e) => e.commands);
+  return { core: CORE_COMMANDS, extensions };
 }
 
-// Like runModulus, but hands output chunks to the caller as they arrive — the
-// enable-stream SSE relays them so a big model download shows progress lines
-// instead of a frozen spinner. Generous timeout for exactly that case.
-function runModulusStreaming(
-  deps: PanelDeps,
-  args: string[],
-  onChunk: (text: string) => void,
-  timeoutMs = 1_800_000,
-): Promise<{ code: number }> {
-  return new Promise((resolveRun) => {
-    const child = spawn(process.execPath, [...(deps.execArgv ?? []), cliEntryPath(deps), ...args], {
-      cwd: REPO_ROOT,
-      env: process.env,
-    });
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* ignore */
+// The owner chat/user a panel-run command speaks as — the most recently seen
+// chat of an allowlisted user, falling back to the first allowlisted id (same
+// rule as the dashboard chat route).
+function ownerChat(db: DB, cfg: ModulusConfig): { chatId: number; userId: number } | null {
+  const fallback = cfg.telegram.allowedIds[0];
+  if (fallback === undefined) return null;
+  const placeholders = cfg.telegram.allowedIds.map(() => '?').join(', ');
+  const row = db
+    .prepare(
+      `SELECT chat_id AS chatId, user_id AS userId FROM telegram_chats
+        WHERE user_id IN (${placeholders})
+        ORDER BY last_seen_at DESC LIMIT 1`,
+    )
+    .get(...cfg.telegram.allowedIds) as { chatId: number; userId: number } | undefined;
+  return row ?? { chatId: fallback, userId: fallback };
+}
+
+// A core text command's reply, computed in-process from the daemon's live
+// handles — the panel parity of the Telegram core-command handlers.
+async function coreCommandText(deps: PanelDeps, name: string, chatId: number): Promise<string> {
+  switch (name) {
+    case 'help': {
+      const ref = commandReference(deps);
+      const lines = ['Core commands:', ...ref.core.map((c) => `${c.cmd} — ${c.desc}`)];
+      if (ref.extensions.length > 0) {
+        lines.push('', 'Module commands:');
+        for (const c of ref.extensions) lines.push(`${c.cmd}${c.desc ? ' — ' + c.desc : ''}`);
       }
-    }, timeoutMs);
-    timer.unref();
-    child.stdout.on('data', (d: Buffer) => onChunk(d.toString('utf8')));
-    child.stderr.on('data', (d: Buffer) => onChunk(d.toString('utf8')));
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolveRun({ code: code ?? -1 });
+      return lines.join('\n');
+    }
+    case 'model': {
+      const profiles = deps.llm.listProfiles();
+      const lines = Object.entries(profiles).map(([n, cfg]) =>
+        cfg ? `${n}: ${cfg.model} (ctx ${cfg.contextTokens})` : `${n}: (not configured)`,
+      );
+      return lines.join('\n') || 'No model profiles configured.';
+    }
+    case 'status': {
+      const health = await deps.llm.health();
+      const exts = (listExtensions(deps) as ExtListItem[]).filter((e) => e.enabled);
+      return [
+        `llm: ${health.ok ? 'ok' : 'down'} (${health.models.length} models)`,
+        `modules: ${exts.length === 0 ? 'none' : exts.map((e) => e.name).join(', ')}`,
+      ].join('\n');
+    }
+    case 'extensions': {
+      const exts = listExtensions(deps) as ExtListItem[];
+      if (exts.length === 0) return 'No modules installed.';
+      return [
+        'Modules:',
+        ...exts.map((e) => `• ${e.name} — ${e.enabled ? e.status : 'disabled'}`),
+      ].join('\n');
+    }
+    case 'lasterror': {
+      const e = deps.orchestrator.lastError(chatId);
+      return e ? `Last error: ${e}` : 'No recent errors.';
+    }
+    default:
+      return `Unknown command /${name}.`;
+  }
+}
+
+// Run a core text command or an enabled module command, collecting its replies.
+// Module command handlers reply through the same TelegramCommandContext the
+// Telegram adapter passes — the panel just captures the text instead of sending it.
+async function runCommand(
+  deps: PanelDeps,
+  owner: { chatId: number; userId: number },
+  name: string,
+  args: string,
+): Promise<{ ok: boolean; replies?: string[]; error?: string }> {
+  const lower = name.toLowerCase();
+  if (CORE_TEXT_COMMANDS.has(lower)) {
+    return { ok: true, replies: [await coreCommandText(deps, lower, owner.chatId)] };
+  }
+  const rec = deps.loader.commands().find((c) => c.name === lower);
+  if (!rec) return { ok: false, error: `/${name} is not a known command` };
+  const replies: string[] = [];
+  const cctx: TelegramCommandContext = {
+    chatId: owner.chatId,
+    userId: owner.userId,
+    args,
+    reply: async (t) => {
+      replies.push(t);
+    },
+  };
+  try {
+    await rec.handler(cctx);
+  } catch (e) {
+    deps.log.warn('module command failed', {
+      ext: rec.extension,
+      command: lower,
+      error: e instanceof Error ? e.message : String(e),
     });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      onChunk(String(e));
-      resolveRun({ code: -1 });
-    });
-  });
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  return { ok: true, replies };
 }
 
 // Run a module's `setup` entrypoint (native-dep bootstrap) non-interactively,
@@ -450,13 +493,28 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
     }
 
     if (path === '/api/commands' && method === 'GET') {
-      const extension = listExtensions(deps)
-        .filter((e): e is { enabled: boolean; commands: Array<{ cmd: string; desc: string }> } => {
-          const ext = e as { enabled?: boolean };
-          return ext.enabled === true;
-        })
-        .flatMap((e) => e.commands);
-      sendJson(res, 200, { core: CORE_COMMANDS, extensions: extension });
+      sendJson(res, 200, commandReference(deps));
+      return true;
+    }
+
+    // Run a core text command or a module command (the codex buttons, etc.) and
+    // return its captured replies — the panel parity of typing the slash command
+    // in Telegram.
+    if (path === '/api/command' && method === 'POST') {
+      const { name, args } = await readJson<{ name?: string; args?: string }>(req);
+      // The web UI strips the leading slash, but tolerate it for direct callers.
+      const command = (name ?? '').trim().replace(/^\/+/, '');
+      if (!command) {
+        sendJson(res, 400, { ok: false, error: 'missing command' });
+        return true;
+      }
+      const owner = ownerChat(deps.db, deps.config);
+      if (!owner) {
+        sendJson(res, 500, { ok: false, error: 'no owner chat configured' });
+        return true;
+      }
+      const r = await runCommand(deps, owner, command, (args ?? '').trim());
+      sendJson(res, r.ok ? 200 : r.error?.includes('not a known') ? 404 : 500, r);
       return true;
     }
 
@@ -500,6 +558,25 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
         clearInterval(keepAlive);
         res.end();
       }
+      return true;
+    }
+
+    // Stage a binary upload (e.g. a recorded voice note) under the module's
+    // private uploads dir, returning the saved path for a follow-up tool call.
+    // The filename is reduced to a basename so an x-filename header can't escape
+    // the uploads dir via path traversal.
+    const extUpload = /^\/api\/extensions\/([a-z0-9._-]+)\/upload$/i.exec(path);
+    if (extUpload && method === 'POST') {
+      const name = extUpload[1]!;
+      const bytes = await readRawBody(req);
+      const header = req.headers['x-filename'];
+      const safe = basename(typeof header === 'string' ? header : '').replace(/^\.+/, '');
+      const filename = safe || `upload_${Date.now()}.bin`;
+      const uploadDir = join(deps.home, 'extensions', name, 'uploads');
+      ensurePrivateDir(uploadDir);
+      const filePath = join(uploadDir, filename);
+      writeFileSync(filePath, bytes);
+      sendJson(res, 200, { path: filePath });
       return true;
     }
 

@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { open as openDb, type DB } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
@@ -128,7 +128,11 @@ before(async () => {
         return () => set.delete(fn);
       },
     } as unknown as PanelDeps['agentRuntime'],
-    llm: { resolveModel: () => 'test-model' } as unknown as PanelDeps['llm'],
+    llm: {
+      resolveModel: () => 'test-model',
+      listProfiles: () => ({ chat: { model: 'qwen3.5:0.8b', contextTokens: 4096, heavy: false } }),
+      health: async () => ({ ok: true, models: ['qwen3.5:0.8b'] }),
+    } as unknown as PanelDeps['llm'],
     memory: setupMemory({
       db,
       tools: createToolRegistry({ log, confirm: async () => false }),
@@ -149,7 +153,7 @@ before(async () => {
       lastError: () => undefined,
       shutdown: async () => {},
     } as unknown as PanelDeps['orchestrator'],
-    loader: { intercepts: () => [] } as unknown as PanelDeps['loader'],
+    loader: { intercepts: () => [], commands: () => [] } as unknown as PanelDeps['loader'],
     confirmBus: createPanelConfirmBus(),
     onStop: () => {
       stopCalls += 1;
@@ -343,6 +347,67 @@ test('modules: list and command reference respond', async () => {
   assert.ok(Array.isArray(body.core) && body.core.length > 0);
 });
 
+test('command: a core text command runs in-process and returns its reply', async () => {
+  // /help is answered from the live command reference, not the orchestrator —
+  // panel parity of typing the slash command in Telegram.
+  const help = await authed('/api/command', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: '/help' }),
+  });
+  assert.equal(help.status, 200);
+  const helpBody = (await help.json()) as { ok: boolean; replies?: string[] };
+  assert.equal(helpBody.ok, true);
+  assert.match(helpBody.replies?.[0] ?? '', /Core commands:/);
+  // /status reaches the live llm.health() + module list handles.
+  const status = await authed('/api/command', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'status' }),
+  });
+  const statusBody = (await status.json()) as { replies?: string[] };
+  assert.match(statusBody.replies?.[0] ?? '', /llm: ok/);
+});
+
+test('command: an unknown command is 404 and an empty one is 400', async () => {
+  const unknown = await authed('/api/command', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: '/no-such-command' }),
+  });
+  assert.equal(unknown.status, 404);
+  const empty = await authed('/api/command', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  assert.equal(empty.status, 400);
+});
+
+test('upload: stages bytes under the module uploads dir; a traversing name cannot escape', async () => {
+  const res = await authed('/api/extensions/test-mod/upload', {
+    method: 'POST',
+    headers: { 'x-filename': 'note.bin' },
+    body: 'audio-bytes',
+  });
+  assert.equal(res.status, 200);
+  const { path } = (await res.json()) as { path: string };
+  assert.equal(readFileSync(path, 'utf8'), 'audio-bytes');
+  const uploadsDir = join(home, 'extensions', 'test-mod', 'uploads');
+  assert.equal(dirname(path), uploadsDir);
+
+  // A path-traversal filename is reduced to its basename — it must land inside
+  // the uploads dir, never above it.
+  const evil = await authed('/api/extensions/test-mod/upload', {
+    method: 'POST',
+    headers: { 'x-filename': '../../escape.bin' },
+    body: 'x',
+  });
+  const evilPath = ((await evil.json()) as { path: string }).path;
+  assert.equal(basename(evilPath), 'escape.bin');
+  assert.equal(dirname(evilPath), uploadsDir);
+});
+
 test('enable-stream ends with an unnamed done frame when the CLI run fails', async () => {
   // No cliEntry/execArgv in the test deps, so the spawned CLI cannot run a
   // TypeScript entry — the route must still surface that as done ok:false.
@@ -398,6 +463,37 @@ test('settings: config exposes the instant-responses toggle', async () => {
   const body = (await res.json()) as { instantResponses: boolean; envLocks: object };
   assert.equal(typeof body.instantResponses, 'boolean');
   assert.equal(typeof body.envLocks, 'object');
+});
+
+test('maintenance: fresh refuses without RESET and hands off to the terminal with it', async () => {
+  const bad = await authed('/api/maintenance/fresh', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ confirm: 'nope' }),
+  });
+  assert.equal(bad.status, 400);
+  // A correct confirmation still does NOT wipe in-process — the live daemon
+  // holds ~/.modulus open, so it hands off to the terminal instead.
+  const ok = await authed('/api/maintenance/fresh', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ confirm: 'RESET' }),
+  });
+  assert.equal(ok.status, 409);
+  const body = (await ok.json()) as { ok: boolean; output: string };
+  assert.equal(body.ok, false);
+  assert.match(body.output, /modulus fresh/);
+});
+
+test('maintenance: update reports failure when the CLI entry cannot run', async () => {
+  // No cliEntry/execArgv in the test deps and no dist build, so the spawned
+  // `modulus update` can't run a TS entry — the route surfaces that as a failure
+  // rather than hanging or 200-ing.
+  const r = await authed('/api/maintenance/update', { method: 'POST' });
+  assert.equal(r.status, 500);
+  const body = (await r.json()) as { ok: boolean; command: string };
+  assert.equal(body.ok, false);
+  assert.equal(body.command, 'modulus update');
 });
 
 test('memory browser lists, finds, and deletes', async () => {

@@ -23,6 +23,7 @@ import { readMetrics } from '../../core/metrics.js';
 import { createPrefsStore, formatWindow } from '../../core/prefs.js';
 import { readJson, sendJson, sse, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
+import { runModulus } from '../spawn.js';
 import { buildState } from '../state.js';
 import type { PanelDeps, PanelRuntime } from '../types.js';
 
@@ -366,6 +367,41 @@ export function createSystemRoutes(deps: PanelDeps, runtime: PanelRuntime): Rout
 
     if (path === '/api/logs/stream' && method === 'GET') {
       streamLogs(deps, req, res);
+      return true;
+    }
+
+    // Pull + rebuild via the same `modulus update` the CLI runs. Safe while
+    // live: the rebuild lands on disk and takes effect on the next restart.
+    if (path === '/api/maintenance/update' && method === 'POST') {
+      const r = await runModulus(deps, ['update'], 1_800_000);
+      sendJson(res, r.code === 0 ? 200 : 500, {
+        ok: r.code === 0,
+        code: r.code,
+        command: 'modulus update',
+        output: r.out + r.err,
+      });
+      return true;
+    }
+
+    // `modulus fresh` wipes ~/.modulus — which this in-process daemon holds open
+    // (the SQLite file is locked on Windows) — so running it here would corrupt
+    // state or fail mid-wipe, and `fresh` itself SIGTERMs this very process. We
+    // validate the confirmation and hand the user off to the terminal rather
+    // than self-destruct the live daemon. ok:false keeps the UI from treating
+    // it as a completed reset.
+    if (path === '/api/maintenance/fresh' && method === 'POST') {
+      const { confirm } = await readJson<{ confirm?: string }>(req);
+      if (confirm !== 'RESET') {
+        sendJson(res, 400, { ok: false, error: 'type RESET to confirm a fresh install' });
+        return true;
+      }
+      sendJson(res, 409, {
+        ok: false,
+        command: 'modulus fresh',
+        output:
+          'A fresh reset erases ~/.modulus, which this running daemon holds open.\n' +
+          'Stop Modulus and run `modulus fresh` from the terminal to reset.',
+      });
       return true;
     }
 
