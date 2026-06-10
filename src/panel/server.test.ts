@@ -365,6 +365,28 @@ test('enable-stream ends with an unnamed done frame when the CLI run fails', asy
   assert.equal(frames.sawNamed, false);
 });
 
+test('auth: start for an unknown module is 404; stream of a dead session errors', async () => {
+  const start = await authed('/api/extensions/no-such-module/auth/start', { method: 'POST' });
+  assert.equal(start.status, 404);
+  const res = await fetch(
+    `${base}/api/extensions/x/auth/stream?session=nope&token=${encodeURIComponent(token)}`,
+  );
+  assert.equal(res.status, 200);
+  const frames = sseFrames(res);
+  const first = await frames.next();
+  assert.equal(first?.['type'], 'error');
+  assert.equal(frames.sawNamed, false);
+});
+
+test('auth: answer with no waiting question is 409 (fail-closed)', async () => {
+  const res = await authed('/api/extensions/x/auth/answer', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ session: 'nope', value: 'secret' }),
+  });
+  assert.equal(res.status, 409);
+});
+
 test('module settings for an unknown module is 404', async () => {
   const res = await authed('/api/extensions/does-not-exist/settings');
   assert.equal(res.status, 404);

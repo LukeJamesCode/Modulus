@@ -3,13 +3,20 @@
 // CLI (the same path `modulus ext` uses, so native-dep setup runs too). The
 // daemon stays the install owner; the panel just drives it.
 //
-// Deferred to later passes: the interactive OAuth auth flows and binary
-// upload. /api/commands lives here because it reuses listExtensions.
+// The interactive auth bridge: `modulus auth <ext>` runs a module's OAuth/
+// credential flow as print()/prompt() over an AuthFlowIO. Here the same runner
+// (runAuthForExt) is wired to the browser instead of a terminal — print lines
+// stream out over SSE, prompt() parks the flow until the user POSTs an answer
+// back. In-process the flow runs against the daemon's live DB, and a finished
+// auth hot-reloads the module so fresh credentials take effect immediately.
 
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { discover, runAuthForExt, type AuthRunnerIO } from '../../cli/auth.js';
 import { configureNativeDepsForExtension } from '../../cli/ext-setup.js';
 import { collectExtensionReadiness } from '../../core/extension-readiness.js';
 import type { Manifest, SettingsSchema } from '../../core/extensions.js';
@@ -289,7 +296,153 @@ function saveExtSettings(deps: PanelDeps, name: string, body: Record<string, unk
   return true;
 }
 
+interface AuthSseEvent {
+  // Monotonic index so a reconnecting EventSource (which gets the whole buffer
+  // replayed) can skip events it already processed instead of duplicating them.
+  seq?: number;
+  type: 'print' | 'prompt' | 'done' | 'error';
+  line?: string;
+  question?: string;
+  secret?: boolean;
+  message?: string;
+}
+
+interface AuthSession {
+  id: string;
+  ext: string;
+  events: AuthSseEvent[]; // replay buffer for late/reconnecting subscribers
+  pending: { resolve: (value: string) => void; reject: (e: Error) => void } | null;
+  subscribers: Set<(e: AuthSseEvent) => void>;
+  finished: boolean;
+}
+
 export function createModuleRoutes(deps: PanelDeps): RouteModule {
+  const authSessions = new Map<string, AuthSession>();
+
+  function pushAuthEvent(session: AuthSession, evt: AuthSseEvent): void {
+    evt.seq = session.events.length;
+    session.events.push(evt);
+    for (const sub of session.subscribers) {
+      try {
+        sub(evt);
+      } catch {
+        /* a dead subscriber must not break the others */
+      }
+    }
+  }
+
+  function closeAuthSession(session: AuthSession): void {
+    if (session.pending) {
+      try {
+        session.pending.reject(new Error('auth session closed'));
+      } catch {
+        /* ignore */
+      }
+      session.pending = null;
+    }
+    authSessions.delete(session.id);
+  }
+
+  function startAuthSession(
+    name: string,
+  ): { ok: true; session: string } | { ok: false; error: string } {
+    const ext = discover(deps.home, name);
+    if (!ext) return { ok: false, error: `module '${name}' not found` };
+    if (!ext.manifest.entrypoints?.auth) {
+      return { ok: false, error: `'${name}' does not have an auth flow` };
+    }
+
+    // Only one live auth session per module — replace any stale one.
+    for (const s of authSessions.values()) {
+      if (s.ext === name && !s.finished) closeAuthSession(s);
+    }
+
+    const session: AuthSession = {
+      id: randomUUID(),
+      ext: name,
+      events: [],
+      pending: null,
+      subscribers: new Set(),
+      finished: false,
+    };
+    authSessions.set(session.id, session);
+
+    const io: AuthRunnerIO = {
+      print: (line) => pushAuthEvent(session, { type: 'print', line }),
+      announce: (line) => pushAuthEvent(session, { type: 'print', line }),
+      prompt: (question, opts) =>
+        new Promise<string>((resolve, reject) => {
+          session.pending = { resolve, reject };
+          pushAuthEvent(session, { type: 'prompt', question, secret: !!opts?.secret });
+        }),
+    };
+
+    void runAuthForExt(ext, deps.db, io)
+      .then(async () => {
+        // Fresh credentials must reach the live registrations, not just the DB.
+        try {
+          await deps.loader.reload(name);
+        } catch (e) {
+          deps.log.warn('post-auth module reload failed', {
+            ext: name,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+        pushAuthEvent(session, { type: 'done' });
+      })
+      .catch((e: unknown) =>
+        pushAuthEvent(session, {
+          type: 'error',
+          message: e instanceof Error ? e.message : String(e),
+        }),
+      )
+      .finally(() => {
+        session.finished = true;
+        session.pending = null;
+        // Keep the finished session around briefly so the SSE delivers the
+        // final event to whoever is watching, then drop it.
+        setTimeout(() => authSessions.delete(session.id), 60_000).unref();
+      });
+
+    return { ok: true, session: session.id };
+  }
+
+  function answerAuthSession(id: string, value: string): boolean {
+    const session = authSessions.get(id);
+    if (!session || !session.pending) return false;
+    const { resolve: resolveAnswer } = session.pending;
+    session.pending = null;
+    resolveAnswer(value);
+    return true;
+  }
+
+  function streamAuthSession(req: IncomingMessage, res: ServerResponse, id: string): void {
+    const session = authSessions.get(id);
+    writeSseHead(res);
+    if (!session) {
+      sse(res, null, { type: 'error', message: 'auth session expired' });
+      res.end();
+      return;
+    }
+    const send = (evt: AuthSseEvent): void => sse(res, null, evt);
+    // Replay everything so far (a prompt or the final result may predate this
+    // connection), then subscribe to live events.
+    for (const evt of session.events) send(evt);
+    session.subscribers.add(send);
+    const keepAlive = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        /* client gone */
+      }
+    }, 20_000);
+    keepAlive.unref?.();
+    req.on('close', () => {
+      clearInterval(keepAlive);
+      session.subscribers.delete(send);
+    });
+  }
+
   return async ({ req, res, url, path, method }) => {
     if (path === '/api/extensions' && method === 'GET') {
       sendJson(res, 200, { extensions: listExtensions(deps) });
@@ -401,7 +554,39 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
       }
     }
 
-    // Deferred: /auth/* (OAuth) and /upload (binary). 404 until then.
+    const authAction =
+      /^\/api\/extensions\/([a-z0-9._-]+)\/auth\/(start|stream|answer|cancel)$/i.exec(path);
+    if (authAction) {
+      const name = authAction[1]!;
+      const action = authAction[2]!;
+      if (action === 'start' && method === 'POST') {
+        const r = startAuthSession(name);
+        sendJson(res, r.ok ? 200 : 404, r);
+        return true;
+      }
+      if (action === 'stream' && method === 'GET') {
+        streamAuthSession(req, res, url.searchParams.get('session') ?? '');
+        return true;
+      }
+      if (action === 'answer' && method === 'POST') {
+        const { session, value } = await readJson<{ session?: string; value?: string }>(req);
+        const ok = answerAuthSession(session ?? '', value ?? '');
+        sendJson(res, ok ? 200 : 409, {
+          ok,
+          ...(ok ? {} : { error: 'no question is waiting for an answer' }),
+        });
+        return true;
+      }
+      if (action === 'cancel' && method === 'POST') {
+        const { session } = await readJson<{ session?: string }>(req);
+        const s = session ? authSessions.get(session) : undefined;
+        if (s) closeAuthSession(s);
+        sendJson(res, 200, { ok: true });
+        return true;
+      }
+    }
+
+    // Deferred: /upload (binary). 404 until then.
     return false;
   };
 }
