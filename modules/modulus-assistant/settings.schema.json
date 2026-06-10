@@ -3,7 +3,7 @@
   "properties": {
     "google_client_id": {
       "type": "string",
-      "description": "Google OAuth 2.0 client ID (shared for Calendar + Tasks)."
+      "description": "Google OAuth 2.0 client ID (shared for Calendar + Tasks). Create one at https://console.cloud.google.com/apis/credentials with the Calendar and Tasks APIs enabled."
     },
     "google_client_secret": {
       "type": "string",
@@ -13,7 +13,7 @@
     "google_refresh_token": {
       "type": "string",
       "secret": true,
-      "description": "Long-lived refresh token covering both Calendar and Tasks scopes. Run `modulus auth modulus-assistant` to obtain."
+      "description": "Long-lived refresh token covering both Calendar and Tasks scopes. Don't fill this by hand — the Connect button in the panel (or `modulus auth modulus-assistant` in a terminal) signs in to Google and saves it for you."
     },
     "calendar_id": {
       "type": "string",

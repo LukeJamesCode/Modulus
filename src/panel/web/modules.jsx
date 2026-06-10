@@ -745,7 +745,11 @@ function ModuleDetail({ mod, mods, busy, onBack, onToggle, onUninstall, onSettin
                   size={13}
                   style={{ color: 'var(--warn)', flex: 'none', marginTop: 1 }}
                 />{' '}
-                {mod.nextAction}
+                {mod.status === 'needs_auth'
+                  ? 'Use the Connect button above — it signs in and saves the credentials for you.'
+                  : mod.status === 'needs_settings'
+                    ? 'Open Settings above to fill in the missing values.'
+                    : mod.nextAction}
               </div>
             )}
           </div>

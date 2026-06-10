@@ -1771,7 +1771,7 @@ function StepModuleConfig({ saveRef }) {
   const [authSkipped, setAuthSkipped] = useStateWiz({});
   const [err, setErr] = useStateWiz(null);
 
-  const authGuided = new Set(['modulus-codex', 'modulus-everyday-assistant']);
+  const authGuided = new Set(['modulus-codex', 'modulus-assistant']);
   const authManagedKeys = {
     'modulus-codex': new Set([
       'codex_access_token',
@@ -1780,7 +1780,7 @@ function StepModuleConfig({ saveRef }) {
       'codex_expires_at',
       'codex_account_id',
     ]),
-    'modulus-everyday-assistant': new Set([
+    'modulus-assistant': new Set([
       'google_client_id',
       'google_client_secret',
       'google_refresh_token',

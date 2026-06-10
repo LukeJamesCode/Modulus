@@ -25,7 +25,7 @@ const CAP_LABELS = {
 // Friendly one-liners for the bundled modules, keyed by manifest name. Used
 // to enrich the gallery; falls back to the manifest description when absent.
 const MODULE_BLURBS = {
-  'modulus-everyday-assistant':
+  'modulus-assistant':
     'Google Calendar, tasks, local reminders, weather, and daily briefings — your day, planned.',
   'modulus-voice':
     'Two-way Telegram voice: spoken replies, and transcription of voice notes you send.',

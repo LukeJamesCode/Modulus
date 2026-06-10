@@ -13,8 +13,8 @@ Unified everyday assistant: Google Calendar, Google Tasks, local reminders, weat
 ## Setup
 
 1. Create a Google Cloud project with the **Calendar API** and **Tasks API** enabled. Create an OAuth 2.0 Desktop client.
-2. Run `modulus auth modulus-assistant` and paste the client ID and secret.
-3. Run `modulus config` → `modulus-assistant` to set `default_location` and `time_zone`.
+2. Connect Google: use the panel's Connect button (Modules → Assistant, or the setup wizard) or run `modulus auth modulus-assistant`, and paste the client ID and secret. Either way the refresh token is fetched and saved for you.
+3. Set `default_location` and `time_zone` in the panel's module settings or via `modulus config` → `modulus-assistant`.
 
 See [docs/extensions/modulus-assistant.md](../../docs/extensions/modulus-assistant.md) for the full reference.
 
@@ -24,7 +24,7 @@ See [docs/extensions/modulus-assistant.md](../../docs/extensions/modulus-assista
 | ---------------------- | --------------- | ------------------------------------------------------ |
 | `google_client_id`     | —               | Required                                               |
 | `google_client_secret` | —               | Required (secret)                                      |
-| `google_refresh_token` | —               | Set by `modulus auth` (secret)                          |
+| `google_refresh_token` | —               | Set by the Connect flow / `modulus auth` (secret)       |
 | `calendar_id`          | `primary`       | Calendar to read/write                                 |
 | `default_tasklist`     | `@default`      | Task list to read/write                                |
 | `default_location`     | —               | City for weather and briefings                         |

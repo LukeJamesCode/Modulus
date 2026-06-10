@@ -21,7 +21,7 @@ export function setupCallbackServer(
     port,
     expectedState,
     callbackPath: '/callback',
-    completionMessage: 'Authorization complete. You can close this tab and return to the terminal.',
+    completionMessage: 'Authorization complete. You can close this tab and return to Modulus.',
     noCodeError: 'no code returned by Google',
   });
   return { actualPort, code };
@@ -44,13 +44,26 @@ async function exchangeCode(
       grant_type: 'authorization_code',
     }).toString(),
   });
-  if (!res.ok) throw new Error(`Token exchange failed (${res.status})`);
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = (await res.json()) as { error?: string; error_description?: string };
+      detail = [body.error, body.error_description].filter(Boolean).join(': ');
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(
+      `Token exchange failed (${res.status}${detail ? ` — ${detail}` : ''}). ` +
+        'Double-check the Client ID and Client secret you pasted, then connect again.',
+    );
+  }
   const j = (await res.json()) as { refresh_token?: string };
   if (!j.refresh_token) {
     throw new Error(
-      'Google did not return a refresh_token. ' +
-        'You may have already authorized this app — revoke access at ' +
-        'https://myaccount.google.com/permissions and run `modulus auth` again.',
+      'Google did not return a refresh token. This usually means you already authorized ' +
+        'this app once. To get a fresh one: revoke its access at ' +
+        'https://myaccount.google.com/permissions, then connect again ' +
+        '(the Connect button in the panel, or `modulus auth modulus-assistant` in a terminal).',
     );
   }
   return j.refresh_token;
@@ -66,9 +79,9 @@ export function register(host: Host): void {
           '  2. Enable both the Google Calendar API and the Google Tasks API on the project\n' +
           '  3. Create an OAuth 2.0 client — choose the right type for your setup:\n' +
           '\n' +
-          '     Desktop app  — if you are running `modulus auth` on the same machine\n' +
-          '                    as your browser. Google allows any http://127.0.0.1\n' +
-          '                    port automatically; no redirect URI to register.\n' +
+          '     Desktop app  — if Modulus runs on the same machine as your browser.\n' +
+          '                    Google allows any http://127.0.0.1 port automatically;\n' +
+          '                    no redirect URI to register.\n' +
           '\n' +
           '     Web application — if Modulus runs on a home server / Pi that your\n' +
           '                    browser cannot reach via 127.0.0.1 (e.g. accessed\n' +
