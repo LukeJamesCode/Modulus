@@ -30,6 +30,26 @@ export function readBody(req: IncomingMessage, limitBytes = 256 * 1024): Promise
   });
 }
 
+// SSE plumbing shared by the streaming routes. Pass `event: null` for an
+// unnamed frame — the browser's native EventSource only fires onmessage for
+// those, so GET streams consumed via streamSSE must stay unnamed; the POST
+// chat stream is parsed manually and uses named events.
+export function writeSseHead(res: ServerResponse): void {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-store',
+    connection: 'keep-alive',
+  });
+}
+
+export function sse(res: ServerResponse, event: string | null, data: unknown): void {
+  try {
+    res.write(`${event ? `event: ${event}\n` : ''}data: ${JSON.stringify(data)}\n\n`);
+  } catch {
+    /* client gone */
+  }
+}
+
 export async function readJson<T>(req: IncomingMessage): Promise<T> {
   const raw = await readBody(req);
   if (!raw.trim()) return {} as T;

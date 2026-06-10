@@ -695,6 +695,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
         scheduler,
         agentRegistry,
         agentQueue,
+        agentRuntime,
         llm,
         memory,
         orchestrator,

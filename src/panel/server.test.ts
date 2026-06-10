@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { open as openDb, type DB } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
-import { createAgentRegistry } from '../core/agents.js';
+import { createAgentRegistry, type AgentRunEvent } from '../core/agents.js';
 import { setupMemory } from '../core/memory.js';
 import { createPrefsStore } from '../core/prefs.js';
 import { createScheduler } from '../core/scheduler.js';
@@ -33,6 +33,56 @@ function authed(path: string, init: RequestInit = {}): Promise<Response> {
     ...init,
     headers: { ...(init.headers ?? {}), 'x-modulus-token': token },
   });
+}
+
+// Run-view subscriptions captured by the agentRuntime stub, so tests can play
+// the runtime's part and inject live events.
+const runEventSubs = new Map<number, Set<(e: AgentRunEvent) => void>>();
+function emitRun(taskId: number, e: AgentRunEvent): void {
+  for (const fn of runEventSubs.get(taskId) ?? []) fn(e);
+}
+
+// Incremental SSE frame reader over a fetch response. next() resolves the next
+// data frame (parsed), null on stream end or timeout. Tracks whether any frame
+// carried an event name — the run view must stay unnamed for EventSource.
+function sseFrames(res: Response): {
+  next(timeoutMs?: number): Promise<Record<string, unknown> | null>;
+  readonly sawNamed: boolean;
+} {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let streamDone = false;
+  let sawNamed = false;
+  const queue: Array<Record<string, unknown>> = [];
+  return {
+    async next(timeoutMs = 5000): Promise<Record<string, unknown> | null> {
+      while (queue.length === 0 && !streamDone) {
+        const r = await Promise.race([
+          reader.read(),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs).unref?.()),
+        ]);
+        if (!r) return null; // timed out
+        if (r.done) {
+          streamDone = true;
+          break;
+        }
+        buf += decoder.decode(r.value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf('\n\n')) !== -1) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          if (frame.split('\n').some((l) => l.startsWith('event:'))) sawNamed = true;
+          const dataLine = frame.split('\n').find((l) => l.startsWith('data: '));
+          if (dataLine) queue.push(JSON.parse(dataLine.slice(6)) as Record<string, unknown>);
+        }
+      }
+      return queue.shift() ?? null;
+    },
+    get sawNamed() {
+      return sawNamed;
+    },
+  };
 }
 
 before(async () => {
@@ -60,6 +110,17 @@ before(async () => {
     agentRegistry: createAgentRegistry(db),
     // The exercised routes don't touch the queue or llm; stub them.
     agentQueue: { notify() {} } as unknown as PanelDeps['agentQueue'],
+    agentRuntime: {
+      subscribe(taskId: number, fn: (e: AgentRunEvent) => void): () => void {
+        let set = runEventSubs.get(taskId);
+        if (!set) {
+          set = new Set();
+          runEventSubs.set(taskId, set);
+        }
+        set.add(fn);
+        return () => set.delete(fn);
+      },
+    } as unknown as PanelDeps['agentRuntime'],
     llm: { resolveModel: () => 'test-model' } as unknown as PanelDeps['llm'],
     memory: setupMemory({
       db,
@@ -188,6 +249,63 @@ test('agents validation: create without name is 400', async () => {
     body: JSON.stringify({ systemPrompt: 'x' }),
   });
   assert.equal(res.status, 400);
+});
+
+test('run-view stream snapshots on connect, on live events, and closes on done', async () => {
+  const reg = createAgentRegistry(db);
+  const createRes = await authed('/api/agents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'streamer', systemPrompt: 'say hi' }),
+  });
+  const { agent } = (await createRes.json()) as { agent: { id: number } };
+  const dispatchRes = await authed(`/api/agents/${agent.id}/dispatch`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt: 'go' }),
+  });
+  const { task } = (await dispatchRes.json()) as { task: { id: number } };
+
+  const res = await fetch(
+    `${base}/api/agents/tasks/${task.id}/stream?token=${encodeURIComponent(token)}`,
+  );
+  assert.equal(res.status, 200);
+  const frames = sseFrames(res);
+
+  // Connect: one immediate snapshot of the queued task.
+  const first = await frames.next();
+  assert.equal(first?.['type'], 'snapshot');
+  assert.equal((first?.['task'] as { status: string }).status, 'queued');
+
+  // The runtime picks the task up and streams: a delta event must push a fresh
+  // snapshot (after the coalesce window) without any DB polling.
+  reg.updateTask(task.id, { status: 'running', liveText: 'thinking…' });
+  emitRun(task.id, { type: 'delta', text: 'x' });
+  const second = await frames.next();
+  assert.equal((second?.['task'] as { status: string }).status, 'running');
+  assert.equal((second?.['task'] as { liveText: string }).liveText, 'thinking…');
+
+  // Terminal: the done event pushes the final snapshot and ends the stream.
+  reg.updateTask(task.id, { status: 'done', result: 'hi', finishedAt: Date.now() });
+  emitRun(task.id, { type: 'done', ok: true });
+  const last = await frames.next();
+  assert.equal((last?.['task'] as { status: string }).status, 'done');
+  assert.equal(await frames.next(2000), null);
+  // EventSource.onmessage only fires for unnamed frames — none may be named.
+  assert.equal(frames.sawNamed, false);
+  // The server must drop its subscription once the stream closes.
+  assert.equal(runEventSubs.get(task.id)?.size ?? 0, 0);
+});
+
+test('run-view stream for a missing task reports gone and ends', async () => {
+  const res = await fetch(
+    `${base}/api/agents/tasks/999999/stream?token=${encodeURIComponent(token)}`,
+  );
+  assert.equal(res.status, 200);
+  const frames = sseFrames(res);
+  const first = await frames.next();
+  assert.equal(first?.['type'], 'gone');
+  assert.equal(await frames.next(2000), null);
 });
 
 test('modules: list and command reference respond', async () => {

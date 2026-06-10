@@ -4,10 +4,11 @@
 // In-process the panel uses the daemon's live agent registry and pokes the
 // queue after enqueue so work starts immediately (no poll wait) — but the
 // daemon stays the single executor, so the resource governor is never
-// contended. The live run-view SSE (/api/agents/tasks/:id/stream) is wired in
-// the SSE commit via agentRuntime.subscribe; here it 404s.
+// contended. The live run-view SSE (/api/agents/tasks/:id/stream) subscribes
+// to the runtime's event bus instead of polling checkpointed DB state.
 
 import { writeFileSync } from 'node:fs';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, join, normalize } from 'node:path';
 import { ensurePrivateDir } from '../../cli/config-store.js';
 import {
@@ -24,7 +25,7 @@ import {
   type WorkflowRunStatus,
 } from '../../core/workflows.js';
 import type { ProfileName, ThinkMode } from '../../core/llm.js';
-import { readJson, readRawBody, sendJson } from '../http.js';
+import { readJson, readRawBody, sendJson, sse, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
 import type { PanelDeps } from '../types.js';
 
@@ -118,6 +119,89 @@ function normalizeAgentScheduleInput(body: Record<string, unknown>): {
 export function createAgentRoutes(deps: PanelDeps): RouteModule {
   const reg = deps.agentRegistry;
   const attachmentsDir = join(deps.home, 'agent-attachments');
+
+  // Everything the run view renders for one task: the row, its conversation
+  // transcript, sub-agent children, and saved artifacts.
+  function taskSnapshot(id: number) {
+    const task = reg.getTask(id);
+    if (!task) return null;
+    const transcript = task.conversationId
+      ? (deps.db
+          .prepare(`SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id`)
+          .all(task.conversationId) as Array<{ role: string; content: string }>)
+      : [];
+    const children = reg
+      .listTasks({ parentId: task.id })
+      .map((c) => ({ id: c.id, agentId: c.agentId, status: c.status, prompt: c.prompt }));
+    return { task, transcript, children, artifacts: reg.listArtifacts(id) };
+  }
+
+  // Live run view. In-process we get real runtime events, so snapshots are
+  // pushed on activity instead of Gurney's 1s DB poll. A slow sweep backstops
+  // row mutations that emit no event (cancel/pause written from another
+  // surface). Frames are unnamed: the browser reads this stream through native
+  // EventSource.onmessage, which never fires for named events.
+  function streamTask(req: IncomingMessage, res: ServerResponse, id: number): void {
+    writeSseHead(res);
+    let lastSig = '';
+    let closed = false;
+    let coalesce: ReturnType<typeof setTimeout> | null = null;
+    const finish = (): void => {
+      if (closed) return;
+      closed = true;
+      unsubscribe();
+      clearInterval(sweep);
+      if (coalesce) clearTimeout(coalesce);
+      try {
+        res.end();
+      } catch {
+        /* already closed */
+      }
+    };
+    const push = (): void => {
+      if (closed) return;
+      const snap = taskSnapshot(id);
+      if (!snap) {
+        sse(res, null, { type: 'gone' });
+        finish();
+        return;
+      }
+      // Only push when something the UI cares about actually moved.
+      const sig = JSON.stringify({
+        s: snap.task.status,
+        r: snap.task.roundsUsed,
+        c: snap.task.stepCursor,
+        p: snap.task.plan,
+        res: snap.task.result,
+        m: snap.transcript.length,
+        a: snap.artifacts.length,
+        lt: snap.task.liveText,
+        ch: snap.children.map((ch) => `${ch.id}:${ch.status}`).join(','),
+      });
+      if (sig !== lastSig) {
+        lastSig = sig;
+        sse(res, null, { type: 'snapshot', ...snap });
+      }
+      if (['done', 'error', 'cancelled'].includes(snap.task.status)) finish();
+    };
+    // Deltas arrive per model chunk; coalesce so a fast stream doesn't
+    // serialize a full snapshot per token.
+    const pushSoon = (): void => {
+      if (coalesce || closed) return;
+      coalesce = setTimeout(() => {
+        coalesce = null;
+        push();
+      }, 250);
+    };
+    const unsubscribe = deps.agentRuntime.subscribe(id, (e) => {
+      if (e.type === 'delta') pushSoon();
+      else push();
+    });
+    const sweep = setInterval(push, 2500);
+    sweep.unref?.();
+    req.on('close', finish);
+    push();
+  }
 
   return async ({ req, res, url, path, method }) => {
     // ---- Agents CRUD --------------------------------------------------------
@@ -287,23 +371,14 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
     }
     const taskIdMatch = /^\/api\/agents\/tasks\/(\d+)$/.exec(path);
     if (taskIdMatch && method === 'GET') {
-      const id = Number(taskIdMatch[1]);
-      const task = reg.getTask(id);
-      if (!task) {
+      const snap = taskSnapshot(Number(taskIdMatch[1]));
+      if (!snap) {
         sendJson(res, 404, { error: 'not found' });
         return true;
       }
-      const agent = reg.get(task.agentId);
-      const transcript = task.conversationId
-        ? (deps.db
-            .prepare(`SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id`)
-            .all(task.conversationId) as Array<{ role: string; content: string }>)
-        : [];
-      const children = reg
-        .listTasks({ parentId: task.id })
-        .map((c) => ({ id: c.id, agentId: c.agentId, status: c.status, prompt: c.prompt }));
+      const agent = reg.get(snap.task.agentId);
       sendJson(res, 200, {
-        task,
+        ...snap,
         agentName: agent?.name ?? null,
         agent: agent
           ? {
@@ -312,10 +387,12 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
               maxWallClockMs: agent.maxWallClockMs,
             }
           : null,
-        transcript,
-        children,
-        artifacts: reg.listArtifacts(task.id),
       });
+      return true;
+    }
+    const streamMatch = /^\/api\/agents\/tasks\/(\d+)\/stream$/.exec(path);
+    if (streamMatch && method === 'GET') {
+      streamTask(req, res, Number(streamMatch[1]));
       return true;
     }
     const cancelMatch = /^\/api\/agents\/tasks\/(\d+)\/cancel$/.exec(path);

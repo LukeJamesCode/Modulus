@@ -13,7 +13,7 @@ import type { ModulusConfig } from '../../cli/config-store.js';
 import type { TelegramInterceptContext } from '../../core/extensions.js';
 import type { ThinkMode } from '../../core/llm.js';
 import type { ToolContext, ToolHandler } from '../../core/tools.js';
-import { readJson, sendJson } from '../http.js';
+import { readJson, sendJson, sse as sseWrite, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
 import type { PanelDeps } from '../types.js';
 
@@ -65,18 +65,8 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
     const { chatId, userId } = owner;
     const thinkMode = parseThinkMode(body.thinkMode);
 
-    res.writeHead(200, {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-store',
-      connection: 'keep-alive',
-    });
-    const sse = (event: string, data: unknown): void => {
-      try {
-        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-      } catch {
-        /* client gone */
-      }
-    };
+    writeSseHead(res);
+    const sse = (event: string, data: unknown): void => sseWrite(res, event, data);
 
     const controller = new AbortController();
 
