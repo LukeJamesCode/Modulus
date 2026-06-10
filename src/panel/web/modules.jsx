@@ -4,9 +4,10 @@
 // settings schema). Enable/disable/uninstall shell out to the `modulus` CLI on
 // the server; settings are read/written through the SQLite settings store.
 //
-// Note: there's no "app store" of remotely-installable modules — you add new
-// ones with `modulus ext install <path|git-url>`. So this tab manages what's
-// present rather than offering a catalog to install from.
+// "Browse marketplace" switches to MarketplaceView, which lists modules from the
+// registry (GET /api/modules/registry) and installs them through the consent-
+// gated POST /api/modules/registry/install. Local/git installs still go through
+// the CLI (`modulus mod install <path|git-url>`).
 const { useState: useStateExt, useEffect: useEffectExt, useRef: useRefExt } = React;
 
 function ModulesTab() {
@@ -19,6 +20,7 @@ function ModulesTab() {
   const [authFor, setAuthFor] = useStateExt(null); // ext name being connected
   const [busy, setBusy] = useStateExt(null); // name currently mutating
   const [setupPromptDismissed, setSetupPromptDismissed] = useStateExt(false);
+  const [view, setView] = useStateExt('installed'); // installed | browse
 
   const load = async () => {
     const r = await window.api.get('/api/modules');
@@ -100,6 +102,17 @@ function ModulesTab() {
     );
   }
 
+  if (view === 'browse') {
+    return (
+      <MarketplaceView
+        onBack={() => {
+          setView('installed');
+          load();
+        }}
+      />
+    );
+  }
+
   const visibleExts = exts.filter((e) => !e.self);
   const enabled = visibleExts.filter((e) => e.enabled);
   const disabled = visibleExts.filter((e) => !e.enabled);
@@ -133,9 +146,15 @@ function ModulesTab() {
             { value: 'disabled', label: `Disabled (${disabled.length})` },
           ]}
         />
-        <span style={{ marginLeft: 'auto', fontSize: 12.5, color: 'var(--text-3)' }}>
-          Add more with <span className="mono">modulus ext install</span>
-        </span>
+        <window.Button
+          size="sm"
+          variant="default"
+          icon="plus"
+          onClick={() => setView('browse')}
+          style={{ marginLeft: 'auto' }}
+        >
+          Browse marketplace
+        </window.Button>
       </div>
 
       {visibleExts.length === 0 && !error && (
@@ -1354,6 +1373,277 @@ function DropZoneInput({ extName, value, onChange }) {
         }}
       />
     </div>
+  );
+}
+
+/* ---- marketplace (browse + install from the registry) ---- */
+// Browses GET /api/modules/registry and installs via POST .../install. The
+// install is gated by a consent modal listing the module's permissions; we only
+// POST acceptAdded:true once the user has seen and confirmed them, so the
+// server's fail-closed consent gate is never bypassed silently.
+function MarketplaceView({ onBack }) {
+  const [mods, setMods] = useStateExt(null); // null = loading
+  const [error, setError] = useStateExt(null);
+  const [consent, setConsent] = useStateExt(null); // entry awaiting confirmation
+  const [busy, setBusy] = useStateExt(null); // name installing
+  const [installError, setInstallError] = useStateExt(null);
+
+  const load = async () => {
+    setError(null);
+    setMods(null);
+    const r = await window.api.get('/api/modules/registry');
+    if (r.ok) setMods(r.data.modules || []);
+    else setError((r.data && r.data.error) || r.error || 'Could not reach the marketplace.');
+  };
+  useEffectExt(() => {
+    load();
+  }, []);
+
+  const install = async (entry) => {
+    setBusy(entry.name);
+    setInstallError(null);
+    const r = await window.api.post('/api/modules/registry/install', {
+      name: entry.name,
+      acceptAdded: true,
+    });
+    setBusy(null);
+    setConsent(null);
+    if (r.ok) load();
+    else setInstallError((r.data && r.data.error) || r.error || `Could not install ${entry.name}.`);
+  };
+
+  return (
+    <div className="fade">
+      <button
+        onClick={onBack}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          background: 'none',
+          border: 'none',
+          color: 'var(--text-2)',
+          cursor: 'pointer',
+          fontSize: 13.5,
+          fontWeight: 600,
+          marginBottom: 16,
+          padding: 0,
+        }}
+      >
+        <window.Icon name="back" size={16} /> Installed modules
+      </button>
+
+      <window.SectionTitle sub="Modules published to the Modulus registry. Each shows exactly what it can access before you install it.">
+        Marketplace
+      </window.SectionTitle>
+
+      {installError && <ErrorNote text={installError} />}
+      {error && <ErrorNote text={error} onRetry={load} />}
+
+      {mods === null && !error && (
+        <p style={{ fontSize: 13.5, color: 'var(--text-3)' }}>Loading the marketplace…</p>
+      )}
+
+      {mods !== null && mods.length === 0 && !error && (
+        <div
+          style={{
+            textAlign: 'center',
+            padding: '50px 20px',
+            border: '1px dashed var(--border-2)',
+            borderRadius: 'var(--radius)',
+            color: 'var(--text-3)',
+          }}
+        >
+          <window.Icon name="plug" size={28} style={{ margin: '0 auto 10px' }} />
+          <p style={{ fontSize: 14, color: 'var(--text-2)', fontWeight: 600 }}>
+            No modules published yet
+          </p>
+          <p style={{ fontSize: 13, marginTop: 3 }}>
+            The registry is empty right now — check back soon.
+          </p>
+        </div>
+      )}
+
+      {mods !== null && mods.length > 0 && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))',
+            gap: 'calc(16px * var(--gap))',
+          }}
+        >
+          {mods.map((m) => (
+            <MarketCard
+              key={m.name}
+              entry={m}
+              busy={busy === m.name}
+              onInstall={() => setConsent(m)}
+            />
+          ))}
+        </div>
+      )}
+
+      <ConsentModal
+        entry={consent}
+        busy={!!busy}
+        onCancel={() => setConsent(null)}
+        onConfirm={() => consent && install(consent)}
+      />
+    </div>
+  );
+}
+
+function MarketCard({ entry, busy, onInstall }) {
+  const name = { name: entry.name }; // ExtGlyph/prettyName take an object with .name
+  const action = entry.updateAvailable ? 'Update' : entry.installed ? 'Installed' : 'Install';
+  return (
+    <div
+      style={{
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
+        boxShadow: 'var(--shadow-sm)',
+        display: 'flex',
+        flexDirection: 'column',
+        padding: 18,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+        <ExtGlyph ext={name} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 15.5 }}>
+            {entry.displayName || prettyName(name)}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+            v{entry.version}
+            {entry.installed && entry.installedVersion
+              ? ` · installed v${entry.installedVersion}`
+              : ''}
+          </div>
+        </div>
+      </div>
+      <p
+        style={{
+          fontSize: 13.5,
+          color: 'var(--text-2)',
+          lineHeight: 1.5,
+          marginBottom: 14,
+          minHeight: 40,
+        }}
+      >
+        {entry.description || 'No description provided.'}
+      </p>
+      <div style={{ marginBottom: 14 }}>
+        <div
+          style={{
+            fontSize: 11.5,
+            fontWeight: 700,
+            color: 'var(--text-3)',
+            textTransform: 'uppercase',
+            letterSpacing: '.05em',
+            marginBottom: 6,
+          }}
+        >
+          Can access
+        </div>
+        <ul
+          style={{
+            margin: 0,
+            paddingLeft: 16,
+            fontSize: 12.5,
+            color: 'var(--text-2)',
+            lineHeight: 1.5,
+          }}
+        >
+          {(entry.permissions || ['Needs no special permissions']).map((p, i) => (
+            <li key={i}>{p}</li>
+          ))}
+        </ul>
+      </div>
+      <div style={{ marginTop: 'auto', display: 'flex', justifyContent: 'flex-end' }}>
+        {entry.installed && !entry.updateAvailable ? (
+          <window.Badge tone="ok">
+            <window.Icon name="check" size={11} /> Installed
+          </window.Badge>
+        ) : (
+          <window.Button
+            size="sm"
+            variant={entry.updateAvailable ? 'default' : 'primary'}
+            icon={busy ? undefined : 'plus'}
+            onClick={onInstall}
+            disabled={busy}
+          >
+            {busy ? (
+              <>
+                <window.Icon name="refresh" size={14} className="spin" /> Installing…
+              </>
+            ) : (
+              action
+            )}
+          </window.Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ConsentModal({ entry, busy, onCancel, onConfirm }) {
+  if (!entry) return null;
+  const perms = entry.permissions || [];
+  const noPerms = perms.length === 0 || (perms.length === 1 && /^Needs no special/.test(perms[0]));
+  return (
+    <window.Modal
+      open={!!entry}
+      onClose={busy ? () => {} : onCancel}
+      width={520}
+      title={`Install ${entry.displayName || prettyName({ name: entry.name })}?`}
+      footer={
+        <>
+          <window.Button variant="ghost" onClick={onCancel} disabled={busy}>
+            Cancel
+          </window.Button>
+          <window.Button
+            variant="primary"
+            icon={busy ? undefined : 'check'}
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? (
+              <>
+                <window.Icon name="refresh" size={16} className="spin" /> Installing…
+              </>
+            ) : (
+              'Install'
+            )}
+          </window.Button>
+        </>
+      }
+    >
+      <p style={{ fontSize: 13.5, color: 'var(--text-2)', marginBottom: 12 }}>
+        This downloads <span className="mono">{entry.name}</span> v{entry.version} from the
+        registry, verifies it, and loads it into Modulus. By installing you grant it:
+      </p>
+      {noPerms ? (
+        <p style={{ fontSize: 13.5, color: 'var(--text-2)' }}>
+          <window.Icon name="shield" size={14} style={{ verticalAlign: 'middle' }} /> Needs no
+          special access.
+        </p>
+      ) : (
+        <ul
+          style={{
+            margin: 0,
+            paddingLeft: 18,
+            fontSize: 13.5,
+            color: 'var(--text)',
+            lineHeight: 1.6,
+          }}
+        >
+          {perms.map((p, i) => (
+            <li key={i}>{p}</li>
+          ))}
+        </ul>
+      )}
+    </window.Modal>
   );
 }
 
