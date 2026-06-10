@@ -174,7 +174,7 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
         await item.handler(ictx);
       } catch (e) {
         deps.log.warn('panel chat intercept failed', {
-          ext: item.module,
+          mod: item.module,
           error: e instanceof Error ? e.message : String(e),
         });
       }

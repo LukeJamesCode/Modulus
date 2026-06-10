@@ -20,6 +20,7 @@ import { createChatRoutes } from './routes/chat.js';
 import { createMarketplaceRoutes } from './routes/marketplace.js';
 import { createModuleRoutes } from './routes/modules.js';
 import { createSettingsRoutes } from './routes/settings.js';
+import { createSetupRoutes } from './routes/setup.js';
 import { createSystemRoutes } from './routes/system.js';
 import type { PanelDeps, PanelHandle, PanelRuntime } from './types.js';
 
@@ -97,6 +98,7 @@ export async function createPanel(deps: PanelDeps): Promise<PanelHandle> {
     createMarketplaceRoutes(deps),
     createModuleRoutes(deps),
     createSettingsRoutes(deps),
+    createSetupRoutes(deps),
   ];
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -152,6 +154,12 @@ export async function createPanel(deps: PanelDeps): Promise<PanelHandle> {
     token,
     close: () =>
       new Promise<void>((resolveClose) => {
+        // Destroy idle keep-alive + open SSE sockets first. server.close() only
+        // stops accepting and waits for existing connections to end on their
+        // own; a long-lived SSE stream (logs, module enable, ollama pull) would
+        // otherwise keep the port held — which hangs promotion, where the full
+        // daemon must rebind this exact port right after the setup server closes.
+        server.closeAllConnections?.();
         server.close(() => resolveClose());
       }),
   };

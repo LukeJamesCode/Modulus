@@ -21,7 +21,7 @@ test('setupModule runs optional module setup entrypoint', async () => {
         '}',
       ].join('\n'),
     );
-    const ext: DiscoveredModule = {
+    const mod: DiscoveredModule = {
       name: 'demo',
       folder,
       manifest: {
@@ -36,7 +36,7 @@ test('setupModule runs optional module setup entrypoint', async () => {
       log: createLogger({ level: 'error', out: () => {}, err: () => {} }),
     });
     try {
-      await setupModule(ext, db, dir);
+      await setupModule(mod, db, dir);
       const row = db
         .prepare(`SELECT value FROM module_settings WHERE module = ? AND key = ?`)
         .get('demo', 'native_ready') as { value: string } | undefined;

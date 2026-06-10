@@ -261,21 +261,21 @@ test('filterToolRegistry: scopes by tool name or module and fails closed on exec
   });
 
   // Allow by module name.
-  const byExt = filterToolRegistry(base, agentToolPredicate(['extA']));
+  const byModule = filterToolRegistry(base, agentToolPredicate(['extA']));
   assert.deepEqual(
-    byExt.list().map((h) => h.name),
+    byModule.list().map((h) => h.name),
     ['echo'],
   );
   assert.deepEqual(
-    byExt.schemas().map((s) => s.function.name),
+    byModule.schemas().map((s) => s.function.name),
     ['echo'],
   );
-  assert.equal(byExt.get('secret'), undefined);
+  assert.equal(byModule.get('secret'), undefined);
 
   // A hidden tool must fail closed even if its name is forced past the manifest
   // — this is the guard that stops a delegated worker reaching a tool outside
   // its grant via an auto-routed/forced call.
-  const res = await byExt.execute(
+  const res = await byModule.execute(
     { id: 'x', name: 'secret', arguments: {} },
     { log: silentLogger() },
   );

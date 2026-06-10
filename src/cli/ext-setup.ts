@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { open as openDb, type DB } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
-import { runAuthForExt, type DiscoveredModule } from './auth.js';
+import { runAuthForModule, type DiscoveredModule } from './auth.js';
 import type {
   ModuleSettings,
   ModuleSetupContext,
@@ -19,7 +19,7 @@ import type {
   SetupEntrypointModule,
 } from '../core/modules.js';
 import { effectiveConfig, homeDir } from './config-store.js';
-import { ensureNpmDeps } from '../core/module-npm-deps.js';
+import { ensureNpmDeps, readInstalledVersions } from '../core/module-npm-deps.js';
 
 export type { DiscoveredModule };
 
@@ -35,7 +35,7 @@ export interface SettingsPromptIO {
 }
 
 export async function promptRemainingSettings(
-  extName: string,
+  moduleName: string,
   folder: string,
   db: DB,
   ioOverride?: SettingsPromptIO,
@@ -51,7 +51,7 @@ export async function promptRemainingSettings(
 
   const alreadySet = new Set(
     (
-      db.prepare(`SELECT key FROM module_settings WHERE module = ?`).all(extName) as Array<{
+      db.prepare(`SELECT key FROM module_settings WHERE module = ?`).all(moduleName) as Array<{
         key: string;
       }>
     ).map((r) => r.key),
@@ -71,7 +71,7 @@ export async function promptRemainingSettings(
     if (alreadySet.has(key)) continue;
     if (def.secret) continue; // secrets belong to the auth flow
     if (
-      extName === 'modulus-voice' &&
+      moduleName === 'modulus-voice' &&
       (key === 'piper_bin' || key === 'ffmpeg_bin' || key === 'whisper_bin')
     )
       continue;
@@ -88,7 +88,7 @@ export async function promptRemainingSettings(
             default: hasDefault ? Boolean(def.default) : false,
           });
       if (!hasDefault || ans !== Boolean(def.default)) {
-        insertSetting.run(extName, key, ans ? 'true' : 'false', Date.now());
+        insertSetting.run(moduleName, key, ans ? 'true' : 'false', Date.now());
       }
       continue;
     }
@@ -113,34 +113,34 @@ export async function promptRemainingSettings(
       else process.stdout.write(`    (not a number, skipped)\n`);
       continue;
     }
-    insertSetting.run(extName, key, trimmed, Date.now());
+    insertSetting.run(moduleName, key, trimmed, Date.now());
   }
 }
 
-function upsertSetting(db: DB, extName: string, key: string, value: string): void {
+function upsertSetting(db: DB, moduleName: string, key: string, value: string): void {
   db.prepare(
     `INSERT INTO module_settings (module, key, value, updated_at)
      VALUES (?, ?, ?, ?)
      ON CONFLICT(module, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  ).run(extName, key, value, Date.now());
+  ).run(moduleName, key, value, Date.now());
 }
 
-function setupSettings(db: DB, extName: string): ModuleSettings {
+function setupSettings(db: DB, moduleName: string): ModuleSettings {
   return {
     get<T = unknown>(key: string, fallback?: T): T {
       const row = db
         .prepare(`SELECT value FROM module_settings WHERE module = ? AND key = ?`)
-        .get(extName, key) as { value: string } | undefined;
+        .get(moduleName, key) as { value: string } | undefined;
       if (!row) return fallback as T;
       return row.value as T;
     },
     set(key: string, value: string | number | boolean): void {
-      upsertSetting(db, extName, key, String(value));
+      upsertSetting(db, moduleName, key, String(value));
     },
     all(): Record<string, string | number | boolean> {
       const rows = db
         .prepare(`SELECT key, value FROM module_settings WHERE module = ?`)
-        .all(extName) as Array<{ key: string; value: string }>;
+        .all(moduleName) as Array<{ key: string; value: string }>;
       return Object.fromEntries(rows.map((row) => [row.key, row.value]));
     },
   };
@@ -156,74 +156,100 @@ export interface NativeDepsSetupOptions {
 }
 
 async function runSetupEntrypoint(
-  ext: DiscoveredModule,
+  mod: DiscoveredModule,
   db: DB,
   home: string,
   opts: NativeDepsSetupOptions = {},
 ): Promise<void> {
-  const entry = ext.manifest.entrypoints?.setup;
+  const entry = mod.manifest.entrypoints?.setup;
   if (!entry) return;
-  const setupPath = join(ext.folder, entry);
+  const setupPath = join(mod.folder, entry);
   const stdout = opts.stdout ?? ((text: string) => process.stdout.write(text));
   if (!existsSync(setupPath)) {
     stdout(`  Setup entrypoint not found: ${entry}\n`);
     return;
   }
   const mtime = statSync(setupPath).mtimeMs;
-  const mod = (await import(
+  const setupMod = (await import(
     `${pathToFileURL(setupPath).href}?v=${mtime}`
   )) as SetupEntrypointModule;
-  const fn = mod.setup ?? mod.run;
+  const fn = setupMod.setup ?? setupMod.run;
   if (!fn) {
     stdout(`  Setup entrypoint has no setup(ctx) or run(ctx) export: ${entry}\n`);
     return;
   }
   const ctx: ModuleSetupContext = {
-    name: ext.name,
-    folder: ext.folder,
+    name: mod.name,
+    folder: mod.folder,
     home,
     db,
     interactive: opts.interactive ?? (process.stdin.isTTY && process.stdout.isTTY),
     stdout,
-    settings: setupSettings(db, ext.name),
-    ensureNpmDeps: (deps) => ensureNpmDeps(deps, { folder: ext.folder, stdout }),
+    settings: setupSettings(db, mod.name),
+    ensureNpmDeps: async (deps) => {
+      const ok = await ensureNpmDeps(deps, { folder: mod.folder, stdout });
+      // Record the exact versions that landed so `modulus status` can report
+      // what's pinned. Only on success, and only what actually resolves —
+      // a failed install leaves the prior record (if any) untouched.
+      if (ok && deps.length > 0) {
+        recordModuleNpmDeps(db, mod, readInstalledVersions(mod.folder, deps));
+      }
+      return ok;
+    },
   };
   await fn(ctx);
 }
 
+// Persist the exact installed npm dep versions onto the module's state row.
+// INSERT-or-merge so it works whether the loader has created the row yet or not
+// (on a fresh install, setup runs before the first load); only npm_deps is
+// touched, so any existing enabled/installed_at survive.
+function recordModuleNpmDeps(
+  db: DB,
+  mod: DiscoveredModule,
+  versions: Record<string, string>,
+): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO module_state (name, version, enabled, installed_at, last_loaded_at, npm_deps)
+     VALUES (?, ?, 1, ?, ?, ?)
+     ON CONFLICT(name) DO UPDATE SET npm_deps = excluded.npm_deps`,
+  ).run(mod.name, mod.manifest.version, now, now, JSON.stringify(versions));
+}
+
 export async function configureNativeDepsForModule(
-  ext: DiscoveredModule,
+  mod: DiscoveredModule,
   db: DB,
   home: string = homeDir(),
   opts: NativeDepsSetupOptions = {},
 ): Promise<void> {
-  await runSetupEntrypoint(ext, db, home, opts);
+  await runSetupEntrypoint(mod, db, home, opts);
 }
 
 // Run the auth + settings wizard for one module using an already-open DB.
 // Returns true if auth succeeded (or wasn't needed), false if auth failed.
 export async function setupModule(
-  ext: DiscoveredModule,
+  mod: DiscoveredModule,
   db: DB,
   home: string = homeDir(),
 ): Promise<boolean> {
-  process.stdout.write(`\nConfiguring ${ext.name}…\n`);
+  process.stdout.write(`\nConfiguring ${mod.name}…\n`);
   let authOk = true;
 
-  if (ext.manifest.entrypoints?.auth) {
+  if (mod.manifest.entrypoints?.auth) {
     try {
-      await runAuthForExt(ext, db);
+      await runAuthForModule(mod, db);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       process.stdout.write(`  ✗ Auth failed: ${msg}\n`);
-      process.stdout.write(`  Run \`modulus auth ${ext.name}\` to retry.\n`);
+      process.stdout.write(`  Run \`modulus auth ${mod.name}\` to retry.\n`);
       authOk = false;
     }
   }
 
-  await promptRemainingSettings(ext.name, ext.folder, db);
-  await configureNativeDepsForModule(ext, db, home);
-  process.stdout.write(`  ✓ ${ext.name} configured.\n`);
+  await promptRemainingSettings(mod.name, mod.folder, db);
+  await configureNativeDepsForModule(mod, db, home);
+  process.stdout.write(`  ✓ ${mod.name} configured.\n`);
   return authOk;
 }
 
@@ -236,9 +262,9 @@ export async function setupModules(home: string, selected: DiscoveredModule[]): 
   const needsAuthLater: string[] = [];
 
   try {
-    for (const ext of selected) {
-      const ok = await setupModule(ext, db, home);
-      if (!ok) needsAuthLater.push(ext.name);
+    for (const mod of selected) {
+      const ok = await setupModule(mod, db, home);
+      if (!ok) needsAuthLater.push(mod.name);
     }
   } finally {
     try {

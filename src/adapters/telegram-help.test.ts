@@ -69,7 +69,7 @@ test('each view has at most 4 buttons scoped to its own actions', () => {
   assert.deepEqual(helpFlat, [{ text: '💬 New chat', action: 'core:newchat' }]);
 
   // modules: refresh + up to 3 module shortcuts, no nav buttons
-  const extFlat = buildTelegramButtonRows('modules', {
+  const moduleFlat = buildTelegramButtonRows('modules', {
     moduleCommands: [
       {
         module: 'modulus-weather',
@@ -79,11 +79,11 @@ test('each view has at most 4 buttons scoped to its own actions', () => {
       },
     ],
   }).flat();
-  assert.ok(extFlat.some((b) => b.action === 'ext:weather'));
-  assert.ok(extFlat.some((b) => b.action === 'core:modules'));
-  assert.ok(extFlat.length <= 4);
-  assert.ok(!extFlat.some((b) => b.action === 'core:help'));
-  assert.ok(!extFlat.some((b) => b.action === 'core:model'));
+  assert.ok(moduleFlat.some((b) => b.action === 'module:weather'));
+  assert.ok(moduleFlat.some((b) => b.action === 'core:modules'));
+  assert.ok(moduleFlat.length <= 4);
+  assert.ok(!moduleFlat.some((b) => b.action === 'core:help'));
+  assert.ok(!moduleFlat.some((b) => b.action === 'core:model'));
 
   // home: navigation buttons only
   const homeFlat = buildTelegramButtonRows('home').flat();

@@ -1,4 +1,3 @@
-/* global React, window */
 // Dashboard — Modulus's home surface. A general control center: a system-health
 // strip (CPU / RAM / queue / errors, from the `system` block on /api/state) plus
 // the two ways to talk to the agent — Chat Hub and Voice Hub — folded into one
@@ -13,7 +12,7 @@ function useSurface(voiceEnabled) {
   const [surface, setSurface] = useState(() => {
     try {
       return localStorage.getItem(SURFACE_KEY) || 'chat';
-    } catch (e) {
+    } catch {
       return 'chat';
     }
   });
@@ -22,7 +21,7 @@ function useSurface(voiceEnabled) {
   useEffect(() => {
     try {
       localStorage.setItem(SURFACE_KEY, effective);
-    } catch (e) {
+    } catch {
       /* ignore */
     }
   }, [effective]);

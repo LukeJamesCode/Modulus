@@ -61,7 +61,9 @@ import { createPrefsStore } from '../core/prefs.js';
 import { createMetricsWriter } from '../core/metrics.js';
 import { createTelegram } from '../adapters/telegram.js';
 import { createInstantResponder } from '../core/instant-responses.js';
-import { effectiveConfig, ensurePrivateDir, homeDir } from './config-store.js';
+import { effectiveConfig, ensurePrivateDir, homeDir, type ModulusConfig } from './config-store.js';
+import { startSetupServer } from './setup-mode.js';
+import { openBrowser } from './open-browser.js';
 import {
   clearPid,
   isAlive,
@@ -73,6 +75,7 @@ import {
 } from './daemon.js';
 import { createPanel, type PanelHandle } from '../panel/server.js';
 import { createPanelConfirmBus } from '../panel/confirm-bus.js';
+import { createPairingManager } from '../panel/telegram-pairing.js';
 import { HOST_VERSION } from '../core/version.js';
 
 export interface StartRunOptions {
@@ -80,15 +83,23 @@ export interface StartRunOptions {
   // Skip starting the in-process web panel. Used by the detached parent (the
   // child owns the panel) and by a restart that only wants the agent.
   agentOnly?: boolean;
+  // Don't auto-open the browser when entering setup mode (CI / headless).
+  noOpen?: boolean;
+  // Bind the panel to 0.0.0.0 for this run (Pi / headless), session-only.
+  lan?: boolean;
 }
 
-function defaultModuleRoots(home: string): string[] {
+// Telegram tokens are <bot-id>:<30+ char secret>. Used both to gate the full
+// boot and to decide whether a fresh install drops into web-first setup.
+const TOKEN_SHAPE = /^[0-9]+:[A-Za-z0-9_-]{30,}$/;
+
+export function defaultModuleRoots(home: string): string[] {
   const userDir = join(home, 'modules');
   // First-party modules live in <repo>/modules in dev. Resolve relative
   // to this file, then fall back to the cwd if it doesn't exist.
   const here = dirname(fileURLToPath(import.meta.url));
-  const repoExt = resolve(here, '..', '..', 'modules');
-  return [userDir, repoExt];
+  const repoModule = resolve(here, '..', '..', 'modules');
+  return [userDir, repoModule];
 }
 
 function knownAllowedChats(
@@ -147,487 +158,492 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   if (existing) clearPid(home);
 
   const cfg = effectiveConfig(home);
-  // Validate the config in the parent — before any fork — so a missing or
-  // malformed token fails loudly here instead of crashing a detached child
-  // that the parent already reported as "started in background".
-  if (!cfg.telegram.token) {
-    throw new Error("Telegram bot token is not set. Run 'modulus init' or set TELEGRAM_BOT_TOKEN.");
-  }
-  // Telegram tokens are <bot-id>:<secret> with a 30+ char secret. Catching a
-  // truncated or wrong-format token here is cheaper than booting grammY,
-  // failing the first long-poll, and chewing through the circuit breaker.
-  if (!/^[0-9]+:[A-Za-z0-9_-]{30,}$/.test(cfg.telegram.token)) {
-    throw new Error('Telegram bot token has an invalid shape.');
-  }
-  if (cfg.telegram.allowedIds.length === 0) {
-    throw new Error(
-      "No Telegram user IDs are allowlisted. Run 'modulus init' or set TELEGRAM_ALLOWED_IDS.",
-    );
+  // A fresh or half-configured install (no valid token, or no one allowlisted)
+  // boots into web-first setup instead of failing: we serve the wizard in the
+  // browser and promote to the full daemon once it's finished.
+  const configured = TOKEN_SHAPE.test(cfg.telegram.token) && cfg.telegram.allowedIds.length > 0;
+
+  if (!configured) {
+    if (options.detach) {
+      // A detached, stdio-ignored setup server with no browser would be a trap
+      // (nothing to interact with) — fall through to the foreground instead.
+      process.stdout.write(
+        "Modulus isn't set up yet — running setup in the foreground so you can finish in the browser.\n",
+      );
+    }
+    // Hold the pid lock across both the setup server and the promoted daemon so
+    // a second `modulus start` can't race in while the wizard is open.
+    if (!tryAcquirePidLock(process.pid, home)) {
+      throw new Error("modulus is already starting. Use 'modulus stop' first if this is stale.");
+    }
+    await runSetupAndPromote(home, options);
+    return;
   }
 
   if (options.detach) {
     // The child runs `modulus start` in the foreground and owns the panel
-    // itself (it hits the startPanel path below), so the parent must not also
-    // spawn one — that would double-spawn. Forward --agent-only to the child.
+    // itself, so the parent must not also spawn one — that would double-spawn.
+    // Forward --agent-only to the child.
     detach(home, options.agentOnly ?? false);
     return;
   }
 
   // Acquire the PID file as an atomic lock before the (slow) boot. This closes
   // the race where two near-simultaneous starts both pass the readPid guard
-  // above and then both wire up a full daemon. We've already validated config,
-  // so a lingering lock here only ever points at a real boot attempt; if that
-  // boot crashes, the next start's isAlive() check reaps the dead pid.
+  // above and then both wire up a full daemon. If that boot crashes, the next
+  // start's isAlive() check reaps the dead pid.
   if (!tryAcquirePidLock(process.pid, home)) {
     throw new Error("modulus is already starting. Use 'modulus stop' first if this is stale.");
   }
 
+  await bootDaemon(home, cfg, options);
+}
+
+// Boot the full daemon: engine → modules → Telegram adapter → scheduler →
+// panel. Extracted verbatim from run() so setup-mode promotion can call it
+// directly. The pid lock is owned by the caller (run) and held for the process
+// lifetime — bootDaemon must never (re)acquire it. On a wiring throw it
+// best-effort unwinds what it created (via the `cleanups` registry) so a
+// promotion retry can re-bind the port / re-open the DB, then rethrows.
+async function bootDaemon(
+  home: string,
+  cfg: ModulusConfig,
+  options: StartRunOptions,
+): Promise<void> {
   const log = createLogger({
     level: cfg.logLevel ?? 'info',
     file: logFilePath(home),
   });
 
-  const db = openDb({ path: join(home, 'modulus.db'), log });
+  // Resources are registered here as they come online; on a throw before the
+  // daemon is fully live we run them in reverse to release the DB handle, the
+  // panel port, and the Telegram long-poll.
+  const cleanups: Array<() => Promise<void> | void> = [];
+  try {
+    const db = openDb({ path: join(home, 'modulus.db'), log });
+    cleanups.push(() => {
+      db.close();
+    });
 
-  // num_predict / keep_alive / num_ctx defaults scale with the configured
-  // hardware tier (see profilesForTier). The base values are ATLAS's
-  // production tuning for qwen3.5 family models — a num_predict cap so Ollama
-  // doesn't ramble hundreds of tokens past a natural stop (real seconds on
-  // CPU), and a keep_alive bumped above Ollama's 5m default so back-to-back
-  // turns don't pay a cold reload. The heavy/standard tiers widen the context
-  // window and prompt budget to use the RAM those machines actually have.
-  const {
-    profiles,
-    budgetTokens,
-    idleEvictionMs: tierIdleMs,
-    toolResultMaxChars,
-  } = profilesForTier(cfg.tier, cfg.models);
-
-  // Optional resilience tunables. We surface these as env knobs (rather than
-  // baking them into config.json) because they're operational levers an
-  // operator might want to flip without touching the config file. The explicit
-  // env value wins; otherwise the tier-scaled default applies (a 32 GB host
-  // keeps heavy models warm far longer than a Pi).
-  const idleEvictionMs = envInt('MODULUS_HEAVY_IDLE_MS') ?? tierIdleMs;
-  const inferenceTimeoutMs = envInt('MODULUS_INFERENCE_TIMEOUT_MS');
-
-  const llm = createRoutedLLM(
-    createOllama({
-      baseUrl: cfg.ollama.url,
+    // num_predict / keep_alive / num_ctx defaults scale with the configured
+    // hardware tier (see profilesForTier). The base values are ATLAS's
+    // production tuning for qwen3.5 family models — a num_predict cap so Ollama
+    // doesn't ramble hundreds of tokens past a natural stop (real seconds on
+    // CPU), and a keep_alive bumped above Ollama's 5m default so back-to-back
+    // turns don't pay a cold reload. The heavy/standard tiers widen the context
+    // window and prompt budget to use the RAM those machines actually have.
+    const {
       profiles,
+      budgetTokens,
+      idleEvictionMs: tierIdleMs,
+      toolResultMaxChars,
+    } = profilesForTier(cfg.tier, cfg.models);
+
+    // Optional resilience tunables. We surface these as env knobs (rather than
+    // baking them into config.json) because they're operational levers an
+    // operator might want to flip without touching the config file. The explicit
+    // env value wins; otherwise the tier-scaled default applies (a 32 GB host
+    // keeps heavy models warm far longer than a Pi).
+    const idleEvictionMs = envInt('MODULUS_HEAVY_IDLE_MS') ?? tierIdleMs;
+    const inferenceTimeoutMs = envInt('MODULUS_INFERENCE_TIMEOUT_MS');
+
+    const llm = createRoutedLLM(
+      createOllama({
+        baseUrl: cfg.ollama.url,
+        profiles,
+        log,
+        idleEvictionMs,
+        ...(inferenceTimeoutMs !== undefined ? { inferenceTimeoutMs } : {}),
+      }),
+      // Routed providers inherit the same hard inference cap as the base, so a
+      // hung provider can't wedge the user queue.
+      inferenceTimeoutMs !== undefined ? { providerTimeoutMs: inferenceTimeoutMs } : {},
+    );
+
+    // Confirm-tier gate. The Telegram adapter (built further down) provides the
+    // real Yes/No prompt; until then this fails closed so a confirm-tier tool can
+    // never run unconfirmed during the startup window.
+    let confirmToolCall: (
+      handler: ToolHandler,
+      args: Record<string, unknown>,
+      ctx: ToolContext,
+    ) => Promise<boolean> = async () => false;
+    const tools = createToolRegistry({
       log,
-      idleEvictionMs,
-      ...(inferenceTimeoutMs !== undefined ? { inferenceTimeoutMs } : {}),
-    }),
-    // Routed providers inherit the same hard inference cap as the base, so a
-    // hung provider can't wedge the user queue.
-    inferenceTimeoutMs !== undefined ? { providerTimeoutMs: inferenceTimeoutMs } : {},
-  );
+      confirm: (handler, args, ctx) => confirmToolCall(handler, args, ctx),
+    });
 
-  // Confirm-tier gate. The Telegram adapter (built further down) provides the
-  // real Yes/No prompt; until then this fails closed so a confirm-tier tool can
-  // never run unconfirmed during the startup window.
-  let confirmToolCall: (
-    handler: ToolHandler,
-    args: Record<string, unknown>,
-    ctx: ToolContext,
-  ) => Promise<boolean> = async () => false;
-  const tools = createToolRegistry({
-    log,
-    confirm: (handler, args, ctx) => confirmToolCall(handler, args, ctx),
-  });
+    const prefs = createPrefsStore(db);
 
-  const prefs = createPrefsStore(db);
+    // Build a placeholder telegram dispatcher for the scheduler. The Telegram
+    // adapter swaps the real one in once it's constructed.
+    let dispatchNudge: (nudge: Nudge) => Promise<void> = async () => {
+      log.warn('nudge dispatched before Telegram adapter ready');
+    };
+    const scheduler = createScheduler({
+      log,
+      dispatch: (n) => dispatchNudge(n),
+      prefs,
+      db,
+    });
+    cleanups.push(() => scheduler.stop());
 
-  // Build a placeholder telegram dispatcher for the scheduler. The Telegram
-  // adapter swaps the real one in once it's constructed.
-  let dispatchNudge: (nudge: Nudge) => Promise<void> = async () => {
-    log.warn('nudge dispatched before Telegram adapter ready');
-  };
-  const scheduler = createScheduler({
-    log,
-    dispatch: (n) => dispatchNudge(n),
-    prefs,
-    db,
-  });
+    // Self-scheduled followups. Registers a core tool the model can call and a
+    // per-minute sweep job on the scheduler. Done before modules load so the
+    // tool is in the registry by the time anything (module or user) touches
+    // it.
+    const followups = setupFollowups({ db, scheduler, tools, log });
 
-  // Self-scheduled followups. Registers a core tool the model can call and a
-  // per-minute sweep job on the scheduler. Done before modules load so the
-  // tool is in the registry by the time anything (module or user) touches
-  // it.
-  const followups = setupFollowups({ db, scheduler, tools, log });
+    // Hive-mind shared memory: one store every agent reads and writes. Registers
+    // the remember/forget core tools here (before modules load, same reason
+    // as followups); the provider feeds recall into the main orchestrator AND
+    // every per-agent orchestrator below, so the whole fleet shares one memory.
+    const memory = setupMemory({ db, tools, log });
+    const memoryProvider = (message: string): string | undefined => memory.renderForPrompt(message);
 
-  // Hive-mind shared memory: one store every agent reads and writes. Registers
-  // the remember/forget core tools here (before modules load, same reason
-  // as followups); the provider feeds recall into the main orchestrator AND
-  // every per-agent orchestrator below, so the whole fleet shares one memory.
-  const memory = setupMemory({ db, tools, log });
-  const memoryProvider = (message: string): string | undefined => memory.renderForPrompt(message);
+    // Bridges browser-chat confirm-tier prompts into the daemon's confirm router
+    // (consulted below before the Telegram fallback). The panel registers per-turn
+    // renderers on it; empty until a panel chat turn is live.
+    const panelConfirmBus = createPanelConfirmBus();
 
-  // Bridges browser-chat confirm-tier prompts into the daemon's confirm router
-  // (consulted below before the Telegram fallback). The panel registers per-turn
-  // renderers on it; empty until a panel chat turn is live.
-  const panelConfirmBus = createPanelConfirmBus();
+    const modulesRoots = defaultModuleRoots(home);
+    const stateRoot = join(home, 'module_state');
+    ensurePrivateDir(stateRoot);
 
-  const modulesRoots = defaultModuleRoots(home);
-  const stateRoot = join(home, 'module_state');
-  ensurePrivateDir(stateRoot);
+    // Voice-note sink for modules like modulus-voice. The Telegram adapter
+    // hasn't been built yet, so we install a thunk that resolves to it once
+    // adapter construction finishes below.
+    let sendVoiceImpl: ((chatId: number, voice: VoicePayload) => Promise<void>) | null = null;
+    let notifySetupIssues: (() => Promise<void>) | null = null;
+    // The orchestrator is built after the module loader (it consumes
+    // promptFragmentProvider/toolIntentFilter on the loader). Modules that
+    // call host.orchestrator therefore have to defer until first use; this
+    // wrapper bridges that gap so the Host can hold a stable reference.
+    let orchestratorImpl: ReturnType<typeof createOrchestrator> | null = null;
+    const orchestratorBridge: HostOrchestrator = {
+      handleUserMessage: async (msg) => {
+        if (!orchestratorImpl) {
+          log.warn('host.orchestrator called before core orchestrator ready');
+          await msg.send({ delta: '', done: true });
+          return;
+        }
+        await orchestratorImpl.handleUserMessage(msg);
+      },
+    };
+    // Created before the loader so manifest v2 `agents` entries can sync into
+    // the fleet during loadAll. Only needs the DB, so the early construction is
+    // free; all the run-time machinery (runtime, queue) still wires up below.
+    const agentRegistry = createAgentRegistry(db);
+    const loader = createModuleLoader({
+      roots: modulesRoots,
+      stateRoot,
+      db,
+      llm,
+      log,
+      scheduler,
+      tools,
+      agents: agentRegistry,
+      hostVersion: HOST_VERSION,
+      chatId: cfg.telegram.allowedIds[0]!,
+      allowedUserIds: cfg.telegram.allowedIds,
+      watch: true,
+      orchestrator: orchestratorBridge,
+      sendVoice: async (chatId, voice) => {
+        if (!sendVoiceImpl) {
+          log.warn('sendVoice called before Telegram adapter ready');
+          return;
+        }
+        await sendVoiceImpl(chatId, voice);
+      },
+      onDidReload: async () => {
+        await notifySetupIssues?.();
+      },
+    });
+    cleanups.push(() => loader.shutdown());
+    await loader.loadAll();
 
-  // Voice-note sink for modules like modulus-voice. The Telegram adapter
-  // hasn't been built yet, so we install a thunk that resolves to it once
-  // adapter construction finishes below.
-  let sendVoiceImpl: ((chatId: number, voice: VoicePayload) => Promise<void>) | null = null;
-  let notifySetupIssues: (() => Promise<void>) | null = null;
-  // The orchestrator is built after the module loader (it consumes
-  // promptFragmentProvider/toolIntentFilter on the loader). Modules that
-  // call host.orchestrator therefore have to defer until first use; this
-  // wrapper bridges that gap so the Host can hold a stable reference.
-  let orchestratorImpl: ReturnType<typeof createOrchestrator> | null = null;
-  const orchestratorBridge: HostOrchestrator = {
-    handleUserMessage: async (msg) => {
-      if (!orchestratorImpl) {
-        log.warn('host.orchestrator called before core orchestrator ready');
-        await msg.send({ delta: '', done: true });
-        return;
-      }
-      await orchestratorImpl.handleUserMessage(msg);
-    },
-  };
-  // Created before the loader so manifest v2 `agents` entries can sync into
-  // the fleet during loadAll. Only needs the DB, so the early construction is
-  // free; all the run-time machinery (runtime, queue) still wires up below.
-  const agentRegistry = createAgentRegistry(db);
-  const loader = createModuleLoader({
-    roots: modulesRoots,
-    stateRoot,
-    db,
-    llm,
-    log,
-    scheduler,
-    tools,
-    agents: agentRegistry,
-    hostVersion: HOST_VERSION,
-    chatId: cfg.telegram.allowedIds[0]!,
-    allowedUserIds: cfg.telegram.allowedIds,
-    watch: true,
-    orchestrator: orchestratorBridge,
-    sendVoice: async (chatId, voice) => {
-      if (!sendVoiceImpl) {
-        log.warn('sendVoice called before Telegram adapter ready');
-        return;
-      }
-      await sendVoiceImpl(chatId, voice);
-    },
-    onDidReload: async () => {
-      await notifySetupIssues?.();
-    },
-  });
-  await loader.loadAll();
+    const maxToolRounds = envInt('MODULUS_MAX_TOOL_ROUNDS');
+    // The main (Telegram/panel) chat must not see the agent-only tools —
+    // spawn_agent and request_approval are only meaningful inside an agent run,
+    // and exposing them to the small chat model would just invite misfires.
+    // Agents get them via their own filtered view.
+    const chatTools = filterToolRegistry(
+      tools,
+      (h) =>
+        h.name !== SPAWN_AGENT_TOOL_NAME &&
+        h.name !== SPAWN_AGENTS_TOOL_NAME &&
+        h.name !== REQUEST_APPROVAL_TOOL_NAME,
+    );
+    const orchestrator = createOrchestrator({
+      db,
+      llm,
+      tools: chatTools,
+      log,
+      promptFragmentProvider: (filter) => loader.promptFragment(filter),
+      toolIntentFilter: (message) => loader.relevantModules(message),
+      memoryProvider,
+      turnGuards: () => loader.turnGuards().map((r) => r.guard),
+      budgetTokens,
+      toolResultMaxChars,
+      ...(cfg.models.tools ? { toolProfile: 'tools' as const } : {}),
+      ...(maxToolRounds !== undefined ? { maxToolRounds } : {}),
+    });
+    orchestratorImpl = orchestrator;
 
-  const maxToolRounds = envInt('MODULUS_MAX_TOOL_ROUNDS');
-  // The main (Telegram/panel) chat must not see the agent-only tools —
-  // spawn_agent and request_approval are only meaningful inside an agent run,
-  // and exposing them to the small chat model would just invite misfires.
-  // Agents get them via their own filtered view.
-  const chatTools = filterToolRegistry(
-    tools,
-    (h) =>
-      h.name !== SPAWN_AGENT_TOOL_NAME &&
-      h.name !== SPAWN_AGENTS_TOOL_NAME &&
-      h.name !== REQUEST_APPROVAL_TOOL_NAME,
-  );
-  const orchestrator = createOrchestrator({
-    db,
-    llm,
-    tools: chatTools,
-    log,
-    promptFragmentProvider: (filter) => loader.promptFragment(filter),
-    toolIntentFilter: (message) => loader.relevantModules(message),
-    memoryProvider,
-    turnGuards: () => loader.turnGuards().map((r) => r.guard),
-    budgetTokens,
-    toolResultMaxChars,
-    ...(cfg.models.tools ? { toolProfile: 'tools' as const } : {}),
-    ...(maxToolRounds !== undefined ? { maxToolRounds } : {}),
-  });
-  orchestratorImpl = orchestrator;
+    const ownerId = cfg.telegram.allowedIds[0]!;
+    log.info('telegram owner identified', { ownerId });
 
-  const ownerId = cfg.telegram.allowedIds[0]!;
-  log.info('telegram owner identified', { ownerId });
-
-  // Multi-agent engine. Personas run headlessly through their own per-agent
-  // orchestrators (sharing this db/llm/tool registry); the queue governs WHEN
-  // they run so two heavy reasoners never thrash the one resident model slot.
-  // Crash recovery for tasks left 'running' by a previous process. A single-mode
-  // task can't resume mid-turn, so it re-runs from scratch (started_at cleared).
-  // An autonomous task checkpoints after every step, so we re-queue it but keep
-  // its started_at, plan, and rounds_used — the loop resumes from the checkpoint
-  // (durable resume) instead of replaying the whole goal.
-  const requeued = db
-    .prepare(
-      `UPDATE agent_tasks
+    // Multi-agent engine. Personas run headlessly through their own per-agent
+    // orchestrators (sharing this db/llm/tool registry); the queue governs WHEN
+    // they run so two heavy reasoners never thrash the one resident model slot.
+    // Crash recovery for tasks left 'running' by a previous process. A single-mode
+    // task can't resume mid-turn, so it re-runs from scratch (started_at cleared).
+    // An autonomous task checkpoints after every step, so we re-queue it but keep
+    // its started_at, plan, and rounds_used — the loop resumes from the checkpoint
+    // (durable resume) instead of replaying the whole goal.
+    const requeued = db
+      .prepare(
+        `UPDATE agent_tasks
          SET status = 'queued',
              started_at = CASE
                WHEN agent_id IN (SELECT id FROM agents WHERE mode = 'autonomous') THEN started_at
                ELSE NULL
              END
        WHERE status = 'running'`,
-    )
-    .run().changes;
-  if (requeued > 0) log.info('re-queued interrupted agent tasks', { count: requeued });
-  // Seed a starter fleet on a fresh install (no-op once any agent exists).
-  seedStarterAgents(agentRegistry);
-  // Agents run unattended and may use big, slow models, so their per-inference
-  // cap is far more generous than the chat default (120s). 20 min covers a 12B
-  // research round on CPU; override with MODULUS_AGENT_INFERENCE_TIMEOUT_MS.
-  const agentInferenceTimeoutMs = envInt('MODULUS_AGENT_INFERENCE_TIMEOUT_MS') ?? 20 * 60_000;
-  // Per-task input attachments (dropped files/folders/images/PDFs) live here.
-  const attachmentsDir = join(home, 'agent-attachments');
-  // Agents see every tool except escalate_to_agent: escalation is the main
-  // chat's way to hand long work to the operator, and an agent re-escalating to
-  // a sibling operator would just spawn redundant work (agents delegate with
-  // spawn_agent instead). The mirror of chatTools, which hides the agent-only
-  // delegation tools from the chat.
-  const agentTools = filterToolRegistry(tools, (h) => h.name !== ESCALATE_TOOL_NAME);
-  const agentRuntime = createAgentRuntime({
-    db,
-    llm,
-    tools: agentTools,
-    log,
-    registry: agentRegistry,
-    ownerUserId: ownerId,
-    budgetTokens,
-    toolResultMaxChars,
-    inferenceTimeoutMs: agentInferenceTimeoutMs,
-    attachmentsDir,
-    memoryProvider,
-    // Promote a finished task's recorded findings into shared memory, tagged
-    // by the agent that learned them — the write half of the hive mind.
-    onTaskDone: (task, agent) => {
-      const findings = agentRegistry
-        .listArtifacts(task.id)
-        .filter((a) => a.name === 'finding' && typeof a.content === 'string')
-        .map((a) => a.content as string);
-      if (findings.length > 0) memory.promoteFindings(findings, agent.name);
-    },
-  });
-  const agentQueue = createAgentQueue({
-    registry: agentRegistry,
-    runtime: agentRuntime,
-    llm,
-    log,
-    tinyConcurrency: tinyAgentConcurrencyForTier(cfg.tier),
-    // The web panel enqueues tasks from its own process; poll so the daemon —
-    // the single executor — picks them up.
-    pollMs: 2500,
-  });
-  // escalate_to_agent: the main chat's hand-off to the autonomous operator on
-  // the queue. Registered on the full registry so chatTools (which only hides
-  // the agent-only tools) exposes it, while agentTools above hides it from
-  // agents.
-  setupAgentEscalation({
-    tools,
-    registry: agentRegistry,
-    queue: agentQueue,
-    log,
-  });
-  // The spawn_agent / spawn_agents delegation tools (visible only to agents
-  // that may delegate). maxParallel bounds spawn_agents' inline fan-out to the
-  // tier's tiny-worker budget so a Pi never loads more small models at once
-  // than its RAM allows.
-  setupAgentDelegation({
-    tools,
-    llm,
-    registry: agentRegistry,
-    runtime: agentRuntime,
-    queue: agentQueue,
-    log,
-    maxParallel: tinyAgentConcurrencyForTier(cfg.tier),
-  });
-  // The autonomous-loop tools (update_plan / complete_step / record_finding /
-  // save_artifact / finish), visible only to agents whose mode is 'autonomous'.
-  setupAgentPlanning({ tools, registry: agentRegistry, log });
-  // Read-only filesystem tools (read_file / list_dir). The pinned root is
-  // resolved per call: a task's dropped-in files/folders take precedence, else a
-  // global MODULUS_FS_ROOT the operator set, else none (the tool says so). The
-  // env-root is validated once; an invalid one is logged and treated as unset.
-  const envFsRoot = process.env['MODULUS_FS_ROOT']?.trim();
-  let globalRoot: string | null = null;
-  if (envFsRoot) {
-    const root = resolve(envFsRoot);
-    if (existsSync(root)) globalRoot = root;
-    else log.error('MODULUS_FS_ROOT does not exist; ignoring', { root });
-  }
-  setupFilesystemTools({
-    tools,
-    log,
-    resolveRoot: (ctx: ToolContext) => {
-      if (ctx.chatId !== undefined && isAgentChatId(ctx.chatId)) {
-        const pinned = pinnedFilesRoot(attachmentsDir, ctx.chatId - AGENT_CHAT_ID_BASE);
-        if (pinned) return pinned;
-      }
-      return globalRoot;
-    },
-  });
-  setupAgentSchedules({
-    db,
-    scheduler,
-    registry: agentRegistry,
-    queue: agentQueue,
-    log,
-  });
-  // Human-in-the-loop approvals: registers the request_approval tool and the
-  // manager that parks a confirm-tier agent call until the owner answers (over
-  // Telegram or the panel). The notifier is bound once the Telegram adapter
-  // exists, below.
-  const { manager: approvalManager } = setupAgentApprovals({
-    db,
-    tools,
-    registry: agentRegistry,
-    log,
-  });
-  // Pick up any queued/re-queued work now that the engine is live.
-  agentQueue.notify();
-
-  // Authored-workflow engine. Mirrors the agent queue: the panel inserts a
-  // queued workflow_runs row, and this runner polls + claims + executes them.
-  const workflowRegistry = createWorkflowRegistry(db);
-  // Seed the bundled "Code Review Pipeline" example (and its agents) on a fresh
-  // install, so the Agents → Workflows tab opens with a real, editable graph.
-  seedStarterWorkflows(workflowRegistry, agentRegistry);
-  // Re-queue any workflow runs left 'running' by a crash (same pattern as agent tasks).
-  const requeued_wf = db
-    .prepare(
-      `UPDATE workflow_runs SET status = 'queued', started_at = NULL WHERE status = 'running'`,
-    )
-    .run().changes;
-  if (requeued_wf > 0) log.info('re-queued interrupted workflow runs', { count: requeued_wf });
-  const workflowRunner = createWorkflowRunner({
-    registry: workflowRegistry,
-    agents: agentRegistry,
-    runtime: agentRuntime,
-    tools,
-    llm,
-    log,
-    ownerUserId: ownerId,
-    attachmentsDir,
-    pollMs: 2500,
-  });
-  workflowRunner.start();
-
-  // One instant-responder shared by both chat surfaces (Telegram + panel) so
-  // their anti-repeat variant history is shared. Off entirely when the setting
-  // is disabled. Config changes take effect on the next restart.
-  const instantResponder =
-    cfg.instantResponses?.enabled !== false ? createInstantResponder() : undefined;
-
-  const telegram = createTelegram({
-    token: cfg.telegram.token,
-    allowedUserIds: cfg.telegram.allowedIds,
-    ownerId,
-    log,
-    orchestrator,
-    llm,
-    tools,
-    db,
-    instantResponder,
-    prefs,
-    followups,
-    agentRegistry,
-    agentQueue,
-    agentAttachmentsDir: attachmentsDir,
-    logFilePath: logFilePath(home),
-    schedulerStats: () => scheduler.stats(),
-    schedulerList: () => [...scheduler.list()],
-    modules: () => collectModuleReadiness(modulesRoots, db),
-    moduleCommands: () => loader.commands(),
-    moduleIntercepts: () => loader.intercepts(),
-    moduleAfterReplies: () => loader.afterReplies(),
-    moduleAfterTurns: () => loader.afterTurns(),
-    moduleCallbacks: () => loader.callbacks(),
-    moduleVoiceMessages: () => loader.voiceMessages(),
-    // Yes/No on an agent-approval prompt arrives here as a callback; resolve the
-    // parked tool call. The allowlist middleware already gated the press.
-    onAgentApproval: (id, approved, fromUserId) =>
-      approvalManager.resolveFromTelegram(id, approved, fromUserId),
-  });
-  // Now that the adapter exists, push approval prompts to the owner(s) over
-  // Telegram. Best-effort per chat — a send failure leaves the row pending and
-  // still answerable from the panel.
-  approvalManager.setNotifier(async (approval) => {
-    for (const chatId of cfg.telegram.allowedIds) {
-      await telegram.sendApprovalRequest(chatId, approval);
+      )
+      .run().changes;
+    if (requeued > 0) log.info('re-queued interrupted agent tasks', { count: requeued });
+    // Seed a starter fleet on a fresh install (no-op once any agent exists).
+    seedStarterAgents(agentRegistry);
+    // Agents run unattended and may use big, slow models, so their per-inference
+    // cap is far more generous than the chat default (120s). 20 min covers a 12B
+    // research round on CPU; override with MODULUS_AGENT_INFERENCE_TIMEOUT_MS.
+    const agentInferenceTimeoutMs = envInt('MODULUS_AGENT_INFERENCE_TIMEOUT_MS') ?? 20 * 60_000;
+    // Per-task input attachments (dropped files/folders/images/PDFs) live here.
+    const attachmentsDir = join(home, 'agent-attachments');
+    // Agents see every tool except escalate_to_agent: escalation is the main
+    // chat's way to hand long work to the operator, and an agent re-escalating to
+    // a sibling operator would just spawn redundant work (agents delegate with
+    // spawn_agent instead). The mirror of chatTools, which hides the agent-only
+    // delegation tools from the chat.
+    const agentTools = filterToolRegistry(tools, (h) => h.name !== ESCALATE_TOOL_NAME);
+    const agentRuntime = createAgentRuntime({
+      db,
+      llm,
+      tools: agentTools,
+      log,
+      registry: agentRegistry,
+      ownerUserId: ownerId,
+      budgetTokens,
+      toolResultMaxChars,
+      inferenceTimeoutMs: agentInferenceTimeoutMs,
+      attachmentsDir,
+      memoryProvider,
+      // Promote a finished task's recorded findings into shared memory, tagged
+      // by the agent that learned them — the write half of the hive mind.
+      onTaskDone: (task, agent) => {
+        const findings = agentRegistry
+          .listArtifacts(task.id)
+          .filter((a) => a.name === 'finding' && typeof a.content === 'string')
+          .map((a) => a.content as string);
+        if (findings.length > 0) memory.promoteFindings(findings, agent.name);
+      },
+    });
+    cleanups.push(() => agentRuntime.shutdown());
+    const agentQueue = createAgentQueue({
+      registry: agentRegistry,
+      runtime: agentRuntime,
+      llm,
+      log,
+      tinyConcurrency: tinyAgentConcurrencyForTier(cfg.tier),
+      // The web panel enqueues tasks from its own process; poll so the daemon —
+      // the single executor — picks them up.
+      pollMs: 2500,
+    });
+    // escalate_to_agent: the main chat's hand-off to the autonomous operator on
+    // the queue. Registered on the full registry so chatTools (which only hides
+    // the agent-only tools) exposes it, while agentTools above hides it from
+    // agents.
+    setupAgentEscalation({
+      tools,
+      registry: agentRegistry,
+      queue: agentQueue,
+      log,
+    });
+    // The spawn_agent / spawn_agents delegation tools (visible only to agents
+    // that may delegate). maxParallel bounds spawn_agents' inline fan-out to the
+    // tier's tiny-worker budget so a Pi never loads more small models at once
+    // than its RAM allows.
+    setupAgentDelegation({
+      tools,
+      llm,
+      registry: agentRegistry,
+      runtime: agentRuntime,
+      queue: agentQueue,
+      log,
+      maxParallel: tinyAgentConcurrencyForTier(cfg.tier),
+    });
+    // The autonomous-loop tools (update_plan / complete_step / record_finding /
+    // save_artifact / finish), visible only to agents whose mode is 'autonomous'.
+    setupAgentPlanning({ tools, registry: agentRegistry, log });
+    // Read-only filesystem tools (read_file / list_dir). The pinned root is
+    // resolved per call: a task's dropped-in files/folders take precedence, else a
+    // global MODULUS_FS_ROOT the operator set, else none (the tool says so). The
+    // env-root is validated once; an invalid one is logged and treated as unset.
+    const envFsRoot = process.env['MODULUS_FS_ROOT']?.trim();
+    let globalRoot: string | null = null;
+    if (envFsRoot) {
+      const root = resolve(envFsRoot);
+      if (existsSync(root)) globalRoot = root;
+      else log.error('MODULUS_FS_ROOT does not exist; ignoring', { root });
     }
-  });
-  // Mirror a proactive nudge to every registered chat surface other than
-  // Telegram (e.g. Discord) so briefings/nudges/reminders land wherever the
-  // user is. Best-effort: a surface failure must not break the Telegram path.
-  const mirrorNudgeToSurfaces = async (nudge: Nudge): Promise<void> => {
-    for (const surface of loader.chatSurfaces()) {
-      if (!surface.deliverProactive) continue;
-      try {
-        await surface.deliverProactive(nudge);
-      } catch (e) {
-        log.warn('chat surface deliverProactive failed', {
-          ext: surface.module,
-          error: e instanceof Error ? e.message : String(e),
-        });
+    setupFilesystemTools({
+      tools,
+      log,
+      resolveRoot: (ctx: ToolContext) => {
+        if (ctx.chatId !== undefined && isAgentChatId(ctx.chatId)) {
+          const pinned = pinnedFilesRoot(attachmentsDir, ctx.chatId - AGENT_CHAT_ID_BASE);
+          if (pinned) return pinned;
+        }
+        return globalRoot;
+      },
+    });
+    setupAgentSchedules({
+      db,
+      scheduler,
+      registry: agentRegistry,
+      queue: agentQueue,
+      log,
+    });
+    // Human-in-the-loop approvals: registers the request_approval tool and the
+    // manager that parks a confirm-tier agent call until the owner answers (over
+    // Telegram or the panel). The notifier is bound once the Telegram adapter
+    // exists, below.
+    const { manager: approvalManager } = setupAgentApprovals({
+      db,
+      tools,
+      registry: agentRegistry,
+      log,
+    });
+    // Pick up any queued/re-queued work now that the engine is live.
+    agentQueue.notify();
+
+    // Authored-workflow engine. Mirrors the agent queue: the panel inserts a
+    // queued workflow_runs row, and this runner polls + claims + executes them.
+    const workflowRegistry = createWorkflowRegistry(db);
+    // Seed the bundled "Code Review Pipeline" example (and its agents) on a fresh
+    // install, so the Agents → Workflows tab opens with a real, editable graph.
+    seedStarterWorkflows(workflowRegistry, agentRegistry);
+    // Re-queue any workflow runs left 'running' by a crash (same pattern as agent tasks).
+    const requeued_wf = db
+      .prepare(
+        `UPDATE workflow_runs SET status = 'queued', started_at = NULL WHERE status = 'running'`,
+      )
+      .run().changes;
+    if (requeued_wf > 0) log.info('re-queued interrupted workflow runs', { count: requeued_wf });
+    const workflowRunner = createWorkflowRunner({
+      registry: workflowRegistry,
+      agents: agentRegistry,
+      runtime: agentRuntime,
+      tools,
+      llm,
+      log,
+      ownerUserId: ownerId,
+      attachmentsDir,
+      pollMs: 2500,
+    });
+    workflowRunner.start();
+    cleanups.push(() => workflowRunner.stop());
+
+    // One instant-responder shared by both chat surfaces (Telegram + panel) so
+    // their anti-repeat variant history is shared. Off entirely when the setting
+    // is disabled. Config changes take effect on the next restart.
+    const instantResponder =
+      cfg.instantResponses?.enabled !== false ? createInstantResponder() : undefined;
+
+    // Shared pairing bus for a live re-run of the setup wizard. pollUpdates:false
+    // because the adapter below owns the only getUpdates consumer — pairing is
+    // matched through the adapter's allowlist-reject middleware (tryMatch), and
+    // the same manager is handed to the panel as deps.pairing for the /pair route.
+    const pairing = createPairingManager({ db, log, pollUpdates: false });
+
+    const telegram = createTelegram({
+      token: cfg.telegram.token,
+      allowedUserIds: cfg.telegram.allowedIds,
+      ownerId,
+      log,
+      orchestrator,
+      llm,
+      tools,
+      db,
+      instantResponder,
+      pairing,
+      prefs,
+      followups,
+      agentRegistry,
+      agentQueue,
+      agentAttachmentsDir: attachmentsDir,
+      logFilePath: logFilePath(home),
+      schedulerStats: () => scheduler.stats(),
+      schedulerList: () => [...scheduler.list()],
+      modules: () => collectModuleReadiness(modulesRoots, db),
+      moduleCommands: () => loader.commands(),
+      moduleIntercepts: () => loader.intercepts(),
+      moduleAfterReplies: () => loader.afterReplies(),
+      moduleAfterTurns: () => loader.afterTurns(),
+      moduleCallbacks: () => loader.callbacks(),
+      moduleVoiceMessages: () => loader.voiceMessages(),
+      // Yes/No on an agent-approval prompt arrives here as a callback; resolve the
+      // parked tool call. The allowlist middleware already gated the press.
+      onAgentApproval: (id, approved, fromUserId) =>
+        approvalManager.resolveFromTelegram(id, approved, fromUserId),
+    });
+    cleanups.push(() => telegram.stop());
+    // Now that the adapter exists, push approval prompts to the owner(s) over
+    // Telegram. Best-effort per chat — a send failure leaves the row pending and
+    // still answerable from the panel.
+    approvalManager.setNotifier(async (approval) => {
+      for (const chatId of cfg.telegram.allowedIds) {
+        await telegram.sendApprovalRequest(chatId, approval);
       }
-    }
-  };
-  // Wire the scheduler -> Telegram nudge path, then fan out to other surfaces.
-  dispatchNudge = async (nudge) => {
-    await telegram.sendNudge(nudge);
-    await mirrorNudgeToSurfaces(nudge);
-  };
-  // And the voice-note path now that the adapter exists.
-  sendVoiceImpl = (chatId, voice) => telegram.sendVoice(chatId, voice);
-  // Point the tool registry's confirm hook at a surface router. Modules
-  // that own a chat surface (e.g. modulus-discord) register a renderer via
-  // host.chat.registerConfirm, scoped to their own chatId namespace; the
-  // router picks the first matching surface for the originating chatId and
-  // falls back to the Telegram adapter when nothing claims the chat. The
-  // tool-engine contract is unchanged — confirm is still a single async
-  // hook returning a boolean per call.
-  confirmToolCall = async (handler, args, ctx) => {
-    // Background agent runs are unattended, so a confirm-tier tool can't pop a
-    // prompt in a live chat. Instead we park it: ask the owner over Telegram
-    // (Yes/No) and in the panel, and wait for a human to decide. This is the
-    // guardrail against silent autonomy in a delegated swarm — nothing risky
-    // runs until someone approves it.
-    if (ctx.chatId !== undefined && isAgentChatId(ctx.chatId)) {
-      let preview: string;
-      try {
-        preview = handler.confirmPrompt ? handler.confirmPrompt(args) : `Run \`${handler.name}\`?`;
-      } catch {
-        preview = `Run \`${handler.name}\`?`;
-      }
-      return approvalManager.request({
-        taskId: ctx.chatId - AGENT_CHAT_ID_BASE,
-        toolName: handler.name,
-        preview,
-        args,
-        ...(ctx.signal ? { signal: ctx.signal } : {}),
-      });
-    }
-    // (A) A live browser chat turn for this chatId renders the confirm inline.
-    // When no panel turn is active this returns null and we fall through to (B)
-    // chat surfaces / Telegram, so the prompt always reaches the owner somewhere.
-    const viaPanel = panelConfirmBus.tryConfirm(handler, args, ctx);
-    if (viaPanel) return viaPanel;
-    if (ctx.chatId !== undefined) {
+    });
+    // Mirror a proactive nudge to every registered chat surface other than
+    // Telegram (e.g. Discord) so briefings/nudges/reminders land wherever the
+    // user is. Best-effort: a surface failure must not break the Telegram path.
+    const mirrorNudgeToSurfaces = async (nudge: Nudge): Promise<void> => {
       for (const surface of loader.chatSurfaces()) {
-        let owns = false;
+        if (!surface.deliverProactive) continue;
         try {
-          owns = surface.ownsChat(ctx.chatId);
+          await surface.deliverProactive(nudge);
         } catch (e) {
-          log.warn('chat surface ownsChat threw — skipping', {
-            ext: surface.module,
+          log.warn('chat surface deliverProactive failed', {
+            mod: surface.module,
             error: e instanceof Error ? e.message : String(e),
           });
-          continue;
         }
-        if (!owns) continue;
+      }
+    };
+    // Wire the scheduler -> Telegram nudge path, then fan out to other surfaces.
+    dispatchNudge = async (nudge) => {
+      await telegram.sendNudge(nudge);
+      await mirrorNudgeToSurfaces(nudge);
+    };
+    // And the voice-note path now that the adapter exists.
+    sendVoiceImpl = (chatId, voice) => telegram.sendVoice(chatId, voice);
+    // Point the tool registry's confirm hook at a surface router. Modules
+    // that own a chat surface (e.g. modulus-discord) register a renderer via
+    // host.chat.registerConfirm, scoped to their own chatId namespace; the
+    // router picks the first matching surface for the originating chatId and
+    // falls back to the Telegram adapter when nothing claims the chat. The
+    // tool-engine contract is unchanged — confirm is still a single async
+    // hook returning a boolean per call.
+    confirmToolCall = async (handler, args, ctx) => {
+      // Background agent runs are unattended, so a confirm-tier tool can't pop a
+      // prompt in a live chat. Instead we park it: ask the owner over Telegram
+      // (Yes/No) and in the panel, and wait for a human to decide. This is the
+      // guardrail against silent autonomy in a delegated swarm — nothing risky
+      // runs until someone approves it.
+      if (ctx.chatId !== undefined && isAgentChatId(ctx.chatId)) {
         let preview: string;
         try {
           preview = handler.confirmPrompt
@@ -636,232 +652,327 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
         } catch {
           preview = `Run \`${handler.name}\`?`;
         }
-        try {
-          return await surface.confirm({
-            chatId: ctx.chatId,
-            toolName: handler.name,
-            preview,
-            ...(ctx.signal ? { signal: ctx.signal } : {}),
-          });
-        } catch (e) {
-          // Fail closed on a renderer crash. A confirm-tier tool must never
-          // run when its prompt couldn't be delivered.
-          log.warn('chat surface confirm threw — failing closed', {
-            ext: surface.module,
-            tool: handler.name,
-            error: e instanceof Error ? e.message : String(e),
-          });
-          return false;
+        return approvalManager.request({
+          taskId: ctx.chatId - AGENT_CHAT_ID_BASE,
+          toolName: handler.name,
+          preview,
+          args,
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        });
+      }
+      // (A) A live browser chat turn for this chatId renders the confirm inline.
+      // When no panel turn is active this returns null and we fall through to (B)
+      // chat surfaces / Telegram, so the prompt always reaches the owner somewhere.
+      const viaPanel = panelConfirmBus.tryConfirm(handler, args, ctx);
+      if (viaPanel) return viaPanel;
+      if (ctx.chatId !== undefined) {
+        for (const surface of loader.chatSurfaces()) {
+          let owns = false;
+          try {
+            owns = surface.ownsChat(ctx.chatId);
+          } catch (e) {
+            log.warn('chat surface ownsChat threw — skipping', {
+              mod: surface.module,
+              error: e instanceof Error ? e.message : String(e),
+            });
+            continue;
+          }
+          if (!owns) continue;
+          let preview: string;
+          try {
+            preview = handler.confirmPrompt
+              ? handler.confirmPrompt(args)
+              : `Run \`${handler.name}\`?`;
+          } catch {
+            preview = `Run \`${handler.name}\`?`;
+          }
+          try {
+            return await surface.confirm({
+              chatId: ctx.chatId,
+              toolName: handler.name,
+              preview,
+              ...(ctx.signal ? { signal: ctx.signal } : {}),
+            });
+          } catch (e) {
+            // Fail closed on a renderer crash. A confirm-tier tool must never
+            // run when its prompt couldn't be delivered.
+            log.warn('chat surface confirm threw — failing closed', {
+              mod: surface.module,
+              tool: handler.name,
+              error: e instanceof Error ? e.message : String(e),
+            });
+            return false;
+          }
         }
       }
-    }
-    return telegram.confirmToolCall(handler, args, ctx);
-  };
-  let lastSetupIssueSignature = '';
-  notifySetupIssues = async () => {
-    const issues = setupIssuesForNudge(collectModuleReadiness(modulesRoots, db));
-    const signature = JSON.stringify(
-      issues.map((e) => [e.name, e.status, e.reasons, e.nextAction]).sort(),
-    );
-    if (issues.length === 0) {
-      lastSetupIssueSignature = '';
-      return;
-    }
-    if (signature === lastSetupIssueSignature) return;
-    const chats = knownAllowedChats(db, cfg.telegram.allowedIds);
-    if (chats.length === 0) return;
-    lastSetupIssueSignature = signature;
-    const text = formatSetupIssuesNudge(issues);
-    for (const chatId of chats) await telegram.sendMessage(chatId, text);
-    // Mirror the alert to other chat surfaces (e.g. Discord) as a nudge.
-    await mirrorNudgeToSurfaces({
-      chatId: ownerId,
-      text,
-      key: 'setup-issues',
-      reason: 'Setup issues detected',
+      return telegram.confirmToolCall(handler, args, ctx);
+    };
+    let lastSetupIssueSignature = '';
+    notifySetupIssues = async () => {
+      const issues = setupIssuesForNudge(collectModuleReadiness(modulesRoots, db));
+      const signature = JSON.stringify(
+        issues.map((e) => [e.name, e.status, e.reasons, e.nextAction]).sort(),
+      );
+      if (issues.length === 0) {
+        lastSetupIssueSignature = '';
+        return;
+      }
+      if (signature === lastSetupIssueSignature) return;
+      const chats = knownAllowedChats(db, cfg.telegram.allowedIds);
+      if (chats.length === 0) return;
+      lastSetupIssueSignature = signature;
+      const text = formatSetupIssuesNudge(issues);
+      for (const chatId of chats) await telegram.sendMessage(chatId, text);
+      // Mirror the alert to other chat surfaces (e.g. Discord) as a nudge.
+      await mirrorNudgeToSurfaces({
+        chatId: ownerId,
+        text,
+        key: 'setup-issues',
+        reason: 'Setup issues detected',
+      });
+    };
+
+    await telegram.start();
+    await notifySetupIssues();
+    scheduler.start();
+
+    const metricsWriter = createMetricsWriter({
+      path: metricsFilePath(home),
+      log,
+      scheduler,
+      moduleReloads: () => loader.reloadCounts(),
+      startedAt: Date.now(),
     });
-  };
+    metricsWriter.start();
+    cleanups.push(() => metricsWriter.stop());
 
-  await telegram.start();
-  await notifySetupIssues();
-  scheduler.start();
+    // PID file was already written as a lock at the top of run() (see
+    // tryAcquirePidLock); nothing more to do here.
 
-  const metricsWriter = createMetricsWriter({
-    path: metricsFilePath(home),
-    log,
-    scheduler,
-    startedAt: Date.now(),
-  });
-  metricsWriter.start();
+    // In-process web panel. It borrows the live engine (no second stack, no DB
+    // polling) and serves the browser UI + token-gated API. Best-effort: a panel
+    // failure must never take the agent down. Skipped with --agent-only or when
+    // panel.enabled is false. A panel Restart sets this flag so shutdown re-execs
+    // a fresh daemon only after the pid lock is released (no double-start race).
+    let restartRequested = false;
+    let panel: PanelHandle | null = null;
+    if (!options.agentOnly && cfg.panel?.enabled !== false) {
+      try {
+        panel = await createPanel({
+          db,
+          log,
+          home,
+          config: cfg,
+          moduleRoots: modulesRoots,
+          scheduler,
+          agentRegistry,
+          agentQueue,
+          agentRuntime,
+          llm,
+          memory,
+          orchestrator,
+          loader,
+          confirmBus: panelConfirmBus,
+          pairing,
+          ...(instantResponder ? { instantResponder } : {}),
+          ...(process.argv[1] ? { cliEntry: process.argv[1] } : {}),
+          execArgv: process.execArgv,
+          onStop: () => void shutdown('panel-stop'),
+          onRestart: () => {
+            restartRequested = true;
+            void shutdown('panel-restart');
+          },
+        });
+        cleanups.push(() => panel?.close());
+        process.stdout.write(`Panel: ${panel.url}\n`);
+      } catch (e) {
+        log.error('web panel failed to start', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
 
-  // PID file was already written as a lock at the top of run() (see
-  // tryAcquirePidLock); nothing more to do here.
+    // Best-effort warm-up. `/api/tags` proves Ollama is reachable, then the
+    // tiny capped chat call actually loads the configured chat model so the
+    // first real user turn doesn't pay cold-start latency.
+    void (async () => {
+      const h = await llm.health();
+      if (!h.ok) {
+        log.warn('Ollama health check failed at boot');
+        return;
+      }
+      log.info('Ollama reachable', { models: h.models.length });
+      try {
+        let warmedModel: string | undefined;
+        for await (const chunk of llm.chat({
+          profile: 'chat',
+          messages: [
+            { role: 'system', content: 'You are Modulus. Reply with OK.' },
+            { role: 'user', content: 'warm up' },
+          ],
+          maxTokens: 1,
+        })) {
+          warmedModel = chunk.model ?? warmedModel;
+          if (chunk.done) break;
+        }
+        log.info('chat model warmed', { model: warmedModel ?? llm.resolveModel('chat') });
+      } catch (e) {
+        log.warn('chat model warm-up failed', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    })();
 
-  // In-process web panel. It borrows the live engine (no second stack, no DB
-  // polling) and serves the browser UI + token-gated API. Best-effort: a panel
-  // failure must never take the agent down. Skipped with --agent-only or when
-  // panel.enabled is false. A panel Restart sets this flag so shutdown re-execs
-  // a fresh daemon only after the pid lock is released (no double-start race).
-  let restartRequested = false;
-  let panel: PanelHandle | null = null;
-  if (!options.agentOnly && cfg.panel?.enabled !== false) {
+    const shutdown = async (signal: string): Promise<void> => {
+      log.info('shutdown signal received', { signal });
+      // If any of the awaited stages below hangs (module watcher, grammY
+      // long-poll drain, etc.) the process would otherwise sit forever and
+      // /restart's helper would wait forever. Force-exit after a budget.
+      const hardExit = setTimeout(() => {
+        log.warn('shutdown took too long, forcing exit');
+        process.exit(1);
+      }, 8_000);
+      hardExit.unref();
+      // Close the panel first so its port frees immediately and an in-flight
+      // browser request can't keep a handle open past the budget.
+      try {
+        await panel?.close();
+      } catch {
+        /* ignore */
+      }
+      try {
+        metricsWriter.stop();
+      } catch {
+        /* ignore */
+      }
+      try {
+        scheduler.stop();
+      } catch {
+        /* ignore */
+      }
+      try {
+        workflowRunner.stop();
+      } catch {
+        /* ignore */
+      }
+      try {
+        await loader.shutdown();
+      } catch (e) {
+        log.warn('module loader shutdown failed', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      try {
+        // Release any parked approvals first so a task waiting on one can unwind,
+        // otherwise the drain would block on a tool call no one will answer now.
+        approvalManager.shutdown();
+        await agentQueue.drain();
+        await agentRuntime.shutdown();
+      } catch (e) {
+        log.warn('agent engine shutdown failed', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      try {
+        await telegram.stop();
+      } catch (e) {
+        log.warn('telegram stop failed', { error: e instanceof Error ? e.message : String(e) });
+      }
+      try {
+        llm.stopIdleEviction();
+      } catch {
+        /* ignore */
+      }
+      try {
+        await orchestrator.shutdown();
+      } catch (e) {
+        log.warn('orchestrator shutdown failed', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      try {
+        db.close();
+      } catch {
+        /* ignore */
+      }
+      clearPid(home);
+      // A panel-triggered restart re-execs a fresh daemon now that the pid lock
+      // is released, so the replacement's tryAcquirePidLock can't lose to us.
+      if (restartRequested) {
+        try {
+          const here = dirname(fileURLToPath(import.meta.url));
+          const cliEntry = process.argv[1] ?? join(here, 'index.js');
+          spawn(process.execPath, [...process.execArgv, cliEntry, 'start'], {
+            detached: true,
+            stdio: 'ignore',
+            env: process.env,
+          }).unref();
+        } catch (e) {
+          log.warn('restart re-exec failed', { error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+      clearTimeout(hardExit);
+      process.exit(0);
+    };
+    process.once('SIGINT', () => void shutdown('SIGINT'));
+    process.once('SIGTERM', () => void shutdown('SIGTERM'));
+  } catch (e) {
+    log.error('daemon boot failed; unwinding partial start', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    for (const cleanup of cleanups.reverse()) {
+      try {
+        await cleanup();
+      } catch {
+        /* best-effort */
+      }
+    }
+    throw e;
+  }
+}
+
+// Serve the setup wizard in the browser, then promote to the full daemon. The
+// pid lock is already held by run(). On a failed promotion we re-enter setup so
+// the wizard can show the error and the user can retry — no terminal needed.
+// deps is injectable for tests.
+export async function runSetupAndPromote(
+  home: string,
+  options: StartRunOptions,
+  deps: {
+    startSetupServer: typeof startSetupServer;
+    bootDaemon: typeof bootDaemon;
+    openBrowser: typeof openBrowser;
+  } = { startSetupServer, bootDaemon, openBrowser },
+): Promise<void> {
+  let lastError: string | null = null;
+  const bindOverride = options.lan ? '0.0.0.0' : undefined;
+  for (;;) {
+    const server = await deps.startSetupServer(home, {
+      lastError,
+      ...(bindOverride ? { bindOverride } : {}),
+      // The wizard's Stop button (or a SIGINT) ends the foreground process.
+      onStop: () => process.exit(0),
+    });
+    process.stdout.write(
+      `\nModulus isn't set up yet. Finish setup in your browser:\n  ${server.handle.url}\n\n`,
+    );
+    // Only auto-open on the first pass — on re-entry the tab is already open.
+    if (!options.noOpen && lastError === null && process.stdout.isTTY) {
+      deps.openBrowser(server.handle.url);
+    }
+    await server.completed;
+    // Release the port + DB before the full daemon rebinds them.
+    await server.close();
+    const freshCfg = effectiveConfig(home);
     try {
-      panel = await createPanel({
-        db,
-        log,
-        home,
-        config: cfg,
-        moduleRoots: modulesRoots,
-        scheduler,
-        agentRegistry,
-        agentQueue,
-        agentRuntime,
-        llm,
-        memory,
-        orchestrator,
-        loader,
-        confirmBus: panelConfirmBus,
-        ...(instantResponder ? { instantResponder } : {}),
-        ...(process.argv[1] ? { cliEntry: process.argv[1] } : {}),
-        execArgv: process.execArgv,
-        onStop: () => void shutdown('panel-stop'),
-        onRestart: () => {
-          restartRequested = true;
-          void shutdown('panel-restart');
-        },
-      });
-      process.stdout.write(`Panel: ${panel.url}\n`);
+      await deps.bootDaemon(home, freshCfg, options);
+      return;
     } catch (e) {
-      log.error('web panel failed to start', {
-        error: e instanceof Error ? e.message : String(e),
-      });
+      lastError = e instanceof Error ? e.message : String(e);
+      process.stderr.write(`Modulus couldn't start: ${lastError}\nReturning to setup…\n`);
+      // Loop: a fresh setup server boots with lastError so the wizard banners it.
     }
   }
-
-  // Best-effort warm-up. `/api/tags` proves Ollama is reachable, then the
-  // tiny capped chat call actually loads the configured chat model so the
-  // first real user turn doesn't pay cold-start latency.
-  void (async () => {
-    const h = await llm.health();
-    if (!h.ok) {
-      log.warn('Ollama health check failed at boot');
-      return;
-    }
-    log.info('Ollama reachable', { models: h.models.length });
-    try {
-      let warmedModel: string | undefined;
-      for await (const chunk of llm.chat({
-        profile: 'chat',
-        messages: [
-          { role: 'system', content: 'You are Modulus. Reply with OK.' },
-          { role: 'user', content: 'warm up' },
-        ],
-        maxTokens: 1,
-      })) {
-        warmedModel = chunk.model ?? warmedModel;
-        if (chunk.done) break;
-      }
-      log.info('chat model warmed', { model: warmedModel ?? llm.resolveModel('chat') });
-    } catch (e) {
-      log.warn('chat model warm-up failed', {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-  })();
-
-  const shutdown = async (signal: string): Promise<void> => {
-    log.info('shutdown signal received', { signal });
-    // If any of the awaited stages below hangs (module watcher, grammY
-    // long-poll drain, etc.) the process would otherwise sit forever and
-    // /restart's helper would wait forever. Force-exit after a budget.
-    const hardExit = setTimeout(() => {
-      log.warn('shutdown took too long, forcing exit');
-      process.exit(1);
-    }, 8_000);
-    hardExit.unref();
-    // Close the panel first so its port frees immediately and an in-flight
-    // browser request can't keep a handle open past the budget.
-    try {
-      await panel?.close();
-    } catch {
-      /* ignore */
-    }
-    try {
-      metricsWriter.stop();
-    } catch {
-      /* ignore */
-    }
-    try {
-      scheduler.stop();
-    } catch {
-      /* ignore */
-    }
-    try {
-      workflowRunner.stop();
-    } catch {
-      /* ignore */
-    }
-    try {
-      await loader.shutdown();
-    } catch (e) {
-      log.warn('module loader shutdown failed', {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-    try {
-      // Release any parked approvals first so a task waiting on one can unwind,
-      // otherwise the drain would block on a tool call no one will answer now.
-      approvalManager.shutdown();
-      await agentQueue.drain();
-      await agentRuntime.shutdown();
-    } catch (e) {
-      log.warn('agent engine shutdown failed', {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-    try {
-      await telegram.stop();
-    } catch (e) {
-      log.warn('telegram stop failed', { error: e instanceof Error ? e.message : String(e) });
-    }
-    try {
-      llm.stopIdleEviction();
-    } catch {
-      /* ignore */
-    }
-    try {
-      await orchestrator.shutdown();
-    } catch (e) {
-      log.warn('orchestrator shutdown failed', {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-    try {
-      db.close();
-    } catch {
-      /* ignore */
-    }
-    clearPid(home);
-    // A panel-triggered restart re-execs a fresh daemon now that the pid lock
-    // is released, so the replacement's tryAcquirePidLock can't lose to us.
-    if (restartRequested) {
-      try {
-        const here = dirname(fileURLToPath(import.meta.url));
-        const cliEntry = process.argv[1] ?? join(here, 'index.js');
-        spawn(process.execPath, [...process.execArgv, cliEntry, 'start'], {
-          detached: true,
-          stdio: 'ignore',
-          env: process.env,
-        }).unref();
-      } catch (e) {
-        log.warn('restart re-exec failed', { error: e instanceof Error ? e.message : String(e) });
-      }
-    }
-    clearTimeout(hardExit);
-    process.exit(0);
-  };
-  process.once('SIGINT', () => void shutdown('SIGINT'));
-  process.once('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
 // Spawn ourselves as a detached child running `modulus start` (without

@@ -1,7 +1,7 @@
 // Shared filesystem layout for installed modules. Both the repo-bundled
 // modules (shipped alongside the CLI) and user-installed ones (under
 // ~/.modulus/modules) are scanned by several commands (status, doctor,
-// config, auth, ext). This module owns the roots and the directory walk so
+// config, auth, mod). This module owns the roots and the directory walk so
 // those commands don't each re-implement the same readdir/stat skeleton.
 
 import { readdirSync, statSync } from 'node:fs';

@@ -2,6 +2,10 @@ node_modules
 dist
 coverage
 *.log
+
+# Vendored, minified third-party panel libraries (React, Babel, marked) — not
+# authored source; reformatting them is pointless and would fail the check.
+src/panel/web/vendor/
 .env
 .env.*
 !.env.example

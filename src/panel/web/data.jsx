@@ -1,4 +1,3 @@
-/* global window */
 // Static labels + small offline fallbacks. Live data comes from the /api
 // endpoints (see api.js); these keep the panel legible if the server can't be
 // reached and give human labels to the raw capability strings modules
@@ -25,7 +24,7 @@ const CAP_LABELS = {
 
 // Friendly one-liners for the bundled modules, keyed by manifest name. Used
 // to enrich the gallery; falls back to the manifest description when absent.
-const EXT_BLURBS = {
+const MODULE_BLURBS = {
   'modulus-everyday-assistant':
     'Google Calendar, tasks, local reminders, weather, and daily briefings — your day, planned.',
   'modulus-voice':
@@ -44,4 +43,4 @@ const FALLBACK_MODELS = [
   { tag: 'qwen3.5:3b', size: '—' },
 ];
 
-Object.assign(window, { CAP_LABELS, EXT_BLURBS, FALLBACK_MODELS });
+Object.assign(window, { CAP_LABELS, MODULE_BLURBS, FALLBACK_MODELS });

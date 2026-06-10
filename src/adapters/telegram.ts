@@ -112,6 +112,14 @@ export interface TelegramOptions {
   // start.ts and shared with the panel so both surfaces share anti-repeat
   // history; omitted (undefined) when the setting is off.
   instantResponder?: InstantResponder;
+  // Setup-wizard pairing bus. When the wizard is re-run while the daemon is
+  // live, a non-allowlisted user can send their pairing code to the bot; the
+  // allowlist-reject middleware consults this before warning them. Structural
+  // (just tryMatch) to avoid a panel→adapter import cycle. The shared manager is
+  // created in start.ts and also handed to the panel as deps.pairing.
+  pairing?: {
+    tryMatch(text: string, from: { id: number; first_name?: string }, chatId: number): boolean;
+  };
 }
 
 export interface TelegramAdapter {
@@ -300,7 +308,7 @@ export function buildTelegramButtonRows(
   if (view === 'modules') {
     const moduleRows = (opts.moduleCommands ?? [])
       .slice(0, 3)
-      .map((c) => [{ text: `Run /${c.name}`, action: `ext:${c.name}` }]);
+      .map((c) => [{ text: `Run /${c.name}`, action: `module:${c.name}` }]);
     return [[{ text: '🔄 Refresh modules', action: 'core:modules' }], ...moduleRows];
   }
 
@@ -387,23 +395,23 @@ export function buildTelegramHelp(opts: TelegramHelpOptions = {}): string {
     'Core commands:',
     ...CORE_COMMAND_HELP.map((c) => `/${c.command} — ${c.description}`),
   ];
-  const exts = opts.modules ?? [];
+  const mods = opts.modules ?? [];
   const cmds = opts.moduleCommands ?? [];
-  if (exts.length > 0) {
+  if (mods.length > 0) {
     lines.push('', 'Modules:');
-    for (const e of exts)
+    for (const e of mods)
       lines.push(`• ${e.name} (${e.status ?? (e.enabled ? 'ready' : 'disabled')})`);
   }
   if (cmds.length > 0) {
     lines.push('', 'Module commands:');
-    const byExt = new Map<string, ModuleCommandRecord[]>();
+    const byModule = new Map<string, ModuleCommandRecord[]>();
     for (const c of cmds) {
-      const arr = byExt.get(c.module) ?? [];
+      const arr = byModule.get(c.module) ?? [];
       arr.push(c);
-      byExt.set(c.module, arr);
+      byModule.set(c.module, arr);
     }
-    for (const [ext, list] of byExt) {
-      lines.push(`  [${ext}]`);
+    for (const [mod, list] of byModule) {
+      lines.push(`  [${mod}]`);
       for (const c of list) lines.push(`  /${c.name}${c.description ? ' — ' + c.description : ''}`);
     }
   }
@@ -671,13 +679,13 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
 
   async function statusText(): Promise<string> {
     const health = await opts.llm.health();
-    const exts = opts.modules?.() ?? [];
+    const mods = opts.modules?.() ?? [];
     const uptimeS = Math.round((Date.now() - startedAt) / 1000);
     const lines = [
       `uptime: ${uptimeS}s`,
       `llm: ${health.ok ? 'ok' : 'down'} (${health.models.length} models)`,
       `tools: ${opts.tools.list().length}`,
-      `modules: ${exts.length === 0 ? 'none' : exts.map((e) => e.name).join(', ')}`,
+      `modules: ${mods.length === 0 ? 'none' : mods.map((e) => e.name).join(', ')}`,
     ];
     const s = opts.schedulerStats?.();
     if (s) {
@@ -746,7 +754,7 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
       await record.handler(cctx);
     } catch (e) {
       log.warn('module callback handler threw', {
-        ext: record.module,
+        mod: record.module,
         prefix,
         error: e instanceof Error ? e.message : String(e),
       });
@@ -761,8 +769,8 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     userId: number,
     reply: (text: string) => Promise<unknown>,
   ): Promise<boolean> {
-    const extCmd = (opts.moduleCommands?.() ?? []).find((c) => c.name === name);
-    if (!extCmd) return false;
+    const moduleCmd = (opts.moduleCommands?.() ?? []).find((c) => c.name === name);
+    if (!moduleCmd) return false;
     const cctx: TelegramCommandContext = {
       chatId,
       userId,
@@ -772,10 +780,10 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
       },
     };
     try {
-      await extCmd.handler(cctx);
+      await moduleCmd.handler(cctx);
     } catch (e) {
       log.warn('module command failed', {
-        ext: extCmd.module,
+        mod: moduleCmd.module,
         command: name,
         error: e instanceof Error ? e.message : String(e),
       });
@@ -788,6 +796,22 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
   bot.use(async (ctx, next) => {
     if (!isAllowed(ctx)) {
       const id = ctx.from?.id;
+      // Setup-wizard pairing: a non-allowlisted user may be sending the pairing
+      // code from the live re-run of the wizard. Consult the bus before warning
+      // them; on a match, confirm and swallow. (The new id takes effect on the
+      // next restart — the `allow` Set is fixed at boot; the panel says so.)
+      const text = ctx.message?.text;
+      if (opts.pairing && text && ctx.from && ctx.chat?.type === 'private') {
+        const matched = opts.pairing.tryMatch(
+          text,
+          { id: ctx.from.id, ...(ctx.from.first_name ? { first_name: ctx.from.first_name } : {}) },
+          ctx.chat.id,
+        );
+        if (matched) {
+          await ctx.reply("✅ You're connected to Modulus. Restart Modulus to finish.").catch(() => {});
+          return;
+        }
+      }
       log.warn('rejected message from non-allowlisted user', { from: id });
       if (ctx.chat) {
         await ctx.reply("You're not on this bot's allowlist.").catch(() => {});
@@ -895,8 +919,8 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
   // does I/O. Returns the reply text.
 
   bot.command('modules', async (ctx) => {
-    const exts = opts.modules?.() ?? [];
-    if (exts.length === 0) {
+    const mods = opts.modules?.() ?? [];
+    if (mods.length === 0) {
       await replyWithButtons(ctx, 'No modules installed yet.', 'modules');
       return;
     }
@@ -995,8 +1019,8 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     }
 
     const data = ctx.callbackQuery.data;
-    if (data.startsWith('ext:')) {
-      const command = data.slice('ext:'.length);
+    if (data.startsWith('module:')) {
+      const command = data.slice('module:'.length);
       await answerCallback(ctx, `Running /${command}`);
       const handled = await invokeModuleCommand(command, '', ctx.chat.id, ctx.from.id, (t) =>
         ctx.reply(t, { reply_markup: keyboardFor('modules') }),
@@ -1211,7 +1235,7 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
         }
       } catch (e) {
         log.warn('voice handler failed', {
-          ext: h.module,
+          mod: h.module,
           error: e instanceof Error ? e.message : String(e),
         });
       }

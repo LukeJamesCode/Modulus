@@ -1,7 +1,7 @@
 // Single source of truth for the core/host version string.
 //
 // Every place that needs the host version — the panel's /api/state report and
-// the registry `minCoreVersion` gate (marketplace + `modulus ext`) — imports
+// the registry `minCoreVersion` gate (marketplace + `modulus mod`) — imports
 // HOST_VERSION from here, so they can never drift apart. The value is read once
 // from the repo's package.json (npm's own version field), so bumping the
 // release version in one place updates everything.

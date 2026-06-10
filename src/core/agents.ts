@@ -190,8 +190,8 @@ export interface AgentDefinition {
   // Autonomous-run budget ceilings; null => engine default.
   maxWallClockMs: number | null;
   maxTotalRounds: number | null;
-  // Provenance: null = user-created; 'ext:<name>' = provided by that module's
-  // manifest. The loader owns the lifecycle of ext-origin agents (upsert on
+  // Provenance: null = user-created; 'module:<name>' = provided by that module's
+  // manifest. The loader owns the lifecycle of module-origin agents (upsert on
   // load, delete on uninstall); update() deliberately cannot change it.
   origin: string | null;
   createdAt: number;

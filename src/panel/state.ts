@@ -13,6 +13,7 @@ import { metricsFilePath } from '../cli/daemon.js';
 import { probeOllama } from '../cli/ollama-probe.js';
 import { collectModuleReadiness } from '../core/module-readiness.js';
 import { readMetrics } from '../core/metrics.js';
+import { RECOMMENDED_MODELS } from '../cli/profiles.js';
 import { HOST_VERSION } from '../core/version.js';
 
 export interface BuildStateDeps {
@@ -22,6 +23,11 @@ export interface BuildStateDeps {
   // The proactive-nudge toggle, owned by the panel runtime (flipped via the
   // settings/agent route). Surfaced here so the dashboard can render it.
   proactive: boolean;
+  // True when the daemon is serving the panel in setup mode (config incomplete,
+  // engine stubbed). The wizard pins itself open on this regardless of the
+  // `configured` flag, and a failed promotion surfaces via setupError.
+  setupMode?: boolean;
+  setupError?: string | null;
 }
 
 function lanAddress(): string | null {
@@ -159,5 +165,11 @@ export async function buildState(deps: BuildStateDeps): Promise<unknown> {
     activity,
     version: HOST_VERSION,
     lan: lanAddress(),
+    // Setup-mode flags + the per-tier model recommendations the wizard renders.
+    // modelRecommendations is sent for every tier so flipping the tier control
+    // re-renders the recommendation card without a round-trip.
+    setupMode: !!deps.setupMode,
+    setupError: deps.setupError ?? null,
+    modelRecommendations: RECOMMENDED_MODELS,
   };
 }

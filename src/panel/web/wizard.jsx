@@ -1,58 +1,64 @@
-/* global React, window */
 // First-run setup wizard. Mirrors `modulus init` but friendly, and writes the
 // same config.json the CLI does. Live checks hit real endpoints:
-//   token  → POST /api/telegram/validate
-//   ollama → POST /api/ollama/test (then GET model tags)
-//   finish → POST /api/config, then enable/disable chosen modules
-// The last step hands off to the hub with the agent starting.
+//   ollama  → POST /api/ollama/test, GET pull-stream (SSE) to download a model
+//   token   → POST /api/telegram/validate
+//   pairing → POST /api/telegram/pair, GET /api/telegram/pair/status (poll)
+//   finish  → POST /api/config (+ POST /api/setup/complete in setup mode)
+//
+// In setup mode the daemon is stubbed and pinned to this wizard; "Start Modulus"
+// posts /api/setup/complete, which promotes to the full daemon. The app's own
+// /api/state poll flips setupMode→false and renders the hub once promotion lands.
 const { useState: useStateWiz, useEffect: useEffectWiz, useRef: useRefWiz } = React;
 
 const STEPS = [
   { id: 'welcome', label: 'Welcome' },
-  { id: 'telegram', label: 'Connect Telegram' },
-  { id: 'allowlist', label: 'Who can talk to it' },
   { id: 'ollama', label: 'Model server' },
-  { id: 'models', label: 'Choose models' },
-  { id: 'hardware', label: 'Hardware tier' },
+  { id: 'telegram', label: 'Connect Telegram' },
   { id: 'modules', label: 'Modules' },
-  { id: 'ext-config', label: 'Configure modules' },
-  { id: 'review', label: 'Review & finish' },
+  { id: 'module-config', label: 'Configure modules' },
+  { id: 'finish', label: 'Finish' },
 ];
 
-function Wizard({ onFinish, onExit, suggestedTier, ramGb }) {
+function Wizard({
+  onFinish,
+  onExit,
+  suggestedTier,
+  ramGb,
+  setupMode,
+  setupError,
+  modelRecommendations,
+}) {
   const [step, setStep] = useStateWiz(0);
   const [saving, setSaving] = useStateWiz(false);
   const [configSaving, setConfigSaving] = useStateWiz(false);
   const [saveErr, setSaveErr] = useStateWiz(null);
-  const extConfigSaveRef = useRefWiz(null);
+  const [starting, setStarting] = useStateWiz(false);
+  const moduleConfigSaveRef = useRefWiz(null);
   const [models, setModels] = useStateWiz([]);
   const [data, setData] = useStateWiz({
+    ollamaUrl: 'http://localhost:11434',
+    ollamaState: 'idle',
+    ollamaErr: '',
+    tier: suggestedTier || 'standard',
+    chatModel: '',
+    reasoningModel: '',
+    toolsModel: '',
     token: '',
     botName: '',
     botUser: '',
     tokenState: 'idle',
     tokenErr: '',
     allowlist: [],
-    ollamaUrl: 'http://localhost:11434',
-    ollamaState: 'idle',
-    ollamaErr: '',
-    chatModel: '',
-    reasoningModel: '',
-    toolsModel: '',
-    tier: suggestedTier || 'standard',
+    names: {},
   });
   const set = (patch) => setData((d) => ({ ...d, ...patch }));
 
   const canNext = () => {
     switch (STEPS[step].id) {
-      case 'telegram':
-        return data.tokenState === 'ok';
-      case 'allowlist':
-        return data.allowlist.length > 0;
       case 'ollama':
-        return data.ollamaState === 'ok';
-      case 'models':
-        return !!data.chatModel;
+        return data.ollamaState === 'ok' && !!data.chatModel;
+      case 'telegram':
+        return data.tokenState === 'ok' && data.allowlist.length > 0;
       default:
         return true;
     }
@@ -71,19 +77,36 @@ function Wizard({ onFinish, onExit, suggestedTier, ramGb }) {
       tier: data.tier,
     };
     const r = await window.api.post('/api/config', body);
-    setSaving(false);
     if (!r.ok) {
+      setSaving(false);
       setSaveErr(r.error || 'Could not save your setup.');
       return;
     }
-    onFinish();
+    if (setupMode) {
+      const c = await window.api.post('/api/setup/complete');
+      setSaving(false);
+      if (!c.ok) {
+        setSaveErr((c.data && c.data.error) || c.error || 'Could not start Modulus.');
+        return;
+      }
+      // Promotion is underway; show the starting screen. The app's /api/state
+      // poll flips setupMode→false and renders the hub when the daemon is live.
+      setStarting(true);
+    } else {
+      setSaving(false);
+      onFinish();
+    }
+  };
+
+  const retryComplete = async () => {
+    await window.api.post('/api/setup/complete');
   };
 
   const next = async () => {
-    if (cur === 'ext-config') {
-      if (extConfigSaveRef.current) {
+    if (cur === 'module-config') {
+      if (moduleConfigSaveRef.current) {
         setConfigSaving(true);
-        const ok = await extConfigSaveRef.current();
+        const ok = await moduleConfigSaveRef.current();
         setConfigSaving(false);
         if (!ok) return;
       }
@@ -95,6 +118,13 @@ function Wizard({ onFinish, onExit, suggestedTier, ramGb }) {
   };
   const back = () => step > 0 && setStep(step - 1);
   const cur = STEPS[step].id;
+
+  if (starting) {
+    return <StartingScreen setupError={setupError} onRetry={retryComplete} />;
+  }
+
+  const gated = ['ollama', 'telegram'];
+  const blockedLabel = cur === 'ollama' ? 'Set up a model' : 'Complete this step';
 
   return (
     <div style={{ height: '100%', display: 'flex', background: 'var(--bg)', overflow: 'hidden' }}>
@@ -195,20 +225,22 @@ function Wizard({ onFinish, onExit, suggestedTier, ramGb }) {
             );
           })}
         </div>
-        <button
-          onClick={onExit}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--text-3)',
-            fontSize: 12.5,
-            cursor: 'pointer',
-            textAlign: 'left',
-            padding: '8px 10px',
-          }}
-        >
-          Skip setup — I’ll do it later →
-        </button>
+        {onExit && (
+          <button
+            onClick={onExit}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-3)',
+              fontSize: 12.5,
+              cursor: 'pointer',
+              textAlign: 'left',
+              padding: '8px 10px',
+            }}
+          >
+            Skip setup — I’ll do it later →
+          </button>
+        )}
       </aside>
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -219,18 +251,21 @@ function Wizard({ onFinish, onExit, suggestedTier, ramGb }) {
             style={{ maxWidth: 600, margin: '0 auto', padding: '0 32px' }}
           >
             {cur === 'welcome' && <StepWelcome />}
-            {cur === 'telegram' && <StepTelegram data={data} set={set} />}
-            {cur === 'allowlist' && <StepAllowlist data={data} set={set} />}
             {cur === 'ollama' && (
-              <StepOllama data={data} set={set} models={models} setModels={setModels} />
+              <StepOllama
+                data={data}
+                set={set}
+                models={models}
+                setModels={setModels}
+                suggestedTier={suggestedTier}
+                ramGb={ramGb}
+                modelRecommendations={modelRecommendations}
+              />
             )}
-            {cur === 'models' && <StepModels data={data} set={set} models={models} />}
-            {cur === 'hardware' && (
-              <StepHardware data={data} set={set} suggestedTier={suggestedTier} ramGb={ramGb} />
-            )}
+            {cur === 'telegram' && <StepTelegram data={data} set={set} />}
             {cur === 'modules' && <StepModules />}
-            {cur === 'ext-config' && <StepExtConfig saveRef={extConfigSaveRef} />}
-            {cur === 'review' && <StepReview data={data} goto={setStep} />}
+            {cur === 'module-config' && <StepModuleConfig saveRef={moduleConfigSaveRef} />}
+            {cur === 'finish' && <StepFinish data={data} goto={setStep} />}
           </div>
         </div>
         <div
@@ -293,13 +328,21 @@ function Wizard({ onFinish, onExit, suggestedTier, ramGb }) {
           >
             Back
           </window.Button>
-          {!canNext() && ['telegram', 'allowlist', 'ollama', 'models'].includes(cur) ? (
-            <window.Button variant="default" disabled style={{ opacity: 0.55 }}>
-              {cur === 'models' ? 'Pick a chat model' : 'Complete this step'}
-            </window.Button>
+          {!canNext() && gated.includes(cur) ? (
+            <>
+              {/* Ollama: allow skipping the model with an inline warning. */}
+              {cur === 'ollama' && data.ollamaState === 'ok' && (
+                <window.Button variant="ghost" onClick={() => setStep(step + 1)}>
+                  Skip for now
+                </window.Button>
+              )}
+              <window.Button variant="default" disabled style={{ opacity: 0.55 }}>
+                {blockedLabel}
+              </window.Button>
+            </>
           ) : (
             <>
-              {cur === 'ext-config' && (
+              {cur === 'module-config' && (
                 <window.Button
                   variant="ghost"
                   onClick={() => setStep(step + 1)}
@@ -310,7 +353,7 @@ function Wizard({ onFinish, onExit, suggestedTier, ramGb }) {
               )}
               <window.Button
                 variant="primary"
-                icon={cur === 'review' ? 'power' : cur === 'ext-config' ? 'check' : 'fwd'}
+                icon={cur === 'finish' ? 'power' : cur === 'module-config' ? 'check' : 'fwd'}
                 onClick={next}
                 disabled={saving || configSaving}
               >
@@ -318,9 +361,9 @@ function Wizard({ onFinish, onExit, suggestedTier, ramGb }) {
                   <>
                     <window.Icon name="refresh" size={15} className="spin" /> Saving…
                   </>
-                ) : cur === 'review' ? (
+                ) : cur === 'finish' ? (
                   'Start Modulus'
-                ) : cur === 'ext-config' ? (
+                ) : cur === 'module-config' ? (
                   'Save & continue'
                 ) : (
                   'Continue'
@@ -330,6 +373,73 @@ function Wizard({ onFinish, onExit, suggestedTier, ramGb }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Shown after "Start Modulus" in setup mode while the daemon promotes. The app's
+// own /api/state poll renders the hub on success; this just covers the gap (and
+// surfaces a failed promotion's setupError with a retry).
+function StartingScreen({ setupError, onRetry }) {
+  const [elapsed, setElapsed] = useStateWiz(0);
+  useEffectWiz(() => {
+    const t = setInterval(() => setElapsed((e) => e + 1.5), 1500);
+    return () => clearInterval(t);
+  }, []);
+  const timedOut = elapsed >= 90;
+  return (
+    <div
+      style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 16,
+        background: 'var(--bg)',
+        padding: 32,
+        textAlign: 'center',
+      }}
+    >
+      {setupError ? (
+        <>
+          <span
+            style={{
+              width: 48,
+              height: 48,
+              borderRadius: 99,
+              background: 'color-mix(in oklab, var(--err) 18%, var(--surface))',
+              color: 'var(--err)',
+              display: 'grid',
+              placeItems: 'center',
+            }}
+          >
+            <window.Icon name="alert" size={22} />
+          </span>
+          <div style={{ fontSize: 20, fontWeight: 700 }}>Modulus couldn’t finish starting</div>
+          <p style={{ fontSize: 14, color: 'var(--text-2)', maxWidth: 440, lineHeight: 1.55 }}>
+            {setupError}
+          </p>
+          <window.Button variant="primary" icon="refresh" onClick={onRetry}>
+            Try again
+          </window.Button>
+        </>
+      ) : (
+        <>
+          <window.Icon
+            name="refresh"
+            size={32}
+            className="spin"
+            style={{ color: 'var(--accent-strong)' }}
+          />
+          <div style={{ fontSize: 20, fontWeight: 700 }}>Starting Modulus…</div>
+          <p style={{ fontSize: 14, color: 'var(--text-2)', maxWidth: 440, lineHeight: 1.55 }}>
+            {timedOut
+              ? "This is taking a while. If it doesn't land soon, check ~/.modulus/log/modulus.log, then run `modulus start` again."
+              : 'Bringing the agent, modules, and Telegram online. This page updates itself.'}
+          </p>
+        </>
+      )}
     </div>
   );
 }
@@ -382,8 +492,8 @@ function StepWelcome() {
   return (
     <div>
       <StepHead kicker="Welcome" title="Let’s set up Modulus, your private assistant.">
-        This takes about three minutes. We’ll connect your chat app, pick a model to run on this
-        machine, and choose any extras you want. You can change all of it later.
+        This takes about three minutes. We’ll pick a model to run on this machine, connect your chat
+        app, and choose any extras you want. You can change all of it later.
       </StepHead>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {points.map((p) => (
@@ -482,199 +592,164 @@ function HelperBox({ open, onToggle, title, children }) {
   );
 }
 
-function StepTelegram({ data, set }) {
-  const [help, setHelp] = useStateWiz(false);
-  const validate = async () => {
-    set({ tokenState: 'checking', tokenErr: '' });
-    const r = await window.api.post('/api/telegram/validate', { token: data.token });
-    if (r.ok && r.data.ok)
-      set({ tokenState: 'ok', botName: r.data.botName, botUser: r.data.botUser });
-    else
-      set({
-        tokenState: 'err',
-        tokenErr: (r.data && r.data.error) || r.error || 'That doesn’t look like a valid token.',
-      });
-  };
-  return (
-    <div>
-      <StepHead kicker="Step 1" title="Connect Telegram">
-        Telegram is the chat app you’ll use to talk to Modulus. You need a <b>bot token</b> — a
-        secret key that lets Modulus act as your personal bot.
-      </StepHead>
-      <window.Label hint="Paste the token here. It looks like 1234567890:AAH... and stays on this machine.">
-        Bot token
-      </window.Label>
-      <div style={{ display: 'flex', gap: 10 }}>
-        <div style={{ flex: 1 }}>
-          <window.SecretInput
-            value={data.token}
-            onChange={(e) => set({ token: e.target.value, tokenState: 'idle' })}
-            placeholder="1234567890:AAH…"
-          />
-        </div>
-        <window.Button
-          variant="primary"
-          onClick={validate}
-          disabled={!data.token || data.tokenState === 'checking'}
-          style={{ opacity: !data.token ? 0.55 : 1 }}
-        >
-          {data.tokenState === 'checking' ? (
-            <>
-              <window.Icon name="refresh" size={15} className="spin" /> Checking
-            </>
-          ) : (
-            'Validate'
-          )}
-        </window.Button>
-      </div>
-      <CheckResult
-        state={data.tokenState}
-        ok={
-          <>
-            Connected as <b>{data.botName}</b>{' '}
-            <span className="mono" style={{ color: 'var(--text-3)' }}>
-              {data.botUser}
-            </span>
-          </>
-        }
-        err={
-          data.tokenErr ||
-          'That doesn’t look like a valid token. Check you copied the whole thing from BotFather.'
-        }
-      />
-      <HelperBox open={help} onToggle={() => setHelp((h) => !h)} title="How do I get a token?">
-        Open Telegram and message <span className="mono">@BotFather</span>. Send{' '}
-        <span className="mono">/newbot</span>, pick a name and username, and BotFather replies with
-        a token. Copy it and paste it above.
-      </HelperBox>
-    </div>
-  );
-}
+// ---- Ollama step (server + tier + model, merged) --------------------------
 
-function StepAllowlist({ data, set }) {
-  const [help, setHelp] = useStateWiz(false);
-  const [draft, setDraft] = useStateWiz('');
-  const [err, setErr] = useStateWiz('');
-  const add = () => {
-    const v = draft.trim();
-    if (!/^\d{4,}$/.test(v)) {
-      setErr('A Telegram ID is a number, e.g. 8675309.');
-      return;
-    }
-    if (data.allowlist.includes(v)) {
-      setErr('That ID is already added.');
-      return;
-    }
-    set({ allowlist: [...data.allowlist, v] });
-    setDraft('');
-    setErr('');
-  };
+function OllamaInstallCard({ onRecheck, checking }) {
+  const plat = (navigator.platform || '').toLowerCase();
+  const isMac = plat.includes('mac');
+  const isWin = plat.includes('win');
+  const lines = isMac
+    ? [
+        'Download the macOS app from ollama.com/download',
+        'Open it once so Ollama starts',
+        'Come back and click “Check again”.',
+      ]
+    : isWin
+      ? [
+          'Download the Windows installer from ollama.com/download',
+          'Run it — Ollama starts automatically',
+          'Come back and click “Check again”.',
+        ]
+      : [
+          'Install with: curl -fsSL https://ollama.com/install.sh | sh',
+          'Ollama starts as a service',
+          'Come back and click “Check again”.',
+        ];
   return (
-    <div>
-      <StepHead kicker="Step 2" title="Who’s allowed to talk to it?">
-        For privacy, only the Telegram accounts you list here can chat with your bot. Everyone else
-        is silently ignored. Add yourself first.
-      </StepHead>
-      <window.Label hint="Add one or more numeric Telegram user IDs.">
-        Allowed user IDs
-      </window.Label>
-      <div style={{ display: 'flex', gap: 10 }}>
-        <div style={{ flex: 1, maxWidth: 320 }}>
-          <window.Input
-            mono
-            value={draft}
-            invalid={!!err}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              setErr('');
-            }}
-            onKeyDown={(e) => e.key === 'Enter' && add()}
-            placeholder="e.g. 8675309"
-          />
-        </div>
-        <window.Button variant="default" icon="plus" onClick={add}>
-          Add
-        </window.Button>
+    <div
+      className="fade"
+      style={{
+        marginTop: 16,
+        padding: 16,
+        borderRadius: 'var(--radius)',
+        background: 'color-mix(in oklab, var(--warn) 9%, var(--surface))',
+        border: '1px solid color-mix(in oklab, var(--warn) 35%, var(--border))',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+        <window.Icon name="alert" size={16} style={{ color: 'var(--warn)' }} />
+        <span style={{ fontWeight: 600, fontSize: 14.5 }}>Ollama isn’t running yet</span>
       </div>
-      {err && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 7,
-            marginTop: 9,
-            fontSize: 13,
-            color: 'var(--err)',
-          }}
-        >
-          <window.Icon name="alert" size={14} /> {err}
-        </div>
-      )}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 16, minHeight: 34 }}>
-        {data.allowlist.length === 0 && (
-          <span style={{ fontSize: 13.5, color: 'var(--text-3)' }}>No one added yet.</span>
-        )}
-        {data.allowlist.map((id) => (
-          <span
-            key={id}
-            className="rise"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '7px 9px 7px 13px',
-              borderRadius: 99,
-              background: 'var(--accent-soft)',
-              border: '1px solid transparent',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 13.5,
-              color: 'var(--accent-strong)',
-              fontWeight: 600,
-            }}
-          >
-            {id}
-            <button
-              onClick={() => set({ allowlist: data.allowlist.filter((x) => x !== id) })}
-              aria-label="Remove"
-              style={{
-                width: 20,
-                height: 20,
-                borderRadius: 99,
-                border: 'none',
-                background: 'color-mix(in oklab, var(--accent) 25%, transparent)',
-                color: 'var(--accent-strong)',
-                cursor: 'pointer',
-                display: 'grid',
-                placeItems: 'center',
-              }}
-            >
-              <window.Icon name="x" size={12} />
-            </button>
-          </span>
+      <ol
+        style={{
+          paddingLeft: 20,
+          margin: '0 0 12px',
+          lineHeight: 1.7,
+          fontSize: 13.5,
+          color: 'var(--text-2)',
+        }}
+      >
+        {lines.map((l, i) => (
+          <li key={i}>{l}</li>
         ))}
+      </ol>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <a
+          href="https://ollama.com/download"
+          target="_blank"
+          rel="noreferrer"
+          style={{ fontSize: 13.5, color: 'var(--accent-strong)', fontWeight: 600 }}
+        >
+          Open ollama.com/download →
+        </a>
+        <window.Button variant="default" icon="refresh" onClick={onRecheck} disabled={checking}>
+          {checking ? 'Checking…' : 'Check again'}
+        </window.Button>
       </div>
-      <HelperBox open={help} onToggle={() => setHelp((h) => !h)} title="How do I find my ID?">
-        In Telegram, message <span className="mono">@userinfobot</span> and it replies with your
-        numeric ID. Paste that number above.
-      </HelperBox>
     </div>
   );
 }
 
-function StepOllama({ data, set, models, setModels }) {
-  const test = async () => {
+function StepOllama({ data, set, models, setModels, suggestedTier, ramGb, modelRecommendations }) {
+  const [showAdvanced, setShowAdvanced] = useStateWiz(false);
+  const [changeTier, setChangeTier] = useStateWiz(false);
+  const [dl, setDl] = useStateWiz(null); // { model, status, completed, total }
+  const [dlErr, setDlErr] = useStateWiz('');
+  const dlRef = useRefWiz(null);
+
+  const probe = async () => {
     set({ ollamaState: 'testing', ollamaErr: '' });
     const r = await window.api.post('/api/ollama/test', { url: data.ollamaUrl });
-    if (r.ok && r.data.ok) {
+    if (r.ok && r.data && r.data.ok) {
       set({ ollamaState: 'ok' });
       setModels(r.data.models || []);
-    } else set({ ollamaState: 'err', ollamaErr: (r.data && r.data.error) || r.error || '' });
+    } else {
+      set({ ollamaState: 'err', ollamaErr: (r.data && r.data.error) || r.error || '' });
+    }
   };
+  // Auto-probe on mount.
+  useEffectWiz(() => {
+    probe();
+    return () => {
+      if (dlRef.current) {
+        try {
+          dlRef.current.close();
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+  }, []);
+
+  const rec = (modelRecommendations && modelRecommendations[data.tier]) || null;
+  const recTag = rec && rec.chat;
+  const haveRec = !!recTag && models.includes(recTag);
+
+  // If the recommended tag is already pulled and nothing is chosen yet, adopt it.
+  useEffectWiz(() => {
+    if (haveRec && !data.chatModel) set({ chatModel: recTag });
+  }, [haveRec, recTag, data.chatModel]);
+
+  const startDownload = (tag) => {
+    setDlErr('');
+    setDl({ model: tag, status: 'starting', completed: 0, total: 0 });
+    const es = window.api.streamSSE('/api/ollama/pull-stream?model=' + encodeURIComponent(tag), {
+      onMessage: (_e, raw) => {
+        let m;
+        try {
+          m = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        } catch {
+          return;
+        }
+        if (m && m.type === 'progress') {
+          setDl((d) => ({
+            model: tag,
+            status: m.status || (d && d.status) || '',
+            total: typeof m.total === 'number' ? m.total : (d && d.total) || 0,
+            completed: typeof m.completed === 'number' ? m.completed : (d && d.completed) || 0,
+          }));
+        } else if (m && m.type === 'done') {
+          es.close();
+          dlRef.current = null;
+          if (m.ok) {
+            setModels((prev) => (prev.includes(tag) ? prev : [...prev, tag]));
+            set({ chatModel: tag });
+            setDl(null);
+          } else {
+            setDlErr(m.error || 'Download failed.');
+            setDl(null);
+          }
+        }
+      },
+      onError: () => {
+        if (!dlRef.current) return;
+        es.close();
+        dlRef.current = null;
+        setDlErr('The download stream disconnected — check the agent log and retry.');
+        setDl(null);
+      },
+    });
+    dlRef.current = es;
+  };
+
+  const pct =
+    dl && dl.total > 0 ? Math.min(100, Math.round((dl.completed / dl.total) * 100)) : null;
+
   return (
     <div>
-      <StepHead kicker="Step 3" title="Local model server">
-        Modulus runs its AI models with <b>Ollama</b>, a small program on this machine. Let’s make
-        sure Modulus can reach it.
+      <StepHead kicker="Step 1" title="Local model server">
+        Modulus runs its AI with <b>Ollama</b>, a small program on this machine. Let’s make sure
+        it’s reachable and pick a model.
       </StepHead>
       <window.Label hint="The address Ollama listens on. The default works for most setups.">
         Ollama URL
@@ -687,7 +762,7 @@ function StepOllama({ data, set, models, setModels }) {
             onChange={(e) => set({ ollamaUrl: e.target.value, ollamaState: 'idle' })}
           />
         </div>
-        <window.Button variant="primary" onClick={test} disabled={data.ollamaState === 'testing'}>
+        <window.Button variant="primary" onClick={probe} disabled={data.ollamaState === 'testing'}>
           {data.ollamaState === 'testing' ? (
             <>
               <window.Icon name="refresh" size={15} className="spin" /> Testing
@@ -711,37 +786,209 @@ function StepOllama({ data, set, models, setModels }) {
         err={
           data.ollamaErr
             ? `Couldn’t reach Ollama: ${data.ollamaErr}`
-            : 'Couldn’t reach Ollama there. Is it running? Try the default http://localhost:11434.'
+            : 'Couldn’t reach Ollama there.'
         }
       />
-      {data.ollamaState === 'ok' && models.length > 0 && (
-        <div
-          className="fade"
-          style={{
-            marginTop: 16,
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-sm)',
-            overflow: 'hidden',
-          }}
-        >
-          {models.map((m, i) => (
-            <div
-              key={m}
+
+      {data.ollamaState === 'err' && (
+        <OllamaInstallCard onRecheck={probe} checking={data.ollamaState === 'testing'} />
+      )}
+
+      {data.ollamaState === 'ok' && (
+        <div className="fade" style={{ marginTop: 18 }}>
+          {/* Tier pill + change control */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '10px 14px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+            }}
+          >
+            <window.Icon name="cpu" size={16} style={{ color: 'var(--accent-strong)' }} />
+            <span style={{ fontSize: 13.5 }}>
+              Detected: <b style={{ textTransform: 'capitalize' }}>{data.tier}</b>
+              {ramGb != null && <span style={{ color: 'var(--text-3)' }}> — {ramGb} GB RAM</span>}
+            </span>
+            <button
+              onClick={() => setChangeTier((c) => !c)}
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
-                padding: '10px 14px',
-                borderTop: i ? '1px solid var(--border)' : 'none',
-                background: 'var(--surface)',
+                marginLeft: 'auto',
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-3)',
+                fontSize: 12.5,
+                fontWeight: 600,
+                cursor: 'pointer',
               }}
             >
-              <window.Icon name="spark" size={15} style={{ color: 'var(--accent-strong)' }} />
-              <span className="mono" style={{ fontSize: 13.5, fontWeight: 600, flex: 1 }}>
-                {m}
-              </span>
+              {changeTier ? 'Done' : 'Change'}
+            </button>
+          </div>
+          {changeTier && (
+            <div className="fade" style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              {['small', 'standard', 'heavy'].map((t) => {
+                const on = data.tier === t;
+                return (
+                  <button
+                    key={t}
+                    onClick={() => set({ tier: t })}
+                    style={{
+                      flex: 1,
+                      padding: '8px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      cursor: 'pointer',
+                      textTransform: 'capitalize',
+                      fontWeight: 600,
+                      fontSize: 13,
+                      background: on ? 'var(--accent-soft)' : 'var(--surface)',
+                      border: `1.5px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+                      color: on ? 'var(--accent-strong)' : 'var(--text-2)',
+                    }}
+                  >
+                    {t}
+                    {t === suggestedTier ? ' ★' : ''}
+                  </button>
+                );
+              })}
             </div>
-          ))}
+          )}
+
+          {/* Model recommendation / download */}
+          {rec && (
+            <div
+              style={{
+                marginTop: 14,
+                padding: 16,
+                borderRadius: 'var(--radius)',
+                background: 'var(--surface)',
+                border: `1px solid ${haveRec ? 'color-mix(in oklab, var(--ok) 40%, var(--border))' : 'var(--border)'}`,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <window.Icon name="spark" size={17} style={{ color: 'var(--accent-strong)' }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="mono" style={{ fontWeight: 700, fontSize: 14.5 }}>
+                    {recTag}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
+                    Recommended for {data.tier} · {rec.approxSize}
+                  </div>
+                </div>
+                {haveRec ? (
+                  <window.Badge tone="ok">
+                    <window.Icon name="check" size={11} /> installed
+                  </window.Badge>
+                ) : dl ? (
+                  <span style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
+                    {pct != null ? `${pct}%` : 'starting…'}
+                  </span>
+                ) : (
+                  <window.Button
+                    variant="primary"
+                    icon="download"
+                    onClick={() => startDownload(recTag)}
+                  >
+                    Download
+                  </window.Button>
+                )}
+              </div>
+              {rec.reason && !dl && !haveRec && (
+                <p style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 8, lineHeight: 1.5 }}>
+                  {rec.reason}
+                </p>
+              )}
+              {dl && (
+                <div style={{ marginTop: 12 }}>
+                  <div
+                    style={{
+                      height: 6,
+                      background: 'var(--surface-2)',
+                      borderRadius: 99,
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <div
+                      style={{
+                        height: '100%',
+                        width: `${pct ?? 5}%`,
+                        background: 'var(--accent)',
+                        borderRadius: 99,
+                        transition: 'width .3s',
+                      }}
+                    />
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+                    {dl.status}
+                  </div>
+                </div>
+              )}
+              {dlErr && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    fontSize: 13,
+                    color: 'var(--err)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  <window.Icon name="alert" size={14} /> {dlErr}
+                </div>
+              )}
+            </div>
+          )}
+
+          <button
+            onClick={() => setShowAdvanced((s) => !s)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-3)',
+              fontSize: 12.5,
+              cursor: 'pointer',
+              padding: '12px 0 0',
+              fontWeight: 600,
+            }}
+          >
+            {showAdvanced ? '← Hide model slots' : 'Choose a different model →'}
+          </button>
+          {showAdvanced && (
+            <div
+              className="fade"
+              style={{ display: 'flex', flexDirection: 'column', gap: 20, marginTop: 12 }}
+            >
+              <ModelSlot
+                label="Chat model — your everyday default"
+                hint="Fast model used for normal conversation. Required."
+                value={data.chatModel}
+                onChange={(v) => set({ chatModel: v })}
+                models={models}
+              />
+              <ModelSlot
+                label="Reasoning model — for hard problems"
+                hint="A bigger, slower model for tricky questions. Optional."
+                value={data.reasoningModel}
+                onChange={(v) => set({ reasoningModel: v })}
+                models={models}
+                allowSkip
+                skipLabel="Skip — my hardware is small"
+              />
+              <ModelSlot
+                label="Tools model — for tool-calling"
+                hint="Used when Modulus calls tools. Leave blank to reuse your Chat model."
+                value={data.toolsModel}
+                onChange={(v) => set({ toolsModel: v })}
+                models={models}
+                allowSkip
+                skipLabel="Use my Chat model"
+              />
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -791,137 +1038,345 @@ function ModelSlot({ label, hint, value, onChange, models, allowSkip, skipLabel 
   );
 }
 
-function StepModels({ data, set, models }) {
-  return (
-    <div>
-      <StepHead kicker="Step 4" title="Choose your models">
-        Modulus uses up to three model “slots”. You only really need the first one.
-      </StepHead>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
-        <ModelSlot
-          label="Chat model — your everyday default"
-          hint="Fast model used for normal conversation. Required."
-          value={data.chatModel}
-          onChange={(v) => set({ chatModel: v })}
-          models={models}
-        />
-        <ModelSlot
-          label="Reasoning model — for hard problems"
-          hint="A bigger, slower model for tricky questions. Optional."
-          value={data.reasoningModel}
-          onChange={(v) => set({ reasoningModel: v })}
-          models={models}
-          allowSkip
-          skipLabel="Skip — my hardware is small"
-        />
-        <ModelSlot
-          label="Tools model — for tool-calling"
-          hint="Used when Modulus calls tools. Leave blank to reuse your Chat model."
-          value={data.toolsModel}
-          onChange={(v) => set({ toolsModel: v })}
-          models={models}
-          allowSkip
-          skipLabel="Use my Chat model"
-        />
-      </div>
-    </div>
-  );
-}
+// ---- Telegram step (token + pairing + allowlist, merged) ------------------
 
-function StepHardware({ data, set, suggestedTier, ramGb }) {
-  const tiers = [
-    {
-      id: 'small',
-      title: 'Small',
-      desc: 'Raspberry Pi or similar. Keeps things light and fast.',
-      ram: '≤ 4 GB',
-    },
-    {
-      id: 'standard',
-      title: 'Standard',
-      desc: 'A mini PC or laptop. A good balance for most people.',
-      ram: '4–16 GB',
-    },
-    {
-      id: 'heavy',
-      title: 'Heavy',
-      desc: 'A powerful desktop. Run bigger models and reasoning.',
-      ram: '16 GB+',
-    },
-  ];
-  const sug = suggestedTier || 'standard';
+function StepTelegram({ data, set }) {
+  const [help, setHelp] = useStateWiz(false);
+  const [manualOpen, setManualOpen] = useStateWiz(false);
+  const [draft, setDraft] = useStateWiz('');
+  const [manualErr, setManualErr] = useStateWiz('');
+  const [pair, setPair] = useStateWiz({
+    state: 'idle',
+    code: '',
+    botUser: '',
+    firstName: '',
+    err: '',
+  });
+  const pairPoll = useRefWiz(null);
+
+  const stopPoll = () => {
+    if (pairPoll.current) {
+      clearInterval(pairPoll.current);
+      pairPoll.current = null;
+    }
+  };
+  useEffectWiz(() => () => stopPoll(), []);
+
+  const validate = async () => {
+    set({ tokenState: 'checking', tokenErr: '' });
+    const r = await window.api.post('/api/telegram/validate', { token: data.token });
+    if (r.ok && r.data && r.data.ok)
+      set({ tokenState: 'ok', botName: r.data.botName, botUser: r.data.botUser });
+    else
+      set({
+        tokenState: 'err',
+        tokenErr: (r.data && r.data.error) || r.error || 'That doesn’t look like a valid token.',
+      });
+  };
+
+  const pollStatus = async () => {
+    const r = await window.api.get('/api/telegram/pair/status');
+    if (!r.ok || !r.data) return;
+    const s = r.data;
+    if (s.state === 'paired') {
+      stopPoll();
+      const id = String(s.userId);
+      if (!data.allowlist.includes(id)) {
+        set({
+          allowlist: [...data.allowlist, id],
+          names: { ...data.names, [id]: s.firstName || id },
+        });
+      }
+      setPair((p) => ({ ...p, state: 'paired', firstName: s.firstName || '' }));
+    } else if (s.state === 'expired') {
+      stopPoll();
+      setPair((p) => ({ ...p, state: 'expired' }));
+    } else if (s.state === 'error') {
+      stopPoll();
+      setPair((p) => ({ ...p, state: 'error', err: s.error || '' }));
+    }
+  };
+
+  const startPair = async () => {
+    stopPoll();
+    setPair({ state: 'starting', code: '', botUser: '', firstName: '', err: '' });
+    const r = await window.api.post('/api/telegram/pair', { token: data.token });
+    if (!r.ok) {
+      // 409 → pairing isn't available in this mode; fall back to manual entry.
+      setPair({
+        state: r.status === 409 ? 'unavailable' : 'error',
+        code: '',
+        botUser: '',
+        firstName: '',
+        err: (r.data && r.data.error) || r.error || '',
+      });
+      if (r.status === 409) setManualOpen(true);
+      return;
+    }
+    setPair({
+      state: 'waiting',
+      code: r.data.code,
+      botUser: r.data.botUser,
+      firstName: '',
+      err: '',
+    });
+    pairPoll.current = setInterval(pollStatus, 1500);
+  };
+
+  const addManual = () => {
+    const v = draft.trim();
+    if (!/^\d{4,}$/.test(v)) {
+      setManualErr('A Telegram ID is a number, e.g. 8675309.');
+      return;
+    }
+    if (data.allowlist.includes(v)) {
+      setManualErr('That ID is already added.');
+      return;
+    }
+    set({ allowlist: [...data.allowlist, v] });
+    setDraft('');
+    setManualErr('');
+  };
+
+  const removeId = (id) => set({ allowlist: data.allowlist.filter((x) => x !== id) });
+
+  const deepLink = pair.botUser ? `https://t.me/${pair.botUser.replace(/^@/, '')}` : null;
+
   return (
     <div>
-      <StepHead kicker="Step 5" title="How powerful is this machine?">
-        {ramGb != null ? (
-          <>
-            We detected <b>{ramGb} GB of RAM</b> and suggest{' '}
-            <b style={{ textTransform: 'capitalize' }}>{sug}</b>.
-          </>
-        ) : (
-          <>
-            We suggest <b style={{ textTransform: 'capitalize' }}>{sug}</b>.
-          </>
-        )}{' '}
-        This just helps Modulus pick sensible defaults — change it if you know better.
+      <StepHead kicker="Step 2" title="Connect Telegram">
+        Telegram is the chat app you’ll use to talk to Modulus. Paste a <b>bot token</b> from
+        BotFather, then add yourself by sending a code from your phone.
       </StepHead>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-        {tiers.map((t) => {
-          const on = data.tier === t.id;
-          return (
-            <button
-              key={t.id}
-              onClick={() => set({ tier: t.id })}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 14,
-                padding: 16,
-                borderRadius: 'var(--radius)',
-                cursor: 'pointer',
-                textAlign: 'left',
-                background: on ? 'var(--accent-soft)' : 'var(--surface)',
-                border: `1.5px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
-                transition: 'all .15s',
-              }}
-            >
-              <span
+      <window.Label hint="Paste the token here. It looks like 1234567890:AAH... and stays on this machine.">
+        Bot token
+      </window.Label>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ flex: 1 }}>
+          <window.SecretInput
+            value={data.token}
+            onChange={(e) => set({ token: e.target.value, tokenState: 'idle' })}
+            placeholder="1234567890:AAH…"
+          />
+        </div>
+        <window.Button
+          variant="primary"
+          onClick={validate}
+          disabled={!data.token || data.tokenState === 'checking'}
+          style={{ opacity: !data.token ? 0.55 : 1 }}
+        >
+          {data.tokenState === 'checking' ? (
+            <>
+              <window.Icon name="refresh" size={15} className="spin" /> Checking
+            </>
+          ) : (
+            'Validate'
+          )}
+        </window.Button>
+      </div>
+      <CheckResult
+        state={data.tokenState}
+        ok={
+          <>
+            Connected as <b>{data.botName}</b>{' '}
+            <span className="mono" style={{ color: 'var(--text-3)' }}>
+              {data.botUser}
+            </span>
+          </>
+        }
+        err={
+          data.tokenErr ||
+          'That doesn’t look like a valid token. Check you copied the whole thing from BotFather.'
+        }
+      />
+      <HelperBox open={help} onToggle={() => setHelp((h) => !h)} title="How do I get a token?">
+        Open Telegram and message <span className="mono">@BotFather</span>. Send{' '}
+        <span className="mono">/newbot</span>, pick a name and username, and BotFather replies with
+        a token. Copy it and paste it above.
+      </HelperBox>
+
+      {/* Pairing panel — only once the token validates. */}
+      {data.tokenState === 'ok' && (
+        <div
+          className="fade"
+          style={{
+            marginTop: 18,
+            padding: 18,
+            borderRadius: 'var(--radius)',
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+          }}
+        >
+          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
+            Add yourself (and others)
+          </div>
+          <p style={{ fontSize: 13.5, color: 'var(--text-2)', lineHeight: 1.5, marginBottom: 12 }}>
+            Only people you add can talk to your bot. The easiest way: open your bot and send it a
+            one-time code.
+          </p>
+
+          {(pair.state === 'idle' || pair.state === 'starting' || pair.state === 'error') && (
+            <>
+              <window.Button
+                variant="primary"
+                icon="send"
+                onClick={startPair}
+                disabled={pair.state === 'starting'}
+              >
+                {pair.state === 'starting' ? 'Starting…' : 'Get a pairing code'}
+              </window.Button>
+              {pair.state === 'error' && pair.err && (
+                <div style={{ marginTop: 10, fontSize: 13, color: 'var(--err)' }}>{pair.err}</div>
+              )}
+            </>
+          )}
+
+          {pair.state === 'unavailable' && (
+            <div style={{ fontSize: 13.5, color: 'var(--text-2)' }}>
+              Phone pairing isn’t available right now — add your numeric ID below instead.
+            </div>
+          )}
+
+          {pair.state === 'waiting' && (
+            <div>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                {deepLink && (
+                  <a href={deepLink} target="_blank" rel="noreferrer">
+                    <window.Button variant="default" icon="send">
+                      Open {pair.botUser}
+                    </window.Button>
+                  </a>
+                )}
+                <window.Icon
+                  name="refresh"
+                  size={16}
+                  className="spin"
+                  style={{ color: 'var(--text-3)' }}
+                />
+                <span style={{ fontSize: 13, color: 'var(--text-3)' }}>
+                  waiting for your message…
+                </span>
+              </div>
+              <div style={{ marginTop: 12, fontSize: 13.5, color: 'var(--text-2)' }}>
+                Open your bot and send it this code:
+              </div>
+              <div
+                className="mono"
                 style={{
-                  width: 20,
-                  height: 20,
-                  borderRadius: 99,
-                  flex: 'none',
-                  border: `2px solid ${on ? 'var(--accent)' : 'var(--border-2)'}`,
-                  display: 'grid',
-                  placeItems: 'center',
+                  marginTop: 6,
+                  fontSize: 30,
+                  fontWeight: 700,
+                  letterSpacing: 3,
+                  color: 'var(--accent-strong)',
                 }}
               >
-                {on && (
-                  <span
-                    style={{ width: 10, height: 10, borderRadius: 99, background: 'var(--accent)' }}
-                  />
-                )}
-              </span>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontWeight: 600, fontSize: 15.5 }}>{t.title}</span>
-                  {t.id === sug && <window.Badge tone="accent">Suggested</window.Badge>}
-                </div>
-                <p style={{ fontSize: 13, color: 'var(--text-2)', marginTop: 2 }}>{t.desc}</p>
+                {pair.code}
               </div>
-              <span className="mono" style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
-                {t.ram}
+            </div>
+          )}
+
+          {pair.state === 'expired' && (
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13.5, color: 'var(--warn)' }}>Code expired.</span>
+              <window.Button variant="default" icon="refresh" onClick={startPair}>
+                Get a new code
+              </window.Button>
+            </div>
+          )}
+
+          {pair.state === 'paired' && (
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <window.Badge tone="ok">
+                <window.Icon name="check" size={11} /> Hi {pair.firstName || 'there'} ✓
+              </window.Badge>
+              <window.Button variant="ghost" icon="plus" onClick={startPair}>
+                Add another person
+              </window.Button>
+            </div>
+          )}
+
+          {/* Allowlist chips */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 16 }}>
+            {data.allowlist.length === 0 && (
+              <span style={{ fontSize: 13.5, color: 'var(--text-3)' }}>No one added yet.</span>
+            )}
+            {data.allowlist.map((id) => (
+              <span
+                key={id}
+                className="rise"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '7px 9px 7px 13px',
+                  borderRadius: 99,
+                  background: 'var(--accent-soft)',
+                  fontSize: 13.5,
+                  color: 'var(--accent-strong)',
+                  fontWeight: 600,
+                }}
+              >
+                {data.names[id] ? data.names[id] : <span className="mono">{id}</span>}
+                <button
+                  onClick={() => removeId(id)}
+                  aria-label="Remove"
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: 99,
+                    border: 'none',
+                    background: 'color-mix(in oklab, var(--accent) 25%, transparent)',
+                    color: 'var(--accent-strong)',
+                    cursor: 'pointer',
+                    display: 'grid',
+                    placeItems: 'center',
+                  }}
+                >
+                  <window.Icon name="x" size={12} />
+                </button>
               </span>
-            </button>
-          );
-        })}
-      </div>
+            ))}
+          </div>
+
+          <HelperBox
+            open={manualOpen}
+            onToggle={() => setManualOpen((m) => !m)}
+            title="Add a numeric ID instead"
+          >
+            <p style={{ marginBottom: 10 }}>
+              Message <span className="mono">@userinfobot</span> on Telegram to get your numeric ID,
+              then paste it here.
+            </p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <div style={{ flex: 1, maxWidth: 260 }}>
+                <window.Input
+                  mono
+                  value={draft}
+                  invalid={!!manualErr}
+                  onChange={(e) => {
+                    setDraft(e.target.value);
+                    setManualErr('');
+                  }}
+                  onKeyDown={(e) => e.key === 'Enter' && addManual()}
+                  placeholder="e.g. 8675309"
+                />
+              </div>
+              <window.Button variant="default" icon="plus" onClick={addManual}>
+                Add
+              </window.Button>
+            </div>
+            {manualErr && (
+              <div style={{ marginTop: 8, fontSize: 13, color: 'var(--err)' }}>{manualErr}</div>
+            )}
+          </HelperBox>
+        </div>
+      )}
     </div>
   );
 }
 
 function StepModules() {
-  const [exts, setExts] = useStateWiz(null);
+  const [mods, setExts] = useStateWiz(null);
   const [busy, setBusy] = useStateWiz(null);
   // Per-module toggle result so the user can see whether the post-enable
   // setup (downloads, package-manager installs) actually succeeded — silently
@@ -930,9 +1385,6 @@ function StepModules() {
   const [openDetails, setOpenDetails] = useStateWiz({});
   // Two-phase modal for modulus-voice: 'warn' lists what'll be downloaded;
   // 'streaming' tails live setup output via SSE; 'done' shows the result.
-  // Null = no modal. Voice gets the special treatment because its setup
-  // pulls ~300 MB (Piper + voice model + whisper binary + whisper model) and
-  // a frozen "Setting up…" spinner reads as broken on slow links.
   const [voiceModal, setVoiceModal] = useStateWiz(null);
   const [voiceLines, setVoiceLines] = useStateWiz([]);
   const [voiceOk, setVoiceOk] = useStateWiz(true);
@@ -965,10 +1417,6 @@ function StepModules() {
     setBusy(null);
     load();
   };
-  // Open the SSE stream and tail lines into the modal. Closing the modal mid-
-  // stream cancels the EventSource (the server already started the work — we
-  // don't try to roll it back; the result reflects whatever finished). The
-  // 'done' event resolves the modal into either success or failure state.
   const beginVoiceDownload = () => {
     setVoiceModal('streaming');
     setBusy('modulus-voice');
@@ -998,8 +1446,6 @@ function StepModules() {
         }
       },
       onError: () => {
-        // EventSource auto-reconnects; that's harmful here (work would re-run).
-        // Treat any error as a terminal failure and bail.
         if (!voiceStreamRef.current) return;
         es.close();
         voiceStreamRef.current = null;
@@ -1028,24 +1474,25 @@ function StepModules() {
       .replace(/^modulus-/, '')
       .replace(/-/g, ' ')
       .replace(/\b\w/g, (c) => c.toUpperCase());
-  const blurb = (e) => (window.EXT_BLURBS && window.EXT_BLURBS[e.name]) || e.description || '';
+  const blurb = (e) =>
+    (window.MODULE_BLURBS && window.MODULE_BLURBS[e.name]) || e.description || '';
   return (
     <div>
-      <StepHead kicker="Step 6" title="Pick your modules">
+      <StepHead kicker="Step 3" title="Pick your modules">
         Turn on the capabilities you want now, or skip and add them later from the Modules tab.
         Codex and Everyday Assistant will walk you through connection on the next step.
       </StepHead>
-      {exts === null && (
+      {mods === null && (
         <div style={{ fontSize: 13.5, color: 'var(--text-3)' }}>Loading modules…</div>
       )}
-      {exts && exts.length === 0 && (
+      {mods && mods.length === 0 && (
         <div style={{ fontSize: 13.5, color: 'var(--text-3)' }}>
           No modules are installed yet. You can add them later with{' '}
-          <span className="mono">modulus ext install</span>.
+          <span className="mono">modulus mod install</span>.
         </div>
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {(exts || []).map((e) => {
+        {(mods || []).map((e) => {
           const result = results[e.name];
           const detailsOpen = !!openDetails[e.name];
           return (
@@ -1133,7 +1580,7 @@ function StepModules() {
                 </p>
               )}
               {result && busy !== e.name && (
-                <ExtResultPanel
+                <ModuleResultPanel
                   ok={result.ok}
                   output={result.output}
                   action={result.action}
@@ -1156,12 +1603,8 @@ function StepModules() {
   );
 }
 
-// Two-stage modal for the modulus-voice setup. 'warn' previews the downloads
-// so a user on a metered connection can back out; 'streaming' tails live setup
-// output (clicks-outside disabled — closing mid-download would leave half-
-// installed binaries); 'done' shows success/failure and frees the user.
+// Two-stage modal for the modulus-voice setup.
 function VoiceSetupModal({ stage, lines, ok, onConfirm, onClose }) {
-  // No-op while streaming so backdrop clicks / Escape don't kill the SSE.
   const safeClose = stage === 'streaming' ? () => {} : onClose;
   if (stage === 'warn') {
     return (
@@ -1252,10 +1695,7 @@ function VoiceSetupModal({ stage, lines, ok, onConfirm, onClose }) {
   return null;
 }
 
-// Render the post-toggle setup result. Success collapses to a single line;
-// failure shows the install log inline so the user can act on it (most
-// commonly: missing winget/sudo, or a download URL they can hit manually).
-function ExtResultPanel({ ok, output, action, open, onToggle }) {
+function ModuleResultPanel({ ok, output, action, open, onToggle }) {
   const verb = action === 'enable' ? 'Enabled' : 'Disabled';
   const hasOutput = !!(output && output.trim().length > 0);
   const tone = ok ? 'var(--ok)' : 'var(--err)';
@@ -1322,8 +1762,8 @@ function ExtResultPanel({ ok, output, action, open, onToggle }) {
   );
 }
 
-function StepExtConfig({ saveRef }) {
-  const [exts, setExts] = useStateWiz(null);
+function StepModuleConfig({ saveRef }) {
+  const [mods, setExts] = useStateWiz(null);
   const [vals, setVals] = useStateWiz({});
   const [taskIndex, setTaskIndex] = useStateWiz(0);
   const [authFor, setAuthFor] = useStateWiz(null);
@@ -1347,14 +1787,14 @@ function StepExtConfig({ saveRef }) {
     ]),
   };
 
-  const prettyExtName = (name) =>
+  const prettyModuleName = (name) =>
     name
       .replace(/^modulus-/, '')
       .replace(/-/g, ' ')
       .replace(/\b\w/g, (c) => c.toUpperCase());
 
   const initials = (name) =>
-    prettyExtName(name)
+    prettyModuleName(name)
       .replace(/[^A-Za-z ]/g, '')
       .split(' ')
       .slice(0, 2)
@@ -1370,10 +1810,10 @@ function StepExtConfig({ saveRef }) {
   const buildTasks = (items) =>
     (items || []).flatMap((e) => {
       const tasks = [];
-      if (shouldGuideAuth(e)) tasks.push({ type: 'auth', ext: e, key: `${e.name}:auth` });
+      if (shouldGuideAuth(e)) tasks.push({ type: 'auth', mod: e, key: `${e.name}:auth` });
       for (const f of e.schema || []) {
         if (!isAuthManagedField(e, f)) {
-          tasks.push({ type: 'setting', ext: e, field: f, key: `${e.name}:${f.key}` });
+          tasks.push({ type: 'setting', mod: e, field: f, key: `${e.name}:${f.key}` });
         }
       }
       return tasks;
@@ -1398,16 +1838,16 @@ function StepExtConfig({ saveRef }) {
     loadConfigurable();
   }, []);
 
-  const tasks = buildTasks(exts);
+  const tasks = buildTasks(mods);
   const currentTask = tasks[Math.min(taskIndex, Math.max(tasks.length - 1, 0))];
   const atLastTask = taskIndex >= tasks.length - 1;
 
   const saveCurrentSetting = async () => {
     if (!currentTask || currentTask.type !== 'setting') return true;
-    const ext = currentTask.ext;
+    const mod = currentTask.mod;
     const field = currentTask.field;
-    const r = await window.api.post(`/api/modules/${encodeURIComponent(ext.name)}/settings`, {
-      [field.key]: (vals[ext.name] || {})[field.key] ?? '',
+    const r = await window.api.post(`/api/modules/${encodeURIComponent(mod.name)}/settings`, {
+      [field.key]: (vals[mod.name] || {})[field.key] ?? '',
     });
     if (!r.ok) {
       setErr(r.error || `Could not save ${field.label}.`);
@@ -1420,9 +1860,9 @@ function StepExtConfig({ saveRef }) {
   const proceed = async () => {
     if (!currentTask) return true;
     if (currentTask.type === 'auth') {
-      const name = currentTask.ext.name;
-      if (!currentTask.ext.authConnected && !authDone[name] && !authSkipped[name]) {
-        setErr(`Connect ${prettyExtName(name)} or skip this connection before continuing.`);
+      const name = currentTask.mod.name;
+      if (!currentTask.mod.authConnected && !authDone[name] && !authSkipped[name]) {
+        setErr(`Connect ${prettyModuleName(name)} or skip this connection before continuing.`);
         return false;
       }
       setErr(null);
@@ -1442,7 +1882,7 @@ function StepExtConfig({ saveRef }) {
   const setField = (name, key, v) => setVals((s) => ({ ...s, [name]: { ...s[name], [key]: v } }));
 
   const renderSettingInput = (task) => {
-    const e = task.ext;
+    const e = task.mod;
     const f = task.field;
     const extVals = vals[e.name] || {};
     if (f.type === 'boolean') {
@@ -1502,20 +1942,20 @@ function StepExtConfig({ saveRef }) {
     );
   };
 
-  if (exts === null) {
+  if (mods === null) {
     return (
       <div>
-        <StepHead kicker="Step 7" title="Configure your modules">
+        <StepHead kicker="Step 4" title="Configure your modules">
           Loading module settings...
         </StepHead>
       </div>
     );
   }
 
-  if (exts.length === 0 || tasks.length === 0) {
+  if (mods.length === 0 || tasks.length === 0) {
     return (
       <div>
-        <StepHead kicker="Step 7" title="Configure your modules">
+        <StepHead kicker="Step 4" title="Configure your modules">
           Everything you enabled is ready with its defaults - click <b>Save &amp; continue</b> to
           move on.
         </StepHead>
@@ -1524,12 +1964,12 @@ function StepExtConfig({ saveRef }) {
   }
 
   const task = currentTask;
-  const ext = task.ext;
-  const connected = task.type === 'auth' && (ext.authConnected || authDone[ext.name]);
+  const mod = task.mod;
+  const connected = task.type === 'auth' && (mod.authConnected || authDone[mod.name]);
 
   return (
     <div>
-      <StepHead kicker="Step 7" title="Configure your modules">
+      <StepHead kicker="Step 4" title="Configure your modules">
         We'll walk through one module setting at a time. Account connections come first for Codex
         and Everyday Assistant.
       </StepHead>
@@ -1573,10 +2013,10 @@ function StepExtConfig({ saveRef }) {
               fontSize: 13,
             }}
           >
-            {initials(ext.name)}
+            {initials(mod.name)}
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 15 }}>{prettyExtName(ext.name)}</div>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>{prettyModuleName(mod.name)}</div>
             <div style={{ fontSize: 12.5, color: 'var(--text-3)', marginTop: 1 }}>
               {task.type === 'auth' ? 'Account connection' : task.field.key}
             </div>
@@ -1590,7 +2030,7 @@ function StepExtConfig({ saveRef }) {
           {task.type === 'auth' ? (
             <div>
               <window.Label hint="This opens the same guided flow as the terminal auth command.">
-                Connect {prettyExtName(ext.name)}
+                Connect {prettyModuleName(mod.name)}
               </window.Label>
               <p
                 style={{
@@ -1600,7 +2040,7 @@ function StepExtConfig({ saveRef }) {
                   marginBottom: 14,
                 }}
               >
-                {ext.name === 'modulus-codex'
+                {mod.name === 'modulus-codex'
                   ? 'Sign in with your ChatGPT subscription so Modulus can hand hard tasks to Codex.'
                   : 'Connect Google once so Calendar, Tasks, reminders, and briefings can work.'}
               </p>
@@ -1608,16 +2048,16 @@ function StepExtConfig({ saveRef }) {
                 <window.Button
                   variant={connected ? 'ok' : 'primary'}
                   icon={connected ? 'check' : 'link'}
-                  onClick={() => setAuthFor(ext.name)}
+                  onClick={() => setAuthFor(mod.name)}
                 >
-                  {connected ? 'Connected' : `Connect ${prettyExtName(ext.name)}`}
+                  {connected ? 'Connected' : `Connect ${prettyModuleName(mod.name)}`}
                 </window.Button>
                 {!connected && (
                   <window.Button
                     variant="ghost"
                     onClick={() => {
                       setErr(null);
-                      setAuthSkipped((s) => ({ ...s, [ext.name]: true }));
+                      setAuthSkipped((s) => ({ ...s, [mod.name]: true }));
                       if (!atLastTask) setTaskIndex((i) => i + 1);
                     }}
                   >
@@ -1676,7 +2116,7 @@ function StepExtConfig({ saveRef }) {
 
       {authFor && window.AuthFlowModal && (
         <window.AuthFlowModal
-          ext={exts.find((e) => e.name === authFor) || ext}
+          mod={mods.find((e) => e.name === authFor) || mod}
           onClose={() => setAuthFor(null)}
           onDone={() => {
             setAuthDone((s) => ({ ...s, [authFor]: true }));
@@ -1690,38 +2130,37 @@ function StepExtConfig({ saveRef }) {
   );
 }
 
-function StepReview({ data, goto }) {
+function StepFinish({ data, goto }) {
   const rows = [
+    {
+      label: 'Chat model',
+      value: data.chatModel || 'Not set',
+      step: 1,
+      ok: !!data.chatModel,
+      mono: true,
+    },
+    { label: 'Hardware tier', value: data.tier, step: 1, ok: true, cap: true },
     {
       label: 'Telegram bot',
       value: data.botName ? `${data.botName} ${data.botUser}` : 'Not connected',
-      step: 1,
+      step: 2,
       ok: data.tokenState === 'ok',
     },
     {
-      label: 'Allowlist',
+      label: 'Allowed people',
       value: data.allowlist.length
-        ? `${data.allowlist.length} user${data.allowlist.length > 1 ? 's' : ''}`
+        ? `${data.allowlist.length} ${data.allowlist.length > 1 ? 'people' : 'person'}`
         : 'None',
       step: 2,
       ok: data.allowlist.length > 0,
     },
-    { label: 'Ollama', value: data.ollamaUrl, step: 3, ok: data.ollamaState === 'ok' },
-    { label: 'Chat model', value: data.chatModel || 'Not set', step: 4, ok: !!data.chatModel },
-    { label: 'Reasoning model', value: data.reasoningModel || 'Skipped', step: 4, ok: true },
-    {
-      label: 'Tools model',
-      value: data.toolsModel || `${data.chatModel || 'Chat model'} (fallback)`,
-      step: 4,
-      ok: true,
-    },
-    { label: 'Hardware tier', value: data.tier, step: 5, ok: true, cap: true },
+    { label: 'Ollama', value: data.ollamaUrl, step: 1, ok: data.ollamaState === 'ok', mono: true },
   ];
   return (
     <div>
       <StepHead kicker="Almost there" title="Review &amp; finish">
-        Here’s everything you chose. Press <b>Start Modulus</b> to save your setup and land in the
-        hub with the agent coming online.
+        Here’s everything you chose. Press <b>Start Modulus</b> to save your setup and bring the
+        agent online.
       </StepHead>
       <window.Card pad={0}>
         {rows.map((r, i) => (
@@ -1745,10 +2184,7 @@ function StepReview({ data, goto }) {
                 fontWeight: 500,
                 flex: 1,
                 textTransform: r.cap ? 'capitalize' : 'none',
-                fontFamily:
-                  r.label.includes('model') || r.label === 'Ollama'
-                    ? 'var(--font-mono)'
-                    : 'var(--font-ui)',
+                fontFamily: r.mono ? 'var(--font-mono)' : 'var(--font-ui)',
               }}
             >
               {r.value}

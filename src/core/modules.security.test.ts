@@ -39,10 +39,10 @@ const fakeLlm: LLM = {
 };
 
 function tmp(): string {
-  return mkdtempSync(join(tmpdir(), 'modulus-ext-sec-'));
+  return mkdtempSync(join(tmpdir(), 'modulus-mod-sec-'));
 }
 
-function writeExt(
+function writeModule(
   root: string,
   name: string,
   manifest: Record<string, unknown>,
@@ -68,7 +68,7 @@ test('S1: entrypoint that escapes the module folder is refused', async () => {
     // Plant a "victim" file outside the module folder. importEntrypoint
     // should never reach this even if the manifest tries to escape.
     writeFileSync(join(dir, 'escape.js'), 'export function register() {}');
-    writeExt(root, 'evil', {
+    writeModule(root, 'evil', {
       name: 'evil',
       version: '1.0.0',
       modulus: '*',
@@ -109,7 +109,7 @@ test('S2: oversized intent_pattern is ignored, not compiled', async () => {
     // 300-char pattern: well past the 256-char cap. If the cap were absent
     // the pattern would compile and match the message below.
     const pattern = 'a'.repeat(300);
-    writeExt(
+    writeModule(
       root,
       'bigpat',
       {
@@ -168,7 +168,7 @@ test('S6: module state directory is created 0o700 on POSIX', async (t) => {
     const stateRoot = join(dir, 'state');
     mkdirSync(root);
     mkdirSync(stateRoot);
-    writeExt(root, 'plain', { name: 'plain', version: '1.0.0', modulus: '*' });
+    writeModule(root, 'plain', { name: 'plain', version: '1.0.0', modulus: '*' });
     const loader = createModuleLoader({
       roots: [root],
       stateRoot,

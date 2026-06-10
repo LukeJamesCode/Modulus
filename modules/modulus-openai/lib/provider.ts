@@ -224,7 +224,7 @@ function buildRequestBody(
 function ensureAllowed(endpoint: EndpointConfig, settings: OpenAICompatSettings): void {
   if (!settings.allowedBaseURLs.includes(endpoint.baseURL)) {
     throw new Error(
-      `${endpoint.alias} baseURL ${endpoint.baseURL} is not in this extension install's network allowlist. Re-run \`modulus ext update modulus-openai\` or intentionally add it to allowed_base_urls to widen capabilities.`,
+      `${endpoint.alias} baseURL ${endpoint.baseURL} is not in this extension install's network allowlist. Re-run \`modulus mod update modulus-openai\` or intentionally add it to allowed_base_urls to widen capabilities.`,
     );
   }
 }

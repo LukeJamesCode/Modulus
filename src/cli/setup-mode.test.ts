@@ -1,0 +1,135 @@
+// Setup-mode server: boots the real panel against stub engine handles and
+// asserts the wizard's contract. /api/state reports setupMode + not-configured,
+// the module list works, /api/setup/complete preflights then resolves promotion,
+// and the ollama pull SSE relays NDJSON progress.
+
+import assert from 'node:assert/strict';
+import { createServer, type Server } from 'node:http';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, before, test } from 'node:test';
+import { saveConfig, effectiveConfig } from './config-store.js';
+import { startSetupServer, type SetupServer } from './setup-mode.js';
+
+const TOKEN_SECRET = 'AAHverylongfaketokensecretvalue1234567890';
+
+// effectiveConfig overlays TELEGRAM_*/OLLAMA_* env; clear them so the suite is
+// hermetic on a dev box that has them exported.
+const SAVED: Record<string, string | undefined> = {};
+const ENV_KEYS = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_IDS', 'OLLAMA_URL', 'MODULUS_CHAT_MODEL'];
+
+let home: string;
+let server: SetupServer;
+let base: string;
+let token: string;
+let ollama: Server;
+let ollamaUrl: string;
+
+function authed(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(`${base}${path}`, {
+    ...init,
+    headers: { ...(init.headers ?? {}), 'x-modulus-token': token },
+  });
+}
+
+before(async () => {
+  for (const k of ENV_KEYS) {
+    SAVED[k] = process.env[k];
+    delete process.env[k];
+  }
+  home = mkdtempSync(join(tmpdir(), 'modulus-setup-'));
+
+  // A stub Ollama that streams three progress lines + success for /api/pull.
+  ollama = createServer((req, res) => {
+    if (req.method === 'POST' && req.url === '/api/pull') {
+      res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      res.write('{"status":"pulling manifest"}\n');
+      res.write('{"status":"downloading","total":100,"completed":50}\n');
+      res.write('{"status":"downloading","total":100,"completed":100}\n');
+      res.end('{"status":"success"}\n');
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise<void>((r) => ollama.listen(0, '127.0.0.1', () => r()));
+  const a = ollama.address();
+  ollamaUrl = `http://127.0.0.1:${typeof a === 'object' && a ? a.port : 0}`;
+
+  server = await startSetupServer(home, { onStop: () => {} });
+  const u = new URL(server.handle.url);
+  base = `${u.protocol}//${u.host}`;
+  token = u.searchParams.get('token') ?? '';
+});
+
+after(async () => {
+  await server.close();
+  ollama.close();
+  rmSync(home, { recursive: true, force: true });
+  for (const k of ENV_KEYS) {
+    if (SAVED[k] !== undefined) process.env[k] = SAVED[k];
+  }
+});
+
+test('GET /api/state reports setupMode and not configured', async () => {
+  const res = await authed('/api/state');
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { setupMode: boolean; configured: boolean };
+  assert.equal(body.setupMode, true);
+  assert.equal(body.configured, false);
+});
+
+test('GET /api/modules responds in setup mode', async () => {
+  const res = await authed('/api/modules');
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { modules: unknown[] };
+  assert.ok(Array.isArray(body.modules));
+});
+
+test('POST /api/setup/complete with an empty config is 400', async () => {
+  const res = await authed('/api/setup/complete', { method: 'POST' });
+  assert.equal(res.status, 400);
+});
+
+test('ollama pull-stream relays NDJSON progress then a done frame', async () => {
+  // Point the config at the stub Ollama; pull-stream re-reads effectiveConfig.
+  saveConfig({ ...effectiveConfig(home), ollama: { url: ollamaUrl } }, home);
+  const res = await fetch(
+    `${base}/api/ollama/pull-stream?model=qwen2.5%3A7b&token=${encodeURIComponent(token)}`,
+  );
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  const frames = text
+    .split('\n\n')
+    .map((b) => b.split('\n').find((l) => l.startsWith('data: ')))
+    .filter(Boolean)
+    .map((l) => JSON.parse((l as string).slice(6)) as { type: string; ok?: boolean });
+  assert.ok(
+    frames.some((f) => f.type === 'progress'),
+    'expected at least one progress frame',
+  );
+  const done = frames.find((f) => f.type === 'done');
+  assert.ok(done, 'expected a done frame');
+  assert.equal(done?.ok, true);
+});
+
+test('POST /api/setup/complete with a valid config returns 200 and resolves promotion', async () => {
+  saveConfig(
+    {
+      ...effectiveConfig(home),
+      telegram: { token: `123456:${TOKEN_SECRET}`, allowedIds: [123] },
+      ollama: { url: ollamaUrl },
+    },
+    home,
+  );
+  const res = await authed('/api/setup/complete', { method: 'POST' });
+  assert.equal(res.status, 200);
+  // complete() fires ~100ms after the response; the promotion promise resolves.
+  await Promise.race([
+    server.completed,
+    new Promise((_r, reject) =>
+      setTimeout(() => reject(new Error('completed never resolved')), 2000),
+    ),
+  ]);
+});

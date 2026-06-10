@@ -1,4 +1,3 @@
-/* global React, window, MediaRecorder, navigator, Blob */
 // Chat Hub — the home screen. A hero control bar (start/stop/restart/new-chat/
 // proactive/devmode) over a live direct-chat column and a right-hand activity
 // strip.
@@ -15,14 +14,14 @@ function useDevmode() {
   const [devmode, setDevmode] = useStateCH(() => {
     try {
       return localStorage.getItem('modulus_devmode') === 'true';
-    } catch (e) {
+    } catch {
       return false;
     }
   });
   useEffectCH(() => {
     try {
       localStorage.setItem('modulus_devmode', devmode ? 'true' : 'false');
-    } catch (e) {
+    } catch {
       /* ignore */
     }
   }, [devmode]);
@@ -41,7 +40,7 @@ function loadStoredMessages() {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
-  } catch (e) {
+  } catch {
     return [];
   }
 }
@@ -49,7 +48,7 @@ function saveStoredMessages(messages) {
   try {
     const trimmed = messages.length > CHAT_LOG_MAX ? messages.slice(-CHAT_LOG_MAX) : messages;
     localStorage.setItem(CHAT_LOG_KEY, JSON.stringify(trimmed));
-  } catch (e) {
+  } catch {
     /* quota or serialization — silently drop persistence */
   }
 }
@@ -62,7 +61,7 @@ function loadThinkMode() {
   try {
     const v = localStorage.getItem(THINK_KEY);
     return v === 'on' || v === 'off' ? v : 'auto';
-  } catch (e) {
+  } catch {
     return 'auto';
   }
 }
@@ -120,7 +119,7 @@ function ChatHub({
   useEffectCH(() => {
     try {
       localStorage.setItem(THINK_KEY, thinkMode);
-    } catch (e) {
+    } catch {
       /* quota — non-fatal, toggle just won't persist */
     }
   }, [thinkMode]);
@@ -647,8 +646,8 @@ function CommandBar({ commands, disabled, onCommand }) {
   const core = (commands.core || []).filter((c) =>
     ['/help', '/status', '/model', '/modules'].includes(c.cmd),
   );
-  const exts = commands.modules || [];
-  if (core.length === 0 && exts.length === 0) return null;
+  const mods = commands.modules || [];
+  if (core.length === 0 && mods.length === 0) return null;
   const chip = (c, accent) => (
     <button
       key={c.cmd}
@@ -679,8 +678,8 @@ function CommandBar({ commands, disabled, onCommand }) {
         alignItems: 'center',
       }}
     >
-      {exts.map((c) => chip(c, true))}
-      {exts.length > 0 && core.length > 0 && (
+      {mods.map((c) => chip(c, true))}
+      {mods.length > 0 && core.length > 0 && (
         <span style={{ width: 1, height: 18, background: 'var(--border)', margin: '0 2px' }} />
       )}
       {core.map((c) => chip(c, false))}
@@ -788,7 +787,7 @@ function MicButton({ running, disabled, onTranscript }) {
       rec.start();
       recorderRef.current = rec;
       setState('recording');
-    } catch (e) {
+    } catch {
       setState('idle');
       window.alert('Microphone access was denied or unavailable.');
     }
@@ -938,8 +937,6 @@ function AgentControlBar({
   onDevmode,
   onRestart,
   onNewChat,
-  onAbort,
-  streaming,
 }) {
   const running = agent === 'running';
   const stopping = agent === 'stopping';

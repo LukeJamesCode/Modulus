@@ -101,7 +101,7 @@ function sseFrames(res: Response): {
 before(async () => {
   home = mkdtempSync(join(tmpdir(), 'modulus-panel-'));
   // A stub CLI entry that always exits non-zero. Every panel-driven CLI spawn
-  // (ext enable, maintenance update) routes through this, so a spawn-failure
+  // (mod enable, maintenance update) routes through this, so a spawn-failure
   // test is deterministic and — critically — a real `modulus update` (git pull
   // + npm install + rebuild) can never run from the test, with or without a
   // dist/ build present.
@@ -227,11 +227,25 @@ test('GET /api/models surfaces registered provider aliases for Power Mode', asyn
   assert.ok(body.models.includes('deepseek:deepseek-chat'));
 });
 
-test('static index is open and carries a CSP header', async () => {
+test('static index is open and carries a CSP that names no third-party origin', async () => {
   const res = await fetch(`${base}/`);
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-type') ?? '', /text\/html/);
-  assert.match(res.headers.get('content-security-policy') ?? '', /default-src 'self'/);
+  const csp = res.headers.get('content-security-policy') ?? '';
+  assert.match(csp, /default-src 'self'/);
+  // The panel's libraries are vendored same-origin (no unpkg/CDN), so the CSP
+  // must not whitelist any external host — the panel renders offline and can't
+  // be steered at a third-party script source.
+  assert.doesNotMatch(csp, /https?:\/\//);
+  assert.doesNotMatch(csp, /unpkg/);
+  // The HTML must reference the vendored copies, not a CDN URL.
+  const html = await res.text();
+  assert.match(html, /vendor\/react\.production\.min\.js/);
+  assert.doesNotMatch(html, /unpkg\.com/);
+  // And the vendored asset actually serves same-origin with a JS content type.
+  const react = await fetch(`${base}/vendor/react.production.min.js`);
+  assert.equal(react.status, 200);
+  assert.match(react.headers.get('content-type') ?? '', /javascript/);
 });
 
 test('path traversal outside web/ is forbidden', async () => {
@@ -363,9 +377,9 @@ test('run-view stream for a missing task reports gone and ends', async () => {
 });
 
 test('modules: list and command reference respond', async () => {
-  const exts = await authed('/api/modules');
-  assert.equal(exts.status, 200);
-  assert.ok(Array.isArray(((await exts.json()) as { modules: unknown[] }).modules));
+  const mods = await authed('/api/modules');
+  assert.equal(mods.status, 200);
+  assert.ok(Array.isArray(((await mods.json()) as { modules: unknown[] }).modules));
   const cmds = await authed('/api/commands');
   assert.equal(cmds.status, 200);
   const body = (await cmds.json()) as { core: unknown[]; modules: unknown[] };

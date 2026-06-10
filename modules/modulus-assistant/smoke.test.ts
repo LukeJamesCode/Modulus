@@ -70,9 +70,9 @@ test('modulus-assistant: loads cleanly and registers all hooks', async () => {
     });
     await loader.loadAll();
 
-    const ext = loader.list().find((e) => e.name === 'modulus-assistant');
-    assert.ok(ext, 'module should appear in loader list');
-    assert.equal(ext!.error, undefined, `load error: ${String(ext!.error ?? 'none')}`);
+    const mod = loader.list().find((e) => e.name === 'modulus-assistant');
+    assert.ok(mod, 'module should appear in loader list');
+    assert.equal(mod!.error, undefined, `load error: ${String(mod!.error ?? 'none')}`);
 
     // ── All 21 tools ─────────────────────────────────────────────────────────
     const expectedTools = [

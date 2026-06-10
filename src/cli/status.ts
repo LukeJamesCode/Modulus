@@ -49,16 +49,29 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
   let enabledModules: number | null = null;
   let dbStatus: 'ok' | 'absent' | 'unreadable' = 'absent';
   let dbError: string | null = null;
+  // module name → {pkg: exact version} for modules that installed npm deps.
+  const moduleNpmDeps: Record<string, Record<string, string>> = {};
   const dbPath = join(home, 'modulus.db');
   if (existsSync(dbPath)) {
     try {
       const log = createLogger({ level: 'warn' });
       const db = openDb({ path: dbPath, log });
       try {
-        const exts = db
+        const mods = db
           .prepare(`SELECT COUNT(*) AS n FROM module_state WHERE enabled = 1`)
           .get() as { n: number } | undefined;
-        enabledModules = exts?.n ?? 0;
+        enabledModules = mods?.n ?? 0;
+        const depRows = db
+          .prepare(`SELECT name, npm_deps FROM module_state WHERE npm_deps IS NOT NULL`)
+          .all() as Array<{ name: string; npm_deps: string }>;
+        for (const r of depRows) {
+          try {
+            const parsed = JSON.parse(r.npm_deps) as Record<string, string>;
+            if (parsed && Object.keys(parsed).length > 0) moduleNpmDeps[r.name] = parsed;
+          } catch {
+            /* malformed JSON; skip this module's deps */
+          }
+        }
         dbStatus = 'ok';
       } finally {
         db.close();
@@ -100,6 +113,8 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
       modules: {
         installed: installed.map((e) => e.name),
         enabledCount: enabledModules,
+        npmDeps: moduleNpmDeps,
+        reloads: metrics?.moduleReloads ?? {},
       },
       db: {
         status: dbStatus,
@@ -127,7 +142,7 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
           }
         : null,
       // Kept stable for downstream consumers; bump if we change shape.
-      schemaVersion: 2,
+      schemaVersion: 3,
     };
     write(JSON.stringify(out, null, 2) + '\n');
     return;
@@ -162,6 +177,12 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
 
   if (dbStatus === 'ok') {
     rows.push({ label: 'enabled modules', value: String(enabledModules ?? 0) });
+    for (const [name, deps] of Object.entries(moduleNpmDeps)) {
+      const pinned = Object.entries(deps)
+        .map(([pkg, v]) => `${pkg}@${v}`)
+        .join(', ');
+      rows.push({ label: `${name} deps`, value: pinned });
+    }
   } else if (dbStatus === 'unreadable') {
     rows.push({ label: 'db', value: `unreadable: ${dbError}` });
   } else {
@@ -193,6 +214,13 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
       label: 'fast-cache',
       value: `${rate} hit rate (${s.cache.hits}/${total}, ${s.cache.size} keys)`,
     });
+    const reloads = Object.entries(metrics.moduleReloads ?? {}).filter(([, n]) => n > 0);
+    if (reloads.length > 0) {
+      rows.push({
+        label: 'reloads',
+        value: reloads.map(([name, n]) => `${name}=${n}`).join(', '),
+      });
+    }
   } else if (running) {
     rows.push({ label: 'scheduler', value: '(metrics file not yet written)' });
   }

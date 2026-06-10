@@ -1,4 +1,3 @@
-/* global React, window, marked */
 const { useState, useEffect } = React;
 
 function DocsTab() {

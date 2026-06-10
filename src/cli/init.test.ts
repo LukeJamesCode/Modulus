@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert';
 import { resolveModuleSelection, type ModuleSelectionPlan } from './init.js';
 import type { DiscoveredModule } from './ext-setup.js';
 
-function ext(name: string, deps: string[] = []): DiscoveredModule {
+function mod(name: string, deps: string[] = []): DiscoveredModule {
   return {
     name,
     folder: `/tmp/${name}`,
@@ -22,7 +22,7 @@ function names(plan: ModuleSelectionPlan): string[] {
 
 test('resolveModuleSelection adds bundled dependencies before selected modules', () => {
   const plan = resolveModuleSelection(
-    [ext('modulus-dependent', ['modulus-voice']), ext('modulus-voice')],
+    [mod('modulus-dependent', ['modulus-voice']), mod('modulus-voice')],
     ['modulus-dependent'],
   );
 
@@ -33,7 +33,7 @@ test('resolveModuleSelection adds bundled dependencies before selected modules',
 
 test('resolveModuleSelection reports dependencies that are not bundled', () => {
   const plan = resolveModuleSelection(
-    [ext('modulus-front', ['modulus-missing'])],
+    [mod('modulus-front', ['modulus-missing'])],
     ['modulus-front'],
   );
 

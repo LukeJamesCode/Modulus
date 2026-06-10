@@ -1,4 +1,3 @@
-/* global React, window, MediaRecorder, navigator, Blob, Audio, AudioContext */
 // Voice Hub — the speech-first counterpart to Chat Hub. Shown in the sidebar
 // only when modulus-voice is enabled. Wires the existing pieces together:
 //   mic → POST /api/chat/voice-in       (whisper.cpp transcription)
@@ -43,7 +42,7 @@ function loadHistoryAsTurns() {
       }
     }
     return turns;
-  } catch (e) {
+  } catch {
     return [];
   }
 }
@@ -58,7 +57,7 @@ function appendTurnToStorage(userText, assistantText) {
     msgs.push({ id: Date.now() + 0.5, role: 'assistant', text: assistantText, time: t });
     const trimmed = msgs.length > VOICE_LOG_MAX ? msgs.slice(-VOICE_LOG_MAX) : msgs;
     localStorage.setItem(VOICE_LOG_KEY, JSON.stringify(trimmed));
-  } catch (e) {
+  } catch {
     /* quota — silently drop */
   }
 }
@@ -108,14 +107,14 @@ function VoiceHub({ agent, onStart, onStop, health, activeModel, onLeave }) {
       if (recorderRef.current && recorderRef.current.state !== 'inactive') {
         try {
           recorderRef.current.stop();
-        } catch (e) {
+        } catch {
           /* ignore */
         }
       }
       if (audioRef.current) {
         try {
           audioRef.current.pause();
-        } catch (e) {
+        } catch {
           /* ignore */
         }
       }
@@ -140,7 +139,7 @@ function VoiceHub({ agent, onStart, onStop, health, activeModel, onLeave }) {
     if (vadCtxRef.current) {
       try {
         vadCtxRef.current.close();
-      } catch (e) {
+      } catch {
         /* ignore */
       }
       vadCtxRef.current = null;
@@ -230,14 +229,13 @@ function VoiceHub({ agent, onStart, onStop, health, activeModel, onLeave }) {
       recorderRef.current = rec;
       setPhase('listening');
       vadRafRef.current = requestAnimationFrame(tick);
-    } catch (e) {
+    } catch {
       teardownVad();
       setError('Microphone access was denied or unavailable.');
       setPhase('idle');
     }
     // send is defined below; React closure captures the latest via ref-less call
     // (we only ever read it inside async event handlers, not during this scope).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, phase, supported]);
 
   const stopListening = () => {
@@ -328,7 +326,7 @@ function VoiceHub({ agent, onStart, onStop, health, activeModel, onLeave }) {
       if (audioRef.current) {
         try {
           audioRef.current.pause();
-        } catch (e) {
+        } catch {
           /* ignore */
         }
       }
@@ -342,7 +340,7 @@ function VoiceHub({ agent, onStart, onStop, health, activeModel, onLeave }) {
     if (audioRef.current) {
       try {
         audioRef.current.pause();
-      } catch (e) {
+      } catch {
         /* ignore */
       }
       audioRef.current = null;
@@ -356,7 +354,7 @@ function VoiceHub({ agent, onStart, onStop, health, activeModel, onLeave }) {
     setTurns([]);
     try {
       localStorage.removeItem(VOICE_LOG_KEY);
-    } catch (e) {
+    } catch {
       /* ignore */
     }
     window.api.post('/api/chat/clear');

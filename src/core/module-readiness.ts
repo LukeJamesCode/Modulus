@@ -28,45 +28,45 @@ interface InstalledModule {
 export function collectModuleReadiness(roots: readonly string[], db: DB): ModuleReadiness[] {
   const installed = discoverInstalledModules(roots);
   const enabledByName = readEnabledMap(db);
-  const settingsByExt = readSettingsMap(db);
+  const settingsByModule = readSettingsMap(db);
 
-  return installed.map((ext) => {
-    const enabled = enabledByName.get(ext.name) ?? true;
+  return installed.map((mod) => {
+    const enabled = enabledByName.get(mod.name) ?? true;
     if (!enabled) {
       return {
-        name: ext.name,
-        version: ext.version,
-        folder: ext.folder,
-        source: ext.source,
+        name: mod.name,
+        version: mod.version,
+        folder: mod.folder,
+        source: mod.source,
         enabled: false,
         status: 'disabled',
         reasons: ['disabled in module_state'],
-        nextAction: `modulus mod enable ${ext.name}`,
+        nextAction: `modulus mod enable ${mod.name}`,
       };
     }
 
-    const settings = settingsByExt.get(ext.name) ?? new Map<string, string>();
-    const missingAuth = missingAuthSettings(ext, settings);
+    const settings = settingsByModule.get(mod.name) ?? new Map<string, string>();
+    const missingAuth = missingAuthSettings(mod, settings);
     if (missingAuth.length > 0) {
       return {
-        name: ext.name,
-        version: ext.version,
-        folder: ext.folder,
-        source: ext.source,
+        name: mod.name,
+        version: mod.version,
+        folder: mod.folder,
+        source: mod.source,
         enabled: true,
         status: 'needs_auth',
         reasons: missingAuth.map((k) => `missing auth setting: ${k}`),
-        nextAction: `modulus auth ${ext.name}`,
+        nextAction: `modulus auth ${mod.name}`,
       };
     }
 
-    const missingRequired = missingRequiredSettings(ext, settings);
+    const missingRequired = missingRequiredSettings(mod, settings);
     if (missingRequired.length > 0) {
       return {
-        name: ext.name,
-        version: ext.version,
-        folder: ext.folder,
-        source: ext.source,
+        name: mod.name,
+        version: mod.version,
+        folder: mod.folder,
+        source: mod.source,
         enabled: true,
         status: 'needs_settings',
         reasons: missingRequired.map((k) => `missing required setting: ${k}`),
@@ -75,10 +75,10 @@ export function collectModuleReadiness(roots: readonly string[], db: DB): Module
     }
 
     return {
-      name: ext.name,
-      version: ext.version,
-      folder: ext.folder,
-      source: ext.source,
+      name: mod.name,
+      version: mod.version,
+      folder: mod.folder,
+      source: mod.source,
       enabled: true,
       status: 'ready',
       reasons: [],
@@ -86,10 +86,10 @@ export function collectModuleReadiness(roots: readonly string[], db: DB): Module
   });
 }
 
-export function formatModuleReadinessLine(ext: ModuleReadiness): string {
-  const reason = ext.reasons.length > 0 ? ` — ${ext.reasons.join('; ')}` : '';
-  const action = ext.nextAction ? ` — next: ${ext.nextAction}` : '';
-  return `${ext.name}@${ext.version}  [${ext.status}]  (${ext.source}) ${ext.folder}${reason}${action}`;
+export function formatModuleReadinessLine(mod: ModuleReadiness): string {
+  const reason = mod.reasons.length > 0 ? ` — ${mod.reasons.join('; ')}` : '';
+  const action = mod.nextAction ? ` — next: ${mod.nextAction}` : '';
+  return `${mod.name}@${mod.version}  [${mod.status}]  (${mod.source}) ${mod.folder}${reason}${action}`;
 }
 
 export function formatModuleReadinessForTelegram(
@@ -100,16 +100,16 @@ export function formatModuleReadinessForTelegram(
 ): string {
   if (modules.length === 0) return 'No modules installed yet.';
   return modules
-    .map((ext) => {
-      const reason = ext.reasons.length > 0 ? ` — ${ext.reasons.join('; ')}` : '';
-      const action = ext.nextAction ? `\n  next: ${ext.nextAction}` : '';
-      return `• ${ext.name} — ${ext.status}${reason}${action}`;
+    .map((mod) => {
+      const reason = mod.reasons.length > 0 ? ` — ${mod.reasons.join('; ')}` : '';
+      const action = mod.nextAction ? `\n  next: ${mod.nextAction}` : '';
+      return `• ${mod.name} — ${mod.status}${reason}${action}`;
     })
     .join('\n');
 }
 
 export function setupIssuesForNudge(modules: readonly ModuleReadiness[]): ModuleReadiness[] {
-  return modules.filter((ext) => ext.enabled && ext.status !== 'ready');
+  return modules.filter((mod) => mod.enabled && mod.status !== 'ready');
 }
 
 export function formatSetupIssuesNudge(issues: readonly ModuleReadiness[]): string {
@@ -117,10 +117,10 @@ export function formatSetupIssuesNudge(issues: readonly ModuleReadiness[]): stri
   const lines = [
     `Modulus has ${issues.length} module setup issue${issues.length === 1 ? '' : 's'}:`,
   ];
-  for (const ext of issues.slice(0, 8)) {
-    const reason = ext.reasons[0] ? ` — ${ext.reasons[0]}` : '';
-    const action = ext.nextAction ? ` Next: ${ext.nextAction}` : '';
-    lines.push(`• ${ext.name}: ${ext.status}${reason}.${action}`);
+  for (const mod of issues.slice(0, 8)) {
+    const reason = mod.reasons[0] ? ` — ${mod.reasons[0]}` : '';
+    const action = mod.nextAction ? ` Next: ${mod.nextAction}` : '';
+    lines.push(`• ${mod.name}: ${mod.status}${reason}.${action}`);
   }
   if (issues.length > 8) lines.push(`• …and ${issues.length - 8} more.`);
   lines.push('Use /modules for the current list.');
@@ -191,10 +191,10 @@ function readSettingsMap(db: DB): Map<string, Map<string, string>> {
 }
 
 function missingRequiredSettings(
-  ext: Pick<InstalledModule, 'schema'>,
+  mod: Pick<InstalledModule, 'schema'>,
   settings: ReadonlyMap<string, string>,
 ): string[] {
-  const schema = ext.schema;
+  const schema = mod.schema;
   if (!schema) return [];
   return (schema.required ?? []).filter((key) => {
     const decl = schema.properties[key];
@@ -205,14 +205,14 @@ function missingRequiredSettings(
 }
 
 function missingAuthSettings(
-  ext: Pick<InstalledModule, 'manifest' | 'schema'>,
+  mod: Pick<InstalledModule, 'manifest' | 'schema'>,
   settings: ReadonlyMap<string, string>,
 ): string[] {
-  if (!ext.manifest.entrypoints?.auth || !ext.schema) return [];
-  const requiredAuth = missingRequiredSettings(ext, settings).filter((key) =>
-    isAuthSettingKey(key, ext.schema!.properties[key]?.secret === true),
+  if (!mod.manifest.entrypoints?.auth || !mod.schema) return [];
+  const requiredAuth = missingRequiredSettings(mod, settings).filter((key) =>
+    isAuthSettingKey(key, mod.schema!.properties[key]?.secret === true),
   );
-  const optionalAuthTokens = Object.entries(ext.schema.properties)
+  const optionalAuthTokens = Object.entries(mod.schema.properties)
     .filter(([key, decl]) => decl.default === undefined && isTokenLikeAuthKey(key))
     .filter(([key]) => !hasSetting(settings, key))
     .map(([key]) => key);

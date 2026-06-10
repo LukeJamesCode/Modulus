@@ -1,11 +1,11 @@
-// Modules (modules) routes: list installed modules with manifest + readiness
+// Modules routes: list installed modules with manifest + readiness
 // + settings schema, edit settings, and enable/disable/install/uninstall via the
-// CLI (the same path `modulus ext` uses, so native-dep setup runs too). The
+// CLI (the same path `modulus mod` uses, so native-dep setup runs too). The
 // daemon stays the install owner; the panel just drives it.
 //
-// The interactive auth bridge: `modulus auth <ext>` runs a module's OAuth/
+// The interactive auth bridge: `modulus auth <module>` runs a module's OAuth/
 // credential flow as print()/prompt() over an AuthFlowIO. Here the same runner
-// (runAuthForExt) is wired to the browser instead of a terminal — print lines
+// (runAuthForModule) is wired to the browser instead of a terminal — print lines
 // stream out over SSE, prompt() parks the flow until the user POSTs an answer
 // back. In-process the flow runs against the daemon's live DB, and a finished
 // auth hot-reloads the module so fresh credentials take effect immediately.
@@ -14,14 +14,14 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, join } from 'node:path';
-import { discover, runAuthForExt, type AuthRunnerIO } from '../../cli/auth.js';
+import { discover, runAuthForModule, type AuthRunnerIO } from '../../cli/auth.js';
 import { ensurePrivateDir } from '../../cli/config-store.js';
 import { configureNativeDepsForModule } from '../../cli/ext-setup.js';
 import { collectModuleReadiness } from '../../core/module-readiness.js';
 import type { Manifest, SettingsSchema, TelegramCommandContext } from '../../core/modules.js';
 import { readJson, readRawBody, sendJson, sse, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
-import { runModulus, runModulusStreaming } from '../spawn.js';
+import { setModuleEnabledState, uninstallModuleFiles } from '../../cli/module-admin.js';
 import type { PanelDeps } from '../types.js';
 import type { DB } from '../../storage/db.js';
 import type { ModulusConfig } from '../../cli/config-store.js';
@@ -47,10 +47,10 @@ function maskToken(token: string): string {
   return `${token.slice(0, 8)}${'•'.repeat(18)}${token.slice(-4)}`;
 }
 
-function readExtSettings(db: DB, ext: string): Map<string, string> {
+function readModuleSettings(db: DB, mod: string): Map<string, string> {
   const rows = db
     .prepare(`SELECT key, value FROM module_settings WHERE module = ?`)
-    .all(ext) as Array<{ key: string; value: string }>;
+    .all(mod) as Array<{ key: string; value: string }>;
   return new Map(rows.map((r) => [r.key, r.value]));
 }
 
@@ -101,7 +101,7 @@ function schemaToFields(schema: SettingsSchema | null, current: Map<string, stri
   });
 }
 
-function findExtFolder(roots: readonly string[], name: string): string | null {
+function findModuleFolder(roots: readonly string[], name: string): string | null {
   for (const root of roots) {
     const candidate = join(root, name);
     if (existsSync(join(candidate, 'manifest.json'))) return candidate;
@@ -115,7 +115,7 @@ function listModules(deps: PanelDeps): unknown[] {
     .map((r) => {
       const manifest = readManifest(r.folder);
       const schema = readSchema(r.folder);
-      const current = readExtSettings(deps.db, r.name);
+      const current = readModuleSettings(deps.db, r.name);
       const caps = manifest?.capabilities ?? [];
       const commands = (manifest?.telegram_commands ?? []).map((c) => ({
         cmd: `/${c.command}`,
@@ -167,7 +167,7 @@ const CORE_COMMANDS = [
 // rest fall through to a module command handler.
 const CORE_TEXT_COMMANDS = new Set(['help', 'model', 'status', 'modules', 'lasterror']);
 
-interface ExtListItem {
+interface ModuleListItem {
   name: string;
   enabled: boolean;
   status: string;
@@ -180,7 +180,7 @@ function commandReference(deps: PanelDeps): {
   core: typeof CORE_COMMANDS;
   modules: Array<{ cmd: string; desc: string }>;
 } {
-  const modules = (listModules(deps) as ExtListItem[])
+  const modules = (listModules(deps) as ModuleListItem[])
     .filter((e) => e.enabled)
     .flatMap((e) => e.commands);
   return { core: CORE_COMMANDS, modules };
@@ -225,18 +225,18 @@ async function coreCommandText(deps: PanelDeps, name: string, chatId: number): P
     }
     case 'status': {
       const health = await deps.llm.health();
-      const exts = (listModules(deps) as ExtListItem[]).filter((e) => e.enabled);
+      const mods = (listModules(deps) as ModuleListItem[]).filter((e) => e.enabled);
       return [
         `llm: ${health.ok ? 'ok' : 'down'} (${health.models.length} models)`,
-        `modules: ${exts.length === 0 ? 'none' : exts.map((e) => e.name).join(', ')}`,
+        `modules: ${mods.length === 0 ? 'none' : mods.map((e) => e.name).join(', ')}`,
       ].join('\n');
     }
     case 'modules': {
-      const exts = listModules(deps) as ExtListItem[];
-      if (exts.length === 0) return 'No modules installed.';
+      const mods = listModules(deps) as ModuleListItem[];
+      if (mods.length === 0) return 'No modules installed.';
       return [
         'Modules:',
-        ...exts.map((e) => `• ${e.name} — ${e.enabled ? e.status : 'disabled'}`),
+        ...mods.map((e) => `• ${e.name} — ${e.enabled ? e.status : 'disabled'}`),
       ].join('\n');
     }
     case 'lasterror': {
@@ -276,7 +276,7 @@ async function runCommand(
     await rec.handler(cctx);
   } catch (e) {
     deps.log.warn('module command failed', {
-      ext: rec.module,
+      mod: rec.module,
       command: lower,
       error: e instanceof Error ? e.message : String(e),
     });
@@ -292,7 +292,7 @@ async function runExtSetup(
   name: string,
   onChunk?: (text: string) => void,
 ): Promise<{ ok: boolean; output: string }> {
-  const folder = findExtFolder(deps.moduleRoots, name);
+  const folder = findModuleFolder(deps.moduleRoots, name);
   if (!folder) return { ok: false, output: `module '${name}' not found` };
   let manifest: Manifest;
   try {
@@ -316,8 +316,8 @@ async function runExtSetup(
   }
 }
 
-function saveExtSettings(deps: PanelDeps, name: string, body: Record<string, unknown>): boolean {
-  const folder = findExtFolder(deps.moduleRoots, name);
+function saveModuleSettings(deps: PanelDeps, name: string, body: Record<string, unknown>): boolean {
+  const folder = findModuleFolder(deps.moduleRoots, name);
   if (!folder) return false;
   const schema = readSchema(folder);
   if (!schema) return false;
@@ -352,7 +352,7 @@ interface AuthSseEvent {
 
 interface AuthSession {
   id: string;
-  ext: string;
+  mod: string;
   events: AuthSseEvent[]; // replay buffer for late/reconnecting subscribers
   pending: { resolve: (value: string) => void; reject: (e: Error) => void } | null;
   subscribers: Set<(e: AuthSseEvent) => void>;
@@ -389,20 +389,20 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
   function startAuthSession(
     name: string,
   ): { ok: true; session: string } | { ok: false; error: string } {
-    const ext = discover(deps.home, name);
-    if (!ext) return { ok: false, error: `module '${name}' not found` };
-    if (!ext.manifest.entrypoints?.auth) {
+    const mod = discover(deps.home, name);
+    if (!mod) return { ok: false, error: `module '${name}' not found` };
+    if (!mod.manifest.entrypoints?.auth) {
       return { ok: false, error: `'${name}' does not have an auth flow` };
     }
 
     // Only one live auth session per module — replace any stale one.
     for (const s of authSessions.values()) {
-      if (s.ext === name && !s.finished) closeAuthSession(s);
+      if (s.mod === name && !s.finished) closeAuthSession(s);
     }
 
     const session: AuthSession = {
       id: randomUUID(),
-      ext: name,
+      mod: name,
       events: [],
       pending: null,
       subscribers: new Set(),
@@ -420,14 +420,14 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
         }),
     };
 
-    void runAuthForExt(ext, deps.db, io)
+    void runAuthForModule(mod, deps.db, io)
       .then(async () => {
         // Fresh credentials must reach the live registrations, not just the DB.
         try {
           await deps.loader.reload(name);
         } catch (e) {
           deps.log.warn('post-auth module reload failed', {
-            ext: name,
+            mod: name,
             error: e instanceof Error ? e.message : String(e),
           });
         }
@@ -518,7 +518,7 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
       return true;
     }
 
-    // SSE stream of `ext enable` + native-dep setup output, so a user staring
+    // SSE stream of `mod enable` + native-dep setup output, so a user staring
     // at a 150 MB model download sees lines arriving instead of a frozen
     // "Setting up…" spinner. Unnamed frames with a `type` field — the browser
     // reads this through native EventSource.onmessage.
@@ -543,13 +543,29 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
       keepAlive.unref?.();
       req.on('close', () => clearInterval(keepAlive));
       try {
-        const r = await runModulusStreaming(deps, ['ext', 'enable', name], sendChunk);
-        if (r.code !== 0) {
-          send({ type: 'done', ok: false, error: `ext enable exited ${r.code}` });
+        // Flip enabled in-process (no CLI child boot), then pause hot-reload
+        // while setup's npm install churns the folder and load the module
+        // exactly once with its deps in place. Best-effort: a failed setup
+        // doesn't undo the enable.
+        const flip = setModuleEnabledState(deps.db, deps.home, name, true);
+        if (!flip.ok) {
+          send({ type: 'done', ok: false, error: flip.error });
         } else {
-          // Best-effort, mirroring the non-stream enable: a failed setup
-          // doesn't undo the enable.
-          const s = await runExtSetup(deps, name, sendChunk);
+          deps.loader.suspendReload(name);
+          let s: { ok: boolean; output: string };
+          try {
+            s = await runExtSetup(deps, name, sendChunk);
+          } finally {
+            deps.loader.resumeReload(name);
+          }
+          try {
+            await deps.loader.reload(name);
+          } catch (e) {
+            deps.log.warn('post-enable module reload failed', {
+              mod: name,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
           send({ type: 'done', ok: s.ok });
         }
       } catch (e) {
@@ -588,17 +604,17 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
       const name = extAction[1]!;
       const action = extAction[2]!;
       if (action === 'settings' && method === 'GET') {
-        const folder = findExtFolder(deps.moduleRoots, name);
+        const folder = findModuleFolder(deps.moduleRoots, name);
         if (!folder) {
           sendJson(res, 404, { error: `module '${name}' not found` });
           return true;
         }
-        const current = readExtSettings(deps.db, name);
+        const current = readModuleSettings(deps.db, name);
         sendJson(res, 200, { name, schema: schemaToFields(readSchema(folder), current) });
         return true;
       }
       if (action === 'settings' && method === 'POST') {
-        const ok = saveExtSettings(deps, name, await readJson<Record<string, unknown>>(req));
+        const ok = saveModuleSettings(deps, name, await readJson<Record<string, unknown>>(req));
         sendJson(res, ok ? 200 : 400, ok ? { ok: true } : { error: 'no settings schema' });
         return true;
       }
@@ -608,24 +624,61 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
         return true;
       }
       if (method === 'POST') {
-        const args =
-          action === 'uninstall'
-            ? ['ext', 'uninstall', name, ...(url.searchParams.get('purge') ? ['--purge'] : [])]
-            : ['ext', action, name];
-        const r = await runModulus(deps, args);
-        // Enabling should also bootstrap native deps (mirrors `modulus init`).
-        // Best-effort: a failed setup doesn't undo the enable.
+        // enable / disable / uninstall all run in-process now: the DB flip and
+        // folder removal go through the shared module-admin helpers (same code
+        // path as the CLI), and the live loader is driven directly — no child
+        // `modulus` boot on the hot path, and the running daemon's view updates
+        // immediately instead of waiting for a watcher tick. `update` keeps its
+        // CLI re-exec (git pull + npm install + rebuild) elsewhere.
+        if (action === 'uninstall') {
+          const result = uninstallModuleFiles(deps.home, name, {
+            purge: !!url.searchParams.get('purge'),
+            db: deps.db,
+          });
+          if (result.ok) await deps.loader.unload(name);
+          sendJson(res, result.ok ? 200 : 500, {
+            ok: result.ok,
+            output: result.ok ? `Uninstalled '${name}'.` : (result.error ?? ''),
+          });
+          return true;
+        }
+
+        const enabled = action === 'enable';
+        const flip = setModuleEnabledState(deps.db, deps.home, name, enabled);
+        if (!flip.ok) {
+          sendJson(res, 500, { ok: false, output: flip.error ?? '' });
+          return true;
+        }
         let setupOutput = '';
-        if (r.code === 0 && action === 'enable') {
+        if (enabled) {
+          // Enabling should also bootstrap native deps (mirrors `modulus init`).
+          // Pause hot-reload while setup's npm install churns the folder; a
+          // failed setup is best-effort and doesn't undo the enable.
+          deps.loader.suspendReload(name);
           try {
             setupOutput = (await runExtSetup(deps, name)).output;
           } catch (e) {
             setupOutput = e instanceof Error ? e.message : String(e);
+          } finally {
+            deps.loader.resumeReload(name);
           }
+          // One explicit reload now that deps are in place — the watcher no
+          // longer storms during the install (node_modules is excluded).
+          try {
+            await deps.loader.reload(name);
+          } catch (e) {
+            deps.log.warn('post-enable module reload failed', {
+              mod: name,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        } else {
+          // Disable: drop the module's live registrations now.
+          await deps.loader.unload(name);
         }
-        sendJson(res, r.code === 0 ? 200 : 500, {
-          ok: r.code === 0,
-          output: r.out + r.err + setupOutput,
+        sendJson(res, 200, {
+          ok: true,
+          output: `${enabled ? 'Enabled' : 'Disabled'} '${name}'.${setupOutput ? '\n' + setupOutput : ''}`,
         });
         return true;
       }

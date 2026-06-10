@@ -22,6 +22,9 @@ interface StateView {
   suggestedTier: string;
   ramGb: number;
   allowlistCount: number;
+  setupMode: boolean;
+  setupError: string | null;
+  modelRecommendations: Record<string, { chat: string; approxSize: string }>;
 }
 
 // effectiveConfig() overlays TELEGRAM_* env vars over the file, which would make
@@ -53,8 +56,18 @@ function setup(): { home: string; db: DB; cleanup: () => void } {
   };
 }
 
-async function state(home: string, db: DB): Promise<StateView> {
-  return (await buildState({ db, home, moduleRoots: [], proactive: false })) as StateView;
+async function state(
+  home: string,
+  db: DB,
+  extra: { setupMode?: boolean; setupError?: string | null } = {},
+): Promise<StateView> {
+  return (await buildState({
+    db,
+    home,
+    moduleRoots: [],
+    proactive: false,
+    ...extra,
+  })) as StateView;
 }
 
 test('buildState: a fresh install is not configured (panel opens the wizard)', async () => {
@@ -94,6 +107,28 @@ test('buildState: a token with no allowed ids stays in the wizard', async () => 
     );
     const s = await state(home, db);
     assert.equal(s.configured, false);
+  } finally {
+    cleanup();
+  }
+});
+
+test('buildState: setupMode + setupError pass through, recommendations are always present', async () => {
+  const { home, db, cleanup } = setup();
+  try {
+    // Default (full mode): setupMode false, no error.
+    const off = await state(home, db);
+    assert.equal(off.setupMode, false);
+    assert.equal(off.setupError, null);
+    // Recommendations cover every tier with a chat tag + an approx size.
+    for (const tier of ['small', 'standard', 'heavy']) {
+      const rec = off.modelRecommendations[tier];
+      assert.ok(rec && typeof rec.chat === 'string' && rec.chat.length > 0, `${tier} chat tag`);
+      assert.ok(typeof rec.approxSize === 'string', `${tier} approx size`);
+    }
+    // Setup mode with a prior failed-boot message.
+    const on = await state(home, db, { setupMode: true, setupError: 'boom' });
+    assert.equal(on.setupMode, true);
+    assert.equal(on.setupError, 'boom');
   } finally {
     cleanup();
   }

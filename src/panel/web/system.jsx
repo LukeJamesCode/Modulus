@@ -1,4 +1,3 @@
-/* global React, window */
 // System & Diagnostics — the CLI power-features, integrated:
 //   Status  → /api/state            (modulus status)
 //   Doctor  → /api/doctor           (modulus doctor)
@@ -226,7 +225,7 @@ function StatusDashboard({ state }) {
   const agent = s.agent || {};
   const health = s.health || {};
   const models = s.models || {};
-  const exts = s.modules || {};
+  const mods = s.modules || {};
   const agentState = agent.running ? 'running' : 'stopped';
   const cards = [
     {
@@ -245,8 +244,8 @@ function StatusDashboard({ state }) {
     { label: 'Allowlist', value: s.allowlistCount ?? 0, sub: 'users allowed' },
     {
       label: 'Modules enabled',
-      value: exts.enabled ?? 0,
-      sub: `${exts.installed ?? 0} installed`,
+      value: mods.enabled ?? 0,
+      sub: `${mods.installed ?? 0} installed`,
     },
     { label: 'Queue depth', value: s.queueDepth ?? 0, sub: 'messages waiting', dot: 'ok' },
   ];
@@ -510,7 +509,7 @@ function parseLine(raw) {
       const time = t ? String(t).slice(11, 23) : '';
       return { t: time, level: level || 'info', msg: String(msg), f };
     }
-  } catch (e) {
+  } catch {
     /* not JSON */
   }
   return { t: '', level: 'info', msg: raw, f: {} };
@@ -540,7 +539,7 @@ function LogViewer() {
         let raw = data;
         try {
           raw = JSON.parse(data);
-        } catch (e) {
+        } catch {
           /* data is already a string */
         }
         setLines((l) => [...l.slice(-400), parseLine(raw)]);
@@ -1302,7 +1301,7 @@ function prettyJob(name) {
     .replace(/[-_]/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
-function prettyExt(name) {
+function prettyModule(name) {
   return String(name || '').replace(/^modulus-/, '');
 }
 // ms from now until the next 08:00 local (today if still upcoming, else tomorrow).
@@ -1554,7 +1553,7 @@ function ScheduleView() {
                     {j.cron}
                   </div>
                 </div>
-                <window.Badge tone="neutral">{prettyExt(j.module)}</window.Badge>
+                <window.Badge tone="neutral">{prettyModule(j.module)}</window.Badge>
               </div>
             ))}
           </window.Card>

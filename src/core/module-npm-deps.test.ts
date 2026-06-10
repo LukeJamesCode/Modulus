@@ -6,7 +6,15 @@
 
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { ensureNpmDeps, type NpmDep } from './module-npm-deps.js';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  ensureNpmDeps,
+  npmInstallInvocation,
+  readInstalledVersions,
+  type NpmDep,
+} from './module-npm-deps.js';
 
 const DEPS: NpmDep[] = [
   { pkg: 'playwright', version: '^1.49.0' },
@@ -76,4 +84,63 @@ test('reports failure when install exits clean but a dep still will not resolve'
     h.out.some((l) => l.includes("still won't resolve")),
     'names the dep that did not land',
   );
+});
+
+test('npm install invocation pins exact versions with --save-exact', () => {
+  // "Pin exactly" — a reinstall must reproduce the running version, not drift
+  // to a newer minor the declared caret would allow.
+  const inv = npmInstallInvocation('/fake/module', ['playwright@^1.49.0']);
+  assert.ok(
+    inv.args.includes('--save-exact'),
+    `expected --save-exact in ${JSON.stringify(inv.args)}`,
+  );
+});
+
+test('readInstalledVersions reads the exact installed version off disk', () => {
+  // Stand up a fake module-local node_modules with a real package.json so the
+  // default resolver walks it the way the runtime import will.
+  const folder = mkdtempSync(join(tmpdir(), 'modulus-deps-'));
+  try {
+    const pkgDir = join(folder, 'node_modules', 'playwright');
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(
+      join(pkgDir, 'package.json'),
+      JSON.stringify({ name: 'playwright', version: '1.49.1' }),
+    );
+    // Declared range is a caret; the recorded version is the exact resolved one.
+    const got = readInstalledVersions(folder, [
+      { pkg: 'playwright', version: '^1.49.0' },
+      { pkg: 'not-installed', version: '^1.0.0' },
+    ]);
+    assert.deepEqual(
+      got,
+      { playwright: '1.49.1' },
+      'records resolved version, omits the missing dep',
+    );
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+test('npm install invocation quotes a module folder with spaces on win32', () => {
+  // A user under `C:\Users\My Name\…` has a space in every module path. The
+  // win32 install runs through cmd.exe (npm is npm.cmd), which word-splits on
+  // spaces — so the --prefix path must arrive quoted, as a single argument.
+  const spaced = 'C:\\Users\\My Name\\.modulus\\modules\\modulus-browser';
+  const inv = npmInstallInvocation(spaced, ['playwright@^1.49.0']);
+  assert.equal(inv.command, 'npm');
+  if (process.platform === 'win32') {
+    assert.equal(inv.shell, true);
+    assert.ok(
+      inv.args.includes(`"${spaced}"`),
+      `spaced --prefix path must be quoted; got ${JSON.stringify(inv.args)}`,
+    );
+    // The prefix flag and the (space-free) package spec stay unquoted.
+    assert.ok(inv.args.includes('--prefix'));
+    assert.ok(inv.args.includes('playwright@^1.49.0'));
+  } else {
+    // POSIX runs without a shell: no quoting, the path is one argv entry.
+    assert.equal(inv.shell, false);
+    assert.ok(inv.args.includes(spaced));
+  }
 });

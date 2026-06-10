@@ -1,5 +1,13 @@
 # HANDOFF — Modulus implementation (for Opus 4.8)
 
+> **Status (v1.0.0): historical build log — not a to-do list.** Every phase below shipped:
+> in-process panel, instant responses, marketplace UI + registry, module migration, and polish.
+> Nine first-party modules now live under `modules/` (the eight launch modules plus
+> `modulus-abilitytest`, the deterministic eval harness run via `modulus abilitytest`). Test
+> counts and "what exists" claims in this file are snapshots from the build and have drifted —
+> **the code is the source of truth** (see [CLAUDE.md](CLAUDE.md) and `docs/`). Kept for the
+> rationale and the record of decisions, not for current status.
+
 You are picking up the Modulus build mid-flight. This document is self-contained: it tells you
 what Modulus is, what is already built and verified in this repo, and exactly what to do next.
 Read [docs/blueprint.md](docs/blueprint.md) (the full approved architecture) and

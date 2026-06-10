@@ -13,6 +13,9 @@ register();
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Command } from 'commander';
+// Lightweight (reads package.json, no heavy transitive deps) — safe to pull in
+// at the top so `modulus --version` reports the real host version.
+import { HOST_VERSION } from '../core/version.js';
 
 // Subcommands are pulled in lazily. Keeping the top of the CLI free of heavy
 // transitive imports (grammY, better-sqlite3, the LLM client) means `modulus
@@ -47,16 +50,23 @@ const program = new Command();
 program
   .name('modulus')
   .description('Small, terminal-first AI agent. CPU-only. Modules turn it into anything.')
-  .version('0.0.0');
+  .version(HOST_VERSION);
 
 program
   .command('start')
   .description('Run the bot (Telegram long-poll + Ollama) and the web panel if enabled')
   .option('--detach', 'Run as a background process; write a pid file')
-  .option('--agent-only', 'Do not also start the modulus-frontend web panel')
-  .action(async (opts: { detach?: boolean; agentOnly?: boolean }) => {
+  .option('--agent-only', 'Do not also start the in-process web panel')
+  .option('--no-open', "Don't auto-open the browser when first-run setup is needed")
+  .option('--lan', 'Bind the panel to all interfaces (0.0.0.0) for this run — Pi / headless')
+  .action(async (opts: { detach?: boolean; agentOnly?: boolean; open?: boolean; lan?: boolean }) => {
     const { run } = await import('./start.js');
-    await call('start', run, { detach: !!opts.detach, agentOnly: !!opts.agentOnly });
+    await call('start', run, {
+      detach: !!opts.detach,
+      agentOnly: !!opts.agentOnly,
+      noOpen: opts.open === false,
+      lan: !!opts.lan,
+    });
   });
 
 program
@@ -272,32 +282,32 @@ modCmd
   .command('list')
   .description('List installed modules and their state')
   .action(async () => {
-    const ext = await import('./ext.js');
-    await call('mod list', ext.list);
+    const mod = await import('./ext.js');
+    await call('mod list', mod.list);
   });
 modCmd
   .command('install')
   .argument('<source>', 'Local path, git URL, or repo module name')
   .description('Install a module')
   .action(async (source: string) => {
-    const ext = await import('./ext.js');
-    await call('mod install', ext.install, source);
+    const mod = await import('./ext.js');
+    await call('mod install', mod.install, source);
   });
 modCmd
   .command('enable')
   .argument('<name>')
   .description('Enable an installed module')
   .action(async (name: string) => {
-    const ext = await import('./ext.js');
-    await call('mod enable', ext.enable, name);
+    const mod = await import('./ext.js');
+    await call('mod enable', mod.enable, name);
   });
 modCmd
   .command('disable')
   .argument('<name>')
   .description('Disable an installed module')
   .action(async (name: string) => {
-    const ext = await import('./ext.js');
-    await call('mod disable', ext.disable, name);
+    const mod = await import('./ext.js');
+    await call('mod disable', mod.disable, name);
   });
 modCmd
   .command('uninstall')
@@ -305,16 +315,16 @@ modCmd
   .option('--purge', 'Also drop the module settings and state')
   .description('Uninstall a module installed under ~/.modulus/modules/')
   .action(async (name: string, opts: { purge?: boolean }) => {
-    const ext = await import('./ext.js');
-    await call('mod uninstall', ext.uninstall, name, { purge: !!opts.purge });
+    const mod = await import('./ext.js');
+    await call('mod uninstall', mod.uninstall, name, { purge: !!opts.purge });
   });
 modCmd
   .command('reload')
   .argument('[name]')
   .description('Touch module folders so a running modulus hot-reloads them')
   .action(async (name: string | undefined) => {
-    const ext = await import('./ext.js');
-    await call('mod reload', ext.reload, name);
+    const mod = await import('./ext.js');
+    await call('mod reload', mod.reload, name);
   });
 modCmd
   .command('create')
@@ -322,8 +332,8 @@ modCmd
   .argument('[dir]', 'Parent directory (default: current working directory)')
   .description('Scaffold a runnable starter module you can edit and publish')
   .action(async (name: string, dir: string | undefined) => {
-    const ext = await import('./ext.js');
-    await call('mod create', ext.create, name, dir);
+    const mod = await import('./ext.js');
+    await call('mod create', mod.create, name, dir);
   });
 
 program.parseAsync(process.argv).catch((e) => {

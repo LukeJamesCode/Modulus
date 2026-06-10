@@ -1,4 +1,3 @@
-/* global React, window */
 // Agent command center. Lists personas (the "fleet"), lets you create/edit
 // them, dispatch a task to one, and watch tasks stream through queued ->
 // running -> done with their transcript and sub-agent tree. Mirrors the
@@ -2326,7 +2325,7 @@ async function rawFetch(method, path, body) {
     let data = null;
     try {
       data = text ? JSON.parse(text) : null;
-    } catch (e) {
+    } catch {
       data = { raw: text };
     }
     return res.ok

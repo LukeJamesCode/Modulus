@@ -31,12 +31,7 @@ import { probeOllama } from './ollama-probe.js';
 import { availableModelTags } from './model-options.js';
 import { open as openDb } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
-import {
-  setupModules,
-  configureNativeDepsForModule,
-  printTelegramCommandsGuide,
-  type DiscoveredModule,
-} from './ext-setup.js';
+import { setupModules, printTelegramCommandsGuide, type DiscoveredModule } from './ext-setup.js';
 import type { Manifest } from '../core/modules.js';
 
 const TELEGRAM_API = 'https://api.telegram.org';
@@ -63,16 +58,16 @@ async function validateBotToken(token: string): Promise<BotInfo> {
 
 function discoverBundledModules(): DiscoveredModule[] {
   const here = dirname(fileURLToPath(import.meta.url));
-  const repoExt = resolve(here, '..', '..', 'modules');
+  const repoModule = resolve(here, '..', '..', 'modules');
   const out: DiscoveredModule[] = [];
   let entries: string[];
   try {
-    entries = readdirSync(repoExt);
+    entries = readdirSync(repoModule);
   } catch {
     return out;
   }
   for (const entry of entries) {
-    const folder = join(repoExt, entry);
+    const folder = join(repoModule, entry);
     try {
       if (!statSync(folder).isDirectory()) continue;
       const manifestPath = join(folder, 'manifest.json');
@@ -96,7 +91,7 @@ export function resolveModuleSelection(
   bundled: DiscoveredModule[],
   selectedNames: readonly string[],
 ): ModuleSelectionPlan {
-  const byName = new Map(bundled.map((ext) => [ext.name, ext]));
+  const byName = new Map(bundled.map((mod) => [mod.name, mod]));
   const requested = new Set(selectedNames);
   const visiting = new Set<string>();
   const visited = new Set<string>();
@@ -108,20 +103,20 @@ export function resolveModuleSelection(
     if (visited.has(name)) return;
     if (visiting.has(name)) return;
 
-    const ext = byName.get(name);
-    if (!ext) {
+    const mod = byName.get(name);
+    if (!mod) {
       if (parent) missingDependencies.push({ module: parent, dependency: name });
       return;
     }
 
     visiting.add(name);
-    for (const dep of ext.manifest.deps ?? []) {
-      visit(dep, ext.name);
+    for (const dep of mod.manifest.deps ?? []) {
+      visit(dep, mod.name);
       if (!requested.has(dep) && byName.has(dep)) added.add(dep);
     }
     visiting.delete(name);
     visited.add(name);
-    ordered.push(ext);
+    ordered.push(mod);
   };
 
   for (const name of selectedNames) visit(name);
@@ -150,8 +145,8 @@ function presetModuleStates(
        ON CONFLICT(name) DO UPDATE SET enabled = excluded.enabled`,
     );
     const now = Date.now();
-    for (const ext of bundled) {
-      stmt.run(ext.name, ext.manifest.version, selectedNames.includes(ext.name) ? 1 : 0, now, now);
+    for (const mod of bundled) {
+      stmt.run(mod.name, mod.manifest.version, selectedNames.includes(mod.name) ? 1 : 0, now, now);
     }
   } finally {
     try {
@@ -160,59 +155,6 @@ function presetModuleStates(
       /* ignore */
     }
   }
-}
-
-// ---------------------------------------------------------------------------
-// Web UI handoff: enable + launch the panel, then let the browser drive setup.
-// ---------------------------------------------------------------------------
-async function startWebSetup(
-  home: string,
-  bundled: DiscoveredModule[],
-  frontendExt: DiscoveredModule,
-): Promise<void> {
-  // Enable only the panel for now; the user picks the rest in the browser.
-  // This also creates the DB and seeds module_state rows for every bundled
-  // module (disabled), so the web Modules tab can list and toggle them.
-  presetModuleStates(home, bundled, [frontendExt.name]);
-
-  // The panel binds to loopback (127.0.0.1) by default — reachable only from
-  // this machine. On a headless box (a Pi, a mini PC, a Proxmox VM) you open it
-  // from another device on your network, which needs it bound to all
-  // interfaces. Ask once, and set listen_host before we generate + print the
-  // URL so the URL we show is the one that actually works.
-  const log = createLogger({ level: 'warn' });
-  const db = openDb({ path: join(home, 'modulus.db'), log });
-  try {
-    const fromAnotherDevice = await confirm({
-      message: 'Will you open the panel from another device (phone, another computer)?',
-      default: true,
-    });
-    if (fromAnotherDevice) {
-      db.prepare(
-        `INSERT INTO module_settings (module, key, value, updated_at)
-         VALUES (?, 'listen_host', '0.0.0.0', ?)
-         ON CONFLICT(module, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-      ).run(frontendExt.name, Date.now());
-    }
-    // Run the panel's setup entrypoint (generates the access token and prints
-    // the URL). We skip the generic settings prompts — the point of this path
-    // is to NOT ask a pile of terminal questions.
-    await configureNativeDepsForModule(frontendExt, db, home);
-  } finally {
-    try {
-      db.close();
-    } catch {
-      /* ignore */
-    }
-  }
-
-  // The panel is served in-process by the daemon now (no separate process to
-  // spawn). Point the user at `modulus start`, which boots the daemon, serves
-  // the panel, and prints its tokenized URL on startup.
-  process.stdout.write(
-    '\nSetup staged. Run `modulus start` to launch Modulus with the web panel —\n' +
-      'it prints the panel URL (with its access token) on startup.\n',
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -230,21 +172,20 @@ export async function run(): Promise<void> {
 
   process.stdout.write(`Welcome to Modulus. Config will live in ${home}.\n\n`);
 
-  // -- Web UI handoff ----------------------------------------------------
-  // Before anything else, offer to do the whole setup in the browser. If the
-  // modulus-frontend module is present and the user says yes, we enable it,
-  // start the local panel, and hand the rest of setup off to the web wizard —
-  // the terminal wizard below is skipped entirely. Saying no continues here.
+  // -- Web-first setup ---------------------------------------------------
+  // Offer the browser wizard first. `modulus start` on an unconfigured install
+  // serves the wizard, opens the browser itself, and promotes to the full
+  // daemon once you finish — so init just hands off to it. Saying no continues
+  // with the terminal wizard below.
   const bundled = discoverBundledModules();
-  const frontendExt = bundled.find((e) => e.name === 'modulus-frontend');
-  if (frontendExt && process.stdin.isTTY && process.stdout.isTTY) {
+  if (process.stdin.isTTY && process.stdout.isTTY) {
     const wantWeb = await confirm({
-      message:
-        'Set Modulus up in your browser (web UI)? Everything you can do here, but friendlier.',
+      message: 'Set Modulus up in your browser? Everything you can do here, but friendlier.',
       default: true,
     });
     if (wantWeb) {
-      await startWebSetup(home, bundled, frontendExt);
+      const { run: startRun } = await import('./start.js');
+      await startRun({});
       return;
     }
     process.stdout.write('Continuing setup in the terminal.\n\n');
@@ -397,9 +338,9 @@ export async function run(): Promise<void> {
   process.stdout.write('\n');
   const selectedNames = await checkbox({
     message: 'Select modules to enable (Space to toggle, Enter to confirm):',
-    choices: bundled.map((ext) => ({
-      name: `${ext.name}${ext.manifest.description ? '  —  ' + ext.manifest.description : ''}`,
-      value: ext.name,
+    choices: bundled.map((mod) => ({
+      name: `${mod.name}${mod.manifest.description ? '  —  ' + mod.manifest.description : ''}`,
+      value: mod.name,
     })),
   });
 
@@ -421,7 +362,7 @@ export async function run(): Promise<void> {
   presetModuleStates(
     home,
     bundled,
-    selected.map((ext) => ext.name),
+    selected.map((mod) => mod.name),
   );
 
   if (selected.length === 0) {

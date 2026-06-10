@@ -45,7 +45,7 @@ function envLocks(): Record<string, boolean> {
   };
 }
 
-async function validateTelegram(token: string): Promise<unknown> {
+export async function validateTelegram(token: string): Promise<unknown> {
   const t = token.trim();
   if (!/^[0-9]+:[A-Za-z0-9_-]{30,}$/.test(t)) {
     return { ok: false, error: 'Token has an invalid shape.' };

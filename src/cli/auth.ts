@@ -1,6 +1,6 @@
-// `modulus auth <ext>` — runs auth flows declared by modules.
+// `modulus auth <module>` — runs auth flows declared by modules.
 //
-// The flow lives in <ext>/auth.ts and registers itself with `host.auth.flow`.
+// The flow lives in <module>/auth.ts and registers itself with `host.auth.flow`.
 // Here we set up just enough host plumbing to import that file, run the
 // declared flow with a real I/O stub (terminal prompts), and write the
 // returned settings into the module_settings table.
@@ -42,22 +42,22 @@ export interface AuthRunnerIO extends AuthFlowIO {
   announce?: (line: string) => void;
 }
 
-export async function runAuthForExt(
-  ext: DiscoveredModule,
+export async function runAuthForModule(
+  mod: DiscoveredModule,
   db: DB,
   ioOverride?: AuthRunnerIO,
 ): Promise<void> {
-  const authEntry = ext.manifest.entrypoints?.auth;
-  if (!authEntry) throw new Error(`'${ext.name}' has no auth entrypoint`);
+  const authEntry = mod.manifest.entrypoints?.auth;
+  if (!authEntry) throw new Error(`'${mod.name}' has no auth entrypoint`);
 
   const log = createLogger({ level: 'warn' });
-  const dataDir = join(homeDir(), 'module_state', ext.name);
+  const dataDir = join(homeDir(), 'module_state', mod.name);
   mkdirSync(dataDir, { recursive: true });
 
   let captured: AuthFlow | null = null;
   const host: Host = {
-    name: ext.name,
-    version: ext.manifest.version,
+    name: mod.name,
+    version: mod.manifest.version,
     log,
     dataDir,
     db,
@@ -105,7 +105,7 @@ export async function runAuthForExt(
       knownChats: () => [],
       onCallback: () => {},
     },
-    scheduler: { cron: () => {} },
+    scheduler: { cron: () => {}, cronMatches: () => false },
     cache: {
       get: () => undefined,
       set: () => {},
@@ -130,14 +130,14 @@ export async function runAuthForExt(
     },
   };
 
-  const abs = resolve(ext.folder, authEntry);
+  const abs = resolve(mod.folder, authEntry);
   const url = pathToFileURL(abs).href;
-  const mod = (await import(url)) as { register?: (host: Host) => void | Promise<void> };
-  if (typeof mod.register !== 'function') {
-    throw new Error(`'${ext.name}/${authEntry}' has no register() export`);
+  const loaded = (await import(url)) as { register?: (host: Host) => void | Promise<void> };
+  if (typeof loaded.register !== 'function') {
+    throw new Error(`'${mod.name}/${authEntry}' has no register() export`);
   }
-  await mod.register(host);
-  if (!captured) throw new Error(`'${ext.name}' did not call host.auth.flow()`);
+  await loaded.register(host);
+  if (!captured) throw new Error(`'${mod.name}' did not call host.auth.flow()`);
 
   const flow = captured as AuthFlow;
   const announce = ioOverride?.announce ?? ((line: string) => process.stdout.write(line + '\n'));
@@ -160,33 +160,33 @@ export async function runAuthForExt(
   );
   const tx = db.transaction((entries: Array<[string, string | number | boolean]>) => {
     const now = Date.now();
-    for (const [k, v] of entries) insert.run(ext.name, k, String(v), now);
+    for (const [k, v] of entries) insert.run(mod.name, k, String(v), now);
   });
   tx(Object.entries(result));
   announce(`  ✓ Auth saved (${Object.keys(result).length} settings).`);
 }
 
-export async function run(extName: string | undefined): Promise<void> {
-  if (!extName) {
+export async function run(moduleName: string | undefined): Promise<void> {
+  if (!moduleName) {
     process.stderr.write('Usage: modulus auth <module-name>\n');
     process.exit(2);
   }
   const home = homeDir();
-  const ext = discover(home, extName);
-  if (!ext) {
-    process.stderr.write(`Module '${extName}' not found in ${home}/modules or repo modules/.\n`);
+  const mod = discover(home, moduleName);
+  if (!mod) {
+    process.stderr.write(`Module '${moduleName}' not found in ${home}/modules or repo modules/.\n`);
     process.exit(1);
   }
-  if (!ext.manifest.entrypoints?.auth) {
-    process.stderr.write(`'${extName}' does not declare an auth entrypoint.\n`);
+  if (!mod.manifest.entrypoints?.auth) {
+    process.stderr.write(`'${moduleName}' does not declare an auth entrypoint.\n`);
     process.exit(1);
   }
 
   const log = createLogger({ level: 'warn' });
   const db = openDb({ path: join(home, 'modulus.db'), log });
   try {
-    process.stdout.write(`Running auth flow for '${extName}'.\n\n`);
-    await runAuthForExt(ext, db);
+    process.stdout.write(`Running auth flow for '${moduleName}'.\n\n`);
+    await runAuthForModule(mod, db);
   } catch (e) {
     process.stderr.write(`Auth failed: ${e instanceof Error ? e.message : String(e)}\n`);
     process.exit(1);
@@ -202,5 +202,5 @@ export async function run(extName: string | undefined): Promise<void> {
   // they remember to register them with @BotFather. Skipped silently when the
   // module exposes no commands.
   const botUsername = await fetchBotUsername();
-  printTelegramCommandsGuide([ext], botUsername, { includeCore: false });
+  printTelegramCommandsGuide([mod], botUsername, { includeCore: false });
 }

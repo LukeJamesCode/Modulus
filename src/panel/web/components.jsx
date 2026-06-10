@@ -1,4 +1,3 @@
-/* global React, window */
 // Pure presentational primitives, attached to window so the other browser-
 // transpiled modules can use them without an import system. No app state lives
 // here — these are the building blocks (icons, buttons, inputs, modal, badges).

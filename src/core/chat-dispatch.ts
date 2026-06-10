@@ -75,10 +75,10 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
           chatId,
           userId,
           text: reply,
-          log: log.child({ ext: h.module, hook: 'afterReply' }),
+          log: log.child({ mod: h.module, hook: 'afterReply' }),
         });
       } catch (e) {
-        log.warn('afterReply hook failed', { ext: h.module, error: errStr(e) });
+        log.warn('afterReply hook failed', { mod: h.module, error: errStr(e) });
       }
     }
   };
@@ -89,7 +89,7 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       try {
         await h.handler(turn);
       } catch (e) {
-        log.warn('afterTurn hook failed', { ext: h.module, error: errStr(e) });
+        log.warn('afterTurn hook failed', { mod: h.module, error: errStr(e) });
       }
     }
   };
@@ -101,8 +101,8 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
     userId: number,
     reply: (text: string) => Promise<void>,
   ): Promise<boolean> => {
-    const extCmd = deps.commands().find((c) => c.name === name);
-    if (!extCmd) return false;
+    const moduleCmd = deps.commands().find((c) => c.name === name);
+    if (!moduleCmd) return false;
     const cctx: TelegramCommandContext = {
       chatId,
       userId,
@@ -112,10 +112,10 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       },
     };
     try {
-      await extCmd.handler(cctx);
+      await moduleCmd.handler(cctx);
     } catch (e) {
       log.warn('module command failed', {
-        ext: extCmd.module,
+        mod: moduleCmd.module,
         command: name,
         error: errStr(e),
       });
@@ -248,7 +248,7 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
       try {
         await item.handler(ictx);
       } catch (e) {
-        log.warn('intercept failed', { ext: item.module, error: errStr(e) });
+        log.warn('intercept failed', { mod: item.module, error: errStr(e) });
       }
     };
     await runNext();

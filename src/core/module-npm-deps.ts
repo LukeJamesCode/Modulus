@@ -11,6 +11,7 @@
 // no-op, so re-enabling is fast and we never reinstall what's already reachable.
 
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -55,22 +56,54 @@ function defaultIsResolvable(pkg: string, folder: string): boolean {
   }
 }
 
+// Quote one cmd.exe argument that may contain spaces. On win32 the npm spawn
+// runs through a shell (npm is npm.cmd, which Node refuses to launch without
+// one — CVE-2024-27980), and a shell word-splits on spaces. A module folder
+// like `C:\Users\My Name\.modulus\modules\x` would otherwise arrive as two
+// arguments and `npm install --prefix` would point at the wrong place (or
+// fail). Windows paths can't contain a literal `"`, so wrapping in double
+// quotes is sufficient and safe for the filesystem paths we pass.
+function quoteWin32Arg(arg: string): string {
+  return /\s/.test(arg) ? `"${arg}"` : arg;
+}
+
+// Build the `npm install` invocation. Extracted as a pure function so the
+// spaces-in-path quoting is unit-testable without actually spawning npm.
+// shell:true on win32 so cmd.exe resolves `npm` → `npm.cmd` on PATH; args are
+// quoted to survive that shell. POSIX needs neither.
+export function npmInstallInvocation(
+  folder: string,
+  specs: string[],
+): { command: string; args: string[]; shell: boolean } {
+  // --save-exact pins the resolved version into the module folder's package.json
+  // (no caret), so a later reinstall reproduces exactly what's running rather
+  // than silently drifting to a newer minor. The version we record in
+  // module_state comes from node_modules, but pinning keeps the two in step.
+  const raw = ['install', '--prefix', folder, '--save-exact', '--no-audit', '--no-fund', ...specs];
+  const win32 = process.platform === 'win32';
+  return {
+    command: 'npm',
+    args: win32 ? raw.map(quoteWin32Arg) : raw,
+    shell: win32,
+  };
+}
+
 // Stream `npm install --prefix <folder> <specs…>` through `stdout` so the panel
 // modal stays alive during a multi-second/minute install. --prefix makes the
 // module folder the install root (its own node_modules + package.json), keeping
 // the dependency out of core. --no-audit/--no-fund keep the captured output to
-// progress. shell:true on win32 so `npm`/`npm.cmd` resolves on PATH.
+// progress.
 async function defaultRunInstall(
   folder: string,
   specs: string[],
   stdout: (text: string) => void,
 ): Promise<number | null> {
   return new Promise((resolve) => {
-    const child = spawn(
-      'npm',
-      ['install', '--prefix', folder, '--no-audit', '--no-fund', ...specs],
-      { stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' },
-    );
+    const { command, args, shell } = npmInstallInvocation(folder, specs);
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell,
+    });
     const forward = (d: Buffer): void => {
       try {
         stdout(d.toString('utf8'));
@@ -131,4 +164,39 @@ export async function ensureNpmDeps(
   }
   stdout(`  ✓ Installed ${missing.map((d) => d.pkg).join(', ')}.\n`);
   return true;
+}
+
+// Resolve a package's package.json path from the module folder, the same way
+// the runtime `import` will at load time (createRequire rooted in the folder).
+// Returns undefined when the package doesn't resolve.
+function defaultResolvePkgJson(pkg: string, folder: string): string | undefined {
+  try {
+    const require = createRequire(pathToFileURL(join(folder, 'setup.js')));
+    return require.resolve(`${pkg}/package.json`);
+  } catch {
+    return undefined;
+  }
+}
+
+// Read the exact installed version of each dep from the module folder's
+// node_modules, so the host can record what's actually pinned (not the declared
+// range). A dep that doesn't resolve is omitted — we never record a version we
+// can't read off disk. `resolvePkgJson` is injectable for tests.
+export function readInstalledVersions(
+  folder: string,
+  deps: readonly NpmDep[],
+  resolvePkgJson: (pkg: string, folder: string) => string | undefined = defaultResolvePkgJson,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const d of deps) {
+    const pkgJsonPath = resolvePkgJson(d.pkg, folder);
+    if (!pkgJsonPath) continue;
+    try {
+      const v = (JSON.parse(readFileSync(pkgJsonPath, 'utf8')) as { version?: unknown }).version;
+      if (typeof v === 'string' && v.length > 0) out[d.pkg] = v;
+    } catch {
+      /* unreadable package.json; skip rather than record a guess */
+    }
+  }
+  return out;
 }

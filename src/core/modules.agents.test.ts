@@ -45,7 +45,7 @@ const fakeLlm: LLM = {
   stopIdleEviction: () => {},
 };
 
-function writeExt(root: string, name: string, manifest: Record<string, unknown>): string {
+function writeModule(root: string, name: string, manifest: Record<string, unknown>): string {
   const folder = join(root, name);
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, 'manifest.json'), JSON.stringify(manifest, null, 2));
@@ -115,13 +115,13 @@ const CODER_MANIFEST = {
 test('loading a module with manifest agents registers them into the fleet', async () => {
   const h = harness();
   try {
-    writeExt(h.root, 'demo-codex', CODER_MANIFEST);
+    writeModule(h.root, 'demo-codex', CODER_MANIFEST);
     const loader = h.makeLoader();
     await loader.loadAll();
 
     const coder = h.agents.getByName('coder');
     assert.ok(coder, 'manifest agent should land in the fleet');
-    assert.equal(coder.origin, 'ext:demo-codex');
+    assert.equal(coder.origin, 'module:demo-codex');
     assert.equal(coder.profile, 'reason');
     assert.equal(coder.systemPrompt, 'You are a coding specialist.');
     assert.equal(loader.list().find((e) => e.name === 'demo-codex')!.registeredAgents.length, 1);
@@ -134,7 +134,7 @@ test('loading a module with manifest agents registers them into the fleet', asyn
 test('default tool allowlist scopes a module agent to its own module', async () => {
   const h = harness();
   try {
-    writeExt(h.root, 'demo-codex', {
+    writeModule(h.root, 'demo-codex', {
       ...CODER_MANIFEST,
       agents: [{ name: 'coder', systemPrompt: 'Code.' }],
     });
@@ -154,7 +154,7 @@ test('default tool allowlist scopes a module agent to its own module', async () 
 test('re-loading upserts in place: same id, updated fields, no duplicates', async () => {
   const h = harness();
   try {
-    const folder = writeExt(h.root, 'demo-codex', CODER_MANIFEST);
+    const folder = writeModule(h.root, 'demo-codex', CODER_MANIFEST);
     const loader = h.makeLoader();
     await loader.loadAll();
     const before = h.agents.getByName('coder')!;
@@ -189,7 +189,7 @@ test('a module cannot hijack a user-created agent by name', async () => {
   const h = harness();
   try {
     const mine = h.agents.create({ name: 'coder', systemPrompt: 'My hand-tuned coder.' });
-    writeExt(h.root, 'demo-codex', CODER_MANIFEST);
+    writeModule(h.root, 'demo-codex', CODER_MANIFEST);
     const loader = h.makeLoader();
     await loader.loadAll();
 
@@ -207,14 +207,14 @@ test('a module cannot hijack a user-created agent by name', async () => {
 test('disabling a module removes its agents; orphaned module agents are swept', async () => {
   const h = harness();
   try {
-    writeExt(h.root, 'demo-codex', CODER_MANIFEST);
+    writeModule(h.root, 'demo-codex', CODER_MANIFEST);
     const loader = h.makeLoader();
     await loader.loadAll();
     assert.ok(h.agents.getByName('coder'));
     await loader.shutdown();
 
     // A leftover from a module uninstalled while the daemon was down.
-    h.agents.create({ name: 'ghostling', systemPrompt: 'Orphan.', origin: 'ext:ghost-module' });
+    h.agents.create({ name: 'ghostling', systemPrompt: 'Orphan.', origin: 'module:ghost-module' });
     // Disable demo-codex the way the CLI/panel does: flip module_state.
     h.db.prepare(`UPDATE module_state SET enabled = 0 WHERE name = 'demo-codex'`).run();
 
@@ -231,7 +231,7 @@ test('disabling a module removes its agents; orphaned module agents are swept', 
 test('an agent dropped from the manifest is removed on the next load', async () => {
   const h = harness();
   try {
-    const folder = writeExt(h.root, 'demo-codex', {
+    const folder = writeModule(h.root, 'demo-codex', {
       ...CODER_MANIFEST,
       agents: [
         { name: 'coder', systemPrompt: 'Code.' },

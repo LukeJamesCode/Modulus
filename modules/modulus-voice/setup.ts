@@ -56,7 +56,9 @@ export function defaultCommandExists(command: string): boolean {
   const probe = isPathLike(command)
     ? spawnSync(command, ['-version'], { stdio: 'ignore' })
     : process.platform === 'win32'
-      ? spawnSync('where', [command], { stdio: 'ignore', shell: true })
+      ? // where.exe is a real executable; no shell, so a spaced command name
+        // stays a single argument instead of being word-split by cmd.exe.
+        spawnSync('where', [command], { stdio: 'ignore' })
       : spawnSync('sh', ['-c', `command -v ${shQuote(command)}`], { stdio: 'ignore' });
   return probe.status === 0;
 }
@@ -65,7 +67,7 @@ export function defaultCommandPath(command: string): string | undefined {
   if (isPathLike(command)) return existsSync(command) ? command : undefined;
   const probe =
     process.platform === 'win32'
-      ? spawnSync('where', [command], { encoding: 'utf8', shell: true })
+      ? spawnSync('where', [command], { encoding: 'utf8' })
       : spawnSync('sh', ['-c', `command -v ${shQuote(command)}`], { encoding: 'utf8' });
   if (probe.status !== 0 || !probe.stdout) return undefined;
   const first = probe.stdout
@@ -366,7 +368,7 @@ export async function ensurePiperForTts(opts: NativeDepsOptions = {}): Promise<s
   }
 
   if (!home) {
-    stdout('  Piper was not found. Run `modulus ext install modulus-voice` to auto-download it.\n');
+    stdout('  Piper was not found. Run `modulus mod install modulus-voice` to auto-download it.\n');
     return undefined;
   }
 

@@ -288,6 +288,8 @@ export function createSystemRoutes(deps: PanelDeps, runtime: PanelRuntime): Rout
           home: deps.home,
           moduleRoots: deps.moduleRoots,
           proactive: runtime.proactive,
+          setupMode: !!deps.setup,
+          setupError: deps.setup?.lastError() ?? null,
         }),
       );
       return true;

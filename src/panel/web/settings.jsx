@@ -1,4 +1,3 @@
-/* global React, window */
 // Settings tab — Modulus Core config in friendly forms (GET/POST /api/config).
 // Values that are pinned by an environment variable show a "set by environment"
 // lock and are read-only here, mirroring how effectiveConfig() lets env vars
@@ -353,7 +352,7 @@ function TelegramSection({ cfg, set, locks }) {
   );
 }
 
-function ModelServerSection({ cfg, set, locks, models, setModels }) {
+function ModelServerSection({ cfg, set, locks, setModels }) {
   const [state, setState] = useStateSet('idle');
   const [count, setCount] = useStateSet(0);
   const [err, setErr] = useStateSet(null);

@@ -1,6 +1,6 @@
 // Shared helper for re-exec'ing the Modulus CLI from the in-process panel.
 // Several route families drive `modulus <cmd>` as a child so native-dep setup,
-// migrations, and the same code path `modulus …` uses all run: Modules (ext
+// migrations, and the same code path `modulus …` uses all run: Modules (mod
 // enable/disable/install/uninstall) and System (maintenance update). Keeping the
 // CLI-entry resolution in one place means a panel-triggered child always re-execs
 // the same entrypoint under the same loader (tsx in dev, node in prod).

@@ -13,6 +13,7 @@ import type { ModuleLoader } from '../core/modules.js';
 import type { InstantResponder } from '../core/instant-responses.js';
 import type { ModulusConfig } from '../cli/config-store.js';
 import type { PanelConfirmBus } from './confirm-bus.js';
+import type { PairingManager } from './telegram-pairing.js';
 
 // The live handles the panel borrows from the daemon. Engine handles
 // (orchestrator, agent runtime, …) are added as their route families are
@@ -58,6 +59,21 @@ export interface PanelDeps {
   // releases the pid). No-ops if the host doesn't supply them.
   onStop?: () => void;
   onRestart?: () => void;
+  // Present only when the panel is running in setup mode (config incomplete).
+  // Its presence is what flips /api/state's `setupMode` and gates the setup-only
+  // routes (pairing, /api/setup/complete). `complete()` resolves the promotion
+  // promise the CLI awaits; `lastError()` is the previous failed-boot message
+  // the wizard shows as a banner on re-entry.
+  setup?: {
+    complete(): void;
+    lastError(): string | null;
+  };
+  // Optional shared Telegram pairing manager. In full mode (Step 7) the daemon
+  // creates one bound to the live adapter and passes it here, so the /pair route
+  // drives pairing through the adapter's existing getUpdates consumer. In setup
+  // mode this is absent and the setup routes spin up their own getUpdates-based
+  // manager instead.
+  pairing?: PairingManager;
 }
 
 export interface PanelHandle {

@@ -123,7 +123,9 @@ test('browse decorates entries with installed + update state', async () => {
     const before = await browseRegistry(h.deps, opts);
     assert.equal(before.modules.length, 1);
     assert.equal(before.modules[0]!.installed, false);
-    assert.deepEqual(before.modules[0]!.permissions, ['Can contact demo.test on the internet']);
+    assert.deepEqual(before.modules[0]!.permissions, [
+      'Declares it contacts demo.test on the internet',
+    ]);
 
     // Install (consent the network permission), then browse sees it installed.
     const r = await installFromRegistry(h.deps, { name: 'modulus-demo', acceptAdded: true }, opts);
@@ -156,7 +158,9 @@ test('install with new permissions is blocked until consent (409), then succeeds
     const blocked = await installFromRegistry(h.deps, { name: 'modulus-demo' }, opts);
     assert.equal(blocked.status, 409);
     assert.equal(blocked.body['needsConsent'], true);
-    assert.deepEqual(blocked.body['added'], ['Can run the program "ffmpeg" on this computer']);
+    assert.deepEqual(blocked.body['added'], [
+      'Declares it runs the program "ffmpeg" on this computer',
+    ]);
     // Nothing installed, nothing hot-loaded while consent is pending.
     assert.equal(existsSync(join(userModulesRoot(h.home), 'modulus-demo')), false);
     assert.equal(h.reloads.length, 0);

@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  mkdirSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { open, migrate, loadMigrations } from './db.js';
@@ -61,6 +69,42 @@ test('0007 migration drops unused core tables on existing databases', () => {
     assert.equal(names.includes('session_memory'), false);
     assert.equal(names.includes('scheduled_tasks'), false);
     assert.equal(names.includes('job_queue'), false);
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('0026 migration rewrites ext:<name> agent origins to module:<name>', () => {
+  const dir = tmp();
+  const migDir = join(dir, 'migrations');
+  mkdirSync(migDir);
+  // Minimal agents table seeded with the three cases the rewrite must handle.
+  writeFileSync(
+    join(migDir, '0001_init.sql'),
+    [
+      'CREATE TABLE agents (id INTEGER PRIMARY KEY, origin TEXT);',
+      "INSERT INTO agents (id, origin) VALUES (1, 'ext:demo-codex');",
+      'INSERT INTO agents (id, origin) VALUES (2, NULL);',
+      "INSERT INTO agents (id, origin) VALUES (3, 'module:already');",
+    ].join('\n'),
+  );
+  // Ship the real migration SQL so this breaks if the rewrite logic regresses.
+  const realMig = readFileSync(
+    join(import.meta.dirname, 'migrations', '0026_rename_agent_origin_prefix.sql'),
+    'utf8',
+  );
+  writeFileSync(join(migDir, '0026_rename_agent_origin_prefix.sql'), realMig);
+  try {
+    const db = new Database(join(dir, 'g.db'));
+    migrate(db, migDir);
+    const origins = (
+      db.prepare('SELECT id, origin FROM agents ORDER BY id').all() as Array<{
+        id: number;
+        origin: string | null;
+      }>
+    ).map((r) => r.origin);
+    assert.deepEqual(origins, ['module:demo-codex', null, 'module:already']);
     db.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

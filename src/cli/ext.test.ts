@@ -3,12 +3,12 @@ import { strict as assert } from 'node:assert';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import * as ext from './ext.js';
+import * as mod from './ext.js';
 import { open as openDb } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 
 function mkHome(): string {
-  return mkdtempSync(join(tmpdir(), 'modulus-ext-cli-test-'));
+  return mkdtempSync(join(tmpdir(), 'modulus-mod-cli-test-'));
 }
 
 function writeManifest(folder: string, name: string, version = '0.1.0'): void {
@@ -33,7 +33,7 @@ function captureStdout(fn: () => Promise<void>): Promise<string> {
     });
 }
 
-test('ext.install copies a local folder into ~/.modulus/modules/', async () => {
+test('mod.install copies a local folder into ~/.modulus/modules/', async () => {
   const home = mkHome();
   const oldHome = process.env['MODULUS_HOME'];
   process.env['MODULUS_HOME'] = home;
@@ -42,7 +42,7 @@ test('ext.install copies a local folder into ~/.modulus/modules/', async () => {
     writeManifest(src, 'modulus-fake');
     writeFileSync(join(src, 'tools.ts'), '// fake');
 
-    const out = await captureStdout(() => ext.install(src));
+    const out = await captureStdout(() => mod.install(src));
     assert.match(out, /Installed 'modulus-fake'/);
     const dest = join(home, 'modules', 'modulus-fake');
     assert.ok(existsSync(join(dest, 'manifest.json')));
@@ -54,7 +54,7 @@ test('ext.install copies a local folder into ~/.modulus/modules/', async () => {
   }
 });
 
-test('ext.list shows installed modules and their state', async () => {
+test('mod.list shows installed modules and their state', async () => {
   const home = mkHome();
   const oldHome = process.env['MODULUS_HOME'];
   process.env['MODULUS_HOME'] = home;
@@ -71,7 +71,7 @@ test('ext.list shows installed modules and their state', async () => {
     ).run(Date.now(), Date.now());
     db.close();
 
-    const out = await captureStdout(() => ext.list());
+    const out = await captureStdout(() => mod.list());
     assert.match(out, /modulus-a@1\.0\.0\s+\[disabled\]/);
     assert.match(out, /next: modulus mod enable modulus-a/);
     assert.match(out, /modulus-b@2\.0\.0\s+\[ready\]/);
@@ -82,14 +82,14 @@ test('ext.list shows installed modules and their state', async () => {
   }
 });
 
-test('ext.enable / ext.disable flip module_state.enabled', async () => {
+test('mod.enable / mod.disable flip module_state.enabled', async () => {
   const home = mkHome();
   const oldHome = process.env['MODULUS_HOME'];
   process.env['MODULUS_HOME'] = home;
   try {
     writeManifest(join(home, 'modules', 'modulus-x'), 'modulus-x', '0.1.0');
 
-    await captureStdout(() => ext.disable('modulus-x'));
+    await captureStdout(() => mod.disable('modulus-x'));
     let log = createLogger({ level: 'error', out: () => {}, err: () => {} });
     let db = openDb({ path: join(home, 'modulus.db'), log });
     let row = db.prepare(`SELECT enabled FROM module_state WHERE name = ?`).get('modulus-x') as
@@ -98,7 +98,7 @@ test('ext.enable / ext.disable flip module_state.enabled', async () => {
     assert.equal(row?.enabled, 0);
     db.close();
 
-    await captureStdout(() => ext.enable('modulus-x'));
+    await captureStdout(() => mod.enable('modulus-x'));
     log = createLogger({ level: 'error', out: () => {}, err: () => {} });
     db = openDb({ path: join(home, 'modulus.db'), log });
     row = db.prepare(`SELECT enabled FROM module_state WHERE name = ?`).get('modulus-x') as
@@ -113,7 +113,7 @@ test('ext.enable / ext.disable flip module_state.enabled', async () => {
   }
 });
 
-test('ext.uninstall --purge drops settings and state rows', async () => {
+test('mod.uninstall --purge drops settings and state rows', async () => {
   const home = mkHome();
   const oldHome = process.env['MODULUS_HOME'];
   process.env['MODULUS_HOME'] = home;
@@ -132,7 +132,7 @@ test('ext.uninstall --purge drops settings and state rows', async () => {
     ).run(Date.now());
     db.close();
 
-    await captureStdout(() => ext.uninstall('modulus-y', { purge: true }));
+    await captureStdout(() => mod.uninstall('modulus-y', { purge: true }));
     assert.equal(existsSync(folder), false);
 
     const log2 = createLogger({ level: 'error', out: () => {}, err: () => {} });
@@ -151,7 +151,7 @@ test('ext.uninstall --purge drops settings and state rows', async () => {
   }
 });
 
-test('ext.reload touches manifests so the file watcher fires', async () => {
+test('mod.reload touches manifests so the file watcher fires', async () => {
   const home = mkHome();
   const oldHome = process.env['MODULUS_HOME'];
   process.env['MODULUS_HOME'] = home;
@@ -159,7 +159,7 @@ test('ext.reload touches manifests so the file watcher fires', async () => {
     const folder = join(home, 'modules', 'modulus-z');
     writeManifest(folder, 'modulus-z', '0.1.0');
     const before = readFileSync(join(folder, 'manifest.json'), 'utf8');
-    await captureStdout(() => ext.reload('modulus-z'));
+    await captureStdout(() => mod.reload('modulus-z'));
     const after = readFileSync(join(folder, 'manifest.json'), 'utf8');
     assert.equal(before, after); // content unchanged, only mtime nudged
   } finally {
@@ -169,10 +169,10 @@ test('ext.reload touches manifests so the file watcher fires', async () => {
   }
 });
 
-test('ext.create scaffolds a runnable starter module', async () => {
-  const parent = mkdtempSync(join(tmpdir(), 'modulus-ext-create-'));
+test('mod.create scaffolds a runnable starter module', async () => {
+  const parent = mkdtempSync(join(tmpdir(), 'modulus-mod-create-'));
   try {
-    await captureStdout(() => ext.create('modulus-demo', parent));
+    await captureStdout(() => mod.create('modulus-demo', parent));
     const dest = join(parent, 'modulus-demo');
     const manifest = JSON.parse(readFileSync(join(dest, 'manifest.json'), 'utf8')) as {
       name: string;

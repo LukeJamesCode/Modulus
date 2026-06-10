@@ -177,6 +177,19 @@ async function rmTempDir(dir: string): Promise<void> {
   throw lastError;
 }
 
+// A load failure is acceptable ONLY when it's a missing *bare* npm package —
+// the heavy, opt-in dependency a module's setup entrypoint installs into its
+// own node_modules at enable time (playwright, discord.js, @discordjs/voice…),
+// which this clean-home test never runs. A relative specifier ('../../src/…',
+// './foo.js') means the module reached for a path that isn't there once
+// installed — the A-1 class of bug this whole test exists to catch.
+function isMissingHeavyDep(error: string): boolean {
+  const m = /Cannot find (?:module|package) ['"]([^'"]+)['"]/.exec(error);
+  if (!m) return false;
+  const spec = m[1]!;
+  return !spec.startsWith('.') && !spec.includes('src/');
+}
+
 // Every module folder in the repo except the dev-only eval harness, which is
 // not published to the registry (it exists to test the host, not extend it).
 function shippableModuleNames(): string[] {
@@ -249,7 +262,15 @@ test('every shippable module survives pack → install → load from a clean hom
           continue;
         }
         if (!entry.enabled) failures.push(`${name}: unexpectedly disabled on first load`);
-        if (entry.error) failures.push(`${name}: load error — ${entry.error}`);
+        if (entry.error && !isMissingHeavyDep(entry.error)) {
+          // A relative/host-path specifier ('../../src/…') is the A-1 bug:
+          // the installed copy has no src/ tree to reach into. A *bare*
+          // missing package is the heavy opt-in dep the module's setup
+          // installs into <module>/node_modules at enable time — not run in
+          // this clean-home test, so tolerate it. The distinction is exactly
+          // the boundary 1.1 protects.
+          failures.push(`${name}: load error — ${entry.error}`);
+        }
       }
 
       // The enable/install flow dynamic-imports the setup entrypoint from the

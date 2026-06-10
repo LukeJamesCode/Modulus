@@ -42,9 +42,9 @@ export function pinnedFilesRoot(baseDir: string, taskId: number): string | null 
 }
 
 export function classifyKind(name: string, mime?: string): AttachmentKind {
-  const ext = extname(name).toLowerCase();
-  if ((mime ?? '').startsWith('image/') || IMAGE_EXTS.has(ext)) return 'image';
-  if ((mime ?? '') === 'application/pdf' || ext === '.pdf') return 'pdf';
+  const mod = extname(name).toLowerCase();
+  if ((mime ?? '').startsWith('image/') || IMAGE_EXTS.has(mod)) return 'image';
+  if ((mime ?? '') === 'application/pdf' || mod === '.pdf') return 'pdf';
   return 'file';
 }
 

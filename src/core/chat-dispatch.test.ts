@@ -176,7 +176,7 @@ test('an instant ack is sent, then the orchestrator still runs and answers', asy
   assert.deepEqual(replies, ['On it.', 'real answer']);
 });
 
-test('an instant reply still fires the afterReply chain (so a voice ext speaks it)', async () => {
+test('an instant reply still fires the afterReply chain (so a voice mod speaks it)', async () => {
   const afterReplyText: string[] = [];
   const afterReply: ModuleAfterReplyRecord = {
     module: 'voice',

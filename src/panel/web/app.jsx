@@ -1,4 +1,3 @@
-/* global React, ReactDOM, window */
 // Root app. Holds the shared agent/health state (polled from /api/state),
 // decides between the first-run wizard and the main hub, and owns the agent
 // start/stop/restart actions (which POST to /api/agent/* — the server shells
@@ -20,7 +19,7 @@ function useTheme() {
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem('modulus_theme') || 'dark';
-    } catch (e) {
+    } catch {
       return 'dark';
     }
   });
@@ -28,7 +27,7 @@ function useTheme() {
     document.documentElement.setAttribute('data-theme', theme);
     try {
       localStorage.setItem('modulus_theme', theme);
-    } catch (e) {
+    } catch {
       /* ignore */
     }
   }, [theme]);
@@ -39,7 +38,7 @@ function useDensity() {
   const [density, setDensity] = useState(() => {
     try {
       return localStorage.getItem('modulus_density') || 'balanced';
-    } catch (e) {
+    } catch {
       return 'balanced';
     }
   });
@@ -47,7 +46,7 @@ function useDensity() {
     document.documentElement.setAttribute('data-density', density);
     try {
       localStorage.setItem('modulus_density', density);
-    } catch (e) {
+    } catch {
       /* ignore */
     }
   }, [density]);
@@ -120,7 +119,7 @@ function App() {
     const forgetToken = () => {
       try {
         localStorage.removeItem('modulus_token');
-      } catch (e) {
+      } catch {
         /* ignore */
       }
       location.reload();
@@ -182,7 +181,10 @@ function App() {
   }
 
   const configured = !!state.configured;
-  const view = forcedView || (configured ? 'hub' : 'wizard');
+  // Setup mode pins the wizard regardless of forcedView/configured — the daemon
+  // is stubbed and there's no hub to exit to until promotion completes.
+  const setupMode = !!state.setupMode;
+  const view = setupMode ? 'wizard' : forcedView || (configured ? 'hub' : 'wizard');
   const agentStatus =
     busy === 'stop'
       ? 'stopping'
@@ -197,7 +199,11 @@ function App() {
       <window.Wizard
         suggestedTier={state.suggestedTier}
         ramGb={state.ramGb}
-        onExit={() => setForcedView('hub')}
+        setupMode={setupMode}
+        setupError={state.setupError || null}
+        modelRecommendations={state.modelRecommendations || {}}
+        // In setup mode there's no hub to skip to; hide the exit.
+        onExit={setupMode ? null : () => setForcedView('hub')}
         onFinish={async () => {
           setForcedView('hub');
           setRoute('dashboard');
@@ -210,14 +216,10 @@ function App() {
 
   const health = state.health || {};
   const models = state.models || {};
-  const enabledExts = (state.modules && state.modules.enabledNames) || [];
+  const enabledModules = (state.modules && state.modules.enabledNames) || [];
   const needsSetup = (state.modules && state.modules.needsSetup) || [];
-  const panelEnabled = enabledExts.indexOf('modulus-frontend') !== -1;
-  const visibleExtCount = Math.max(
-    0,
-    ((state.modules && state.modules.enabled) || 0) - (panelEnabled ? 1 : 0),
-  );
-  const voiceEnabled = enabledExts.indexOf('modulus-voice') !== -1;
+  const visibleModuleCount = (state.modules && state.modules.enabled) || 0;
+  const voiceEnabled = enabledModules.indexOf('modulus-voice') !== -1;
 
   return (
     <div className="app-shell">
@@ -228,8 +230,8 @@ function App() {
         onStart={() => agentAction('start')}
         onStop={() => agentAction('stop')}
         busy={busy}
-        extCount={visibleExtCount}
-        enabledExts={enabledExts}
+        moduleCount={visibleModuleCount}
+        enabledModules={enabledModules}
         needsSetup={needsSetup}
         onOpenModules={() => setRoute('modules')}
         theme={theme}
@@ -282,12 +284,12 @@ function App() {
 function nowLabel() {
   try {
     return new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  } catch (e) {
+  } catch {
     return '';
   }
 }
 
-function Topbar({ state, setRoute, offline, agentStatus }) {
+function Topbar({ state, setRoute, offline }) {
   const [open, setOpen] = useState(false);
   const [tasks, setTasks] = useState([]);
   const [clock, setClock] = useState(() => nowLabel());
@@ -305,7 +307,7 @@ function Topbar({ state, setRoute, offline, agentStatus }) {
       try {
         const t = await window.api.get('/api/agents/tasks');
         if (t.ok && t.data && t.data.tasks) setTasks(t.data.tasks);
-      } catch (e) {
+      } catch {
         // ignore
       }
     };
@@ -337,11 +339,11 @@ function Topbar({ state, setRoute, offline, agentStatus }) {
     .slice(0, 5);
 
   const notifications = [
-    ...needsSetup.map((ext) => ({
-      id: `setup-${ext.name}`,
+    ...needsSetup.map((mod) => ({
+      id: `setup-${mod.name}`,
       icon: 'plug',
       title: 'Module Needs Setup',
-      desc: `${ext.name.replace(/^modulus-/, '')} requires configuration.`,
+      desc: `${mod.name.replace(/^modulus-/, '')} requires configuration.`,
       action: () => setRoute('modules'),
     })),
     ...activeTasks.map((t) => ({
@@ -532,64 +534,6 @@ function ConfigErrorBar({ message }) {
   );
 }
 
-/* ---------------- global status pill + start/stop ---------------- */
-function GlobalStatus({ agentStatus, onStart, onStop, busy }) {
-  const running = agentStatus === 'running';
-  const stopping = agentStatus === 'stopping';
-  const starting = agentStatus === 'starting' || (!!busy && !stopping);
-  const transitioning = starting || stopping;
-  const labels = {
-    running: 'Running',
-    stopped: 'Stopped',
-    starting: 'Starting',
-    stopping: 'Stopping',
-    error: 'Error',
-  };
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '7px 12px',
-          borderRadius: 99,
-          background: 'var(--surface-2)',
-          border: '1px solid var(--border)',
-          flex: 1,
-          minWidth: 0,
-        }}
-      >
-        <window.StatusDot
-          state={transitioning ? 'starting' : agentStatus}
-          size={9}
-          pulse={running}
-        />
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
-          {stopping ? 'Stopping' : starting ? 'Starting' : labels[agentStatus]}
-        </span>
-      </div>
-      <window.Button
-        size="sm"
-        variant={running || stopping ? 'default' : 'primary'}
-        icon={running || stopping ? 'stop' : 'power'}
-        onClick={running ? onStop : onStart}
-        disabled={transitioning}
-        style={
-          running || stopping
-            ? {
-                color: 'var(--err)',
-                borderColor: 'color-mix(in oklab, var(--err) 38%, transparent)',
-              }
-            : {}
-        }
-      >
-        {stopping ? 'Stopping' : running ? 'Stop' : starting ? '…' : 'Start'}
-      </window.Button>
-    </div>
-  );
-}
-
 function Wordmark() {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -629,21 +573,15 @@ function Wordmark() {
 function Sidebar({
   route,
   setRoute,
-  agentStatus,
-  onStart,
-  onStop,
-  busy,
-  extCount,
-  enabledExts,
+  moduleCount,
+  enabledModules,
   needsSetup,
   onOpenModules,
   theme,
   setTheme,
-  density,
-  setDensity,
 }) {
   const items = NAV.filter(
-    (n) => !n.requiresExt || (enabledExts || []).indexOf(n.requiresExt) !== -1,
+    (n) => !n.requiresModule || (enabledModules || []).indexOf(n.requiresModule) !== -1,
   );
   const setupList = needsSetup || [];
   const setupCount = setupList.length;
@@ -656,7 +594,7 @@ function Sidebar({
   const [dismissedKey, setDismissedKey] = useState(() => {
     try {
       return localStorage.getItem('modulus_ext_setup_dismissed') || '';
-    } catch (e) {
+    } catch {
       return '';
     }
   });
@@ -664,7 +602,7 @@ function Sidebar({
   const dismissPopup = () => {
     try {
       localStorage.setItem('modulus_ext_setup_dismissed', setupKey);
-    } catch (e) {
+    } catch {
       /* ignore */
     }
     setDismissedKey(setupKey);
@@ -760,7 +698,7 @@ function Sidebar({
                   {setupCount}
                 </span>
               )}
-              {n.id === 'modules' && setupCount === 0 && extCount > 0 && (
+              {n.id === 'modules' && setupCount === 0 && moduleCount > 0 && (
                 <span
                   style={{
                     fontSize: 11.5,
@@ -769,7 +707,7 @@ function Sidebar({
                     fontFamily: 'var(--font-mono)',
                   }}
                 >
-                  {extCount}
+                  {moduleCount}
                 </span>
               )}
             </button>

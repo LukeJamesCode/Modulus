@@ -16,22 +16,17 @@
       </div>
     </div>
 
-    <!-- React + Babel from CDN. No build step: .jsx files are transpiled in the
-         browser. This keeps the panel a single static bundle the module can
-         ship as-is and a Pi can serve without a toolchain. -->
-    <script
-      src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"
-      crossorigin="anonymous"
-    ></script>
-    <script
-      src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"
-      crossorigin="anonymous"
-    ></script>
-    <script
-      src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
-      crossorigin="anonymous"
-    ></script>
-    <script src="https://unpkg.com/marked@12.0.2/marked.min.js" crossorigin="anonymous"></script>
+    <!-- React + Babel + marked, vendored under vendor/ (not loaded from a CDN).
+         No build step: .jsx files are still transpiled in the browser, so the
+         panel ships as a single static bundle a Pi serves without a toolchain —
+         and now it works fully offline, with a CSP that names no third-party
+         origin. To update a library, replace the file in src/panel/web/vendor/
+         (versions are pinned in this comment): react 18.3.1, react-dom 18.3.1,
+         @babel/standalone 7.29.0, marked 12.0.2. -->
+    <script src="vendor/react.production.min.js"></script>
+    <script src="vendor/react-dom.production.min.js"></script>
+    <script src="vendor/babel.min.js"></script>
+    <script src="vendor/marked.min.js"></script>
 
     <script src="api.js"></script>
     <script type="text/babel" src="data.jsx"></script>

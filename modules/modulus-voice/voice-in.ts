@@ -51,7 +51,7 @@ export function register(host: Host, options: RegisterOptions = {}): void {
     if (!modelPath) {
       msg.log.warn('voice note failed: whisper_model_path is unset');
       return {
-        error: 'No whisper model is configured. Run: modulus ext install modulus-voice',
+        error: 'No whisper model is configured. Run: modulus mod install modulus-voice',
       };
     }
     const language = host.settings.get<string>('stt_language', 'auto') || 'auto';

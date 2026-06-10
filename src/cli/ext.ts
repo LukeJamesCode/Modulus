@@ -1,4 +1,4 @@
-// `modulus ext` — manage modules.
+// `modulus mod` — manage modules.
 //
 // Subcommands:
 //   list                       — installed + enabled state
@@ -42,6 +42,7 @@ import {
 } from './ext-setup.js';
 import type { Manifest } from '../core/modules.js';
 import { collectModuleReadiness, formatModuleReadinessLine } from '../core/module-readiness.js';
+import { setModuleEnabledState, uninstallModuleFiles } from './module-admin.js';
 import {
   stageModule,
   commitModule,
@@ -53,7 +54,7 @@ import {
 import { fetchRegistryIndex, findRegistryEntry } from '../core/registry.js';
 import { HOST_VERSION } from '../core/version.js';
 
-interface InstalledExt {
+interface InstalledMod {
   name: string;
   version: string;
   folder: string;
@@ -122,8 +123,8 @@ async function installFromRegistry(name: string, dest: string, home: string): Pr
   return entry.name;
 }
 
-function listInstalled(home: string): InstalledExt[] {
-  const out: InstalledExt[] = [];
+function listInstalled(home: string): InstalledMod[] {
+  const out: InstalledMod[] = [];
   const seen = new Set<string>();
   for (const { folder, source } of moduleFolders(home)) {
     try {
@@ -213,7 +214,7 @@ export async function install(source: string | undefined): Promise<void> {
     );
     process.exit(1);
   }
-  const ext = { name: installedName, folder: extFolder, manifest };
+  const mod = { name: installedName, folder: extFolder, manifest };
 
   const canPrompt = process.stdin.isTTY && process.stdout.isTTY;
   const doSetup = canPrompt
@@ -224,15 +225,15 @@ export async function install(source: string | undefined): Promise<void> {
     : false;
 
   if (doSetup) {
-    await setupModules(home, [ext]);
+    await setupModules(home, [mod]);
     const botUsername = await fetchBotUsername();
-    printTelegramCommandsGuide([ext], botUsername, { includeCore: false });
+    printTelegramCommandsGuide([mod], botUsername, { includeCore: false });
   } else {
     if (manifest.entrypoints?.setup) {
       const log = createLogger({ level: 'warn' });
       const db = openDb({ path: join(home, 'modulus.db'), log });
       try {
-        await configureNativeDepsForModule(ext, db, home);
+        await configureNativeDepsForModule(mod, db, home);
       } finally {
         db.close();
       }
@@ -256,9 +257,9 @@ function isLocalPath(s: string): boolean {
 // we join it into a path we have to refuse anything that could escape the
 // modules root: path separators, parent references, leading dots, or
 // anything that isn't a sensible package-name shape.
-const EXT_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/i;
-function assertSafeExtName(name: string): void {
-  if (!EXT_NAME_RE.test(name) || name.includes('..')) {
+const MODULE_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/i;
+function assertSafeModuleName(name: string): void {
+  if (!MODULE_NAME_RE.test(name) || name.includes('..')) {
     process.stderr.write(
       `Manifest 'name' is not a safe module identifier: ${JSON.stringify(name)}\n`,
     );
@@ -299,7 +300,7 @@ function installFromFolder(src: string, destRoot: string): string {
     process.stderr.write(`Manifest at '${manifestPath}' has no name.\n`);
     process.exit(1);
   }
-  assertSafeExtName(m.name);
+  assertSafeModuleName(m.name);
   const dest = join(destRoot, m.name);
   assertContained(dest, destRoot);
   if (existsSync(dest)) {
@@ -362,7 +363,7 @@ function installFromGit(url: string, destRoot: string, subpath?: string): string
     process.stderr.write(`Cloned manifest has no name.\n`);
     process.exit(1);
   }
-  assertSafeExtName(m.name);
+  assertSafeModuleName(m.name);
   const dest = join(destRoot, m.name);
   assertContained(dest, destRoot);
   if (existsSync(dest)) {
@@ -394,21 +395,12 @@ export async function disable(name: string | undefined): Promise<void> {
 
 async function setEnabled(name: string, enabled: boolean): Promise<void> {
   const home = homeDir();
-  const installed = listInstalled(home).find((e) => e.name === name);
-  if (!installed) {
-    process.stderr.write(`Module '${name}' is not installed.\n`);
+  // Shared with the panel's in-process enable/disable (see module-admin.ts).
+  const result = withDb(home, (db) => setModuleEnabledState(db, home, name, enabled));
+  if (!result.ok) {
+    process.stderr.write(`${result.error}\n`);
     process.exit(1);
   }
-  withDb(home, (db) => {
-    // INSERT OR UPDATE: if the loader has never run, the row doesn't exist
-    // yet; we still want enable/disable to take effect on next load.
-    const now = Date.now();
-    db.prepare(
-      `INSERT INTO module_state (name, version, enabled, installed_at, last_loaded_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(name) DO UPDATE SET enabled = excluded.enabled`,
-    ).run(installed.name, installed.version, enabled ? 1 : 0, now, now);
-  });
   process.stdout.write(`${enabled ? '✓ Enabled' : '✓ Disabled'} '${name}'.\n`);
   process.stdout.write(
     enabled
@@ -426,19 +418,13 @@ export async function uninstall(
     process.exit(2);
   }
   const home = homeDir();
-  const userFolder = join(userModulesRoot(home), name);
-  if (!existsSync(userFolder)) {
-    process.stderr.write(
-      `'${name}' is not installed under ${userModulesRoot(home)}. Repo-bundled modules live under <repo>/modules and aren't managed here.\n`,
-    );
+  // Shared with the panel's in-process uninstall (see module-admin.ts).
+  const result = withDb(home, (db) =>
+    uninstallModuleFiles(home, name, { purge: opts.purge ?? false, db }),
+  );
+  if (!result.ok) {
+    process.stderr.write(`${result.error}\n`);
     process.exit(1);
-  }
-  rmSync(userFolder, { recursive: true, force: true });
-  if (opts.purge) {
-    withDb(home, (db) => {
-      db.prepare(`DELETE FROM module_settings WHERE module = ?`).run(name);
-      db.prepare(`DELETE FROM module_state WHERE name = ?`).run(name);
-    });
   }
   process.stdout.write(
     `✓ Uninstalled '${name}'.${opts.purge ? ' (settings purged)' : ' (settings kept; pass --purge to drop)'}\n`,
@@ -453,16 +439,16 @@ export async function reload(name: string | undefined): Promise<void> {
   const home = homeDir();
   const installed = listInstalled(home);
   if (name) {
-    const ext = installed.find((e) => e.name === name);
-    if (!ext) {
+    const mod = installed.find((e) => e.name === name);
+    if (!mod) {
       process.stderr.write(`Module '${name}' not installed.\n`);
       process.exit(1);
     }
-    touchFolder(ext.folder);
-    process.stdout.write(`✓ Touched ${ext.folder} (running modulus will hot-reload).\n`);
+    touchFolder(mod.folder);
+    process.stdout.write(`✓ Touched ${mod.folder} (running modulus will hot-reload).\n`);
     return;
   }
-  for (const ext of installed) touchFolder(ext.folder);
+  for (const mod of installed) touchFolder(mod.folder);
   process.stdout.write(`✓ Touched ${installed.length} module folder(s).\n`);
 }
 

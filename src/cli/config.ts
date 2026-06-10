@@ -68,12 +68,12 @@ function discoverModulesForSettings(home: string): ModuleEntry[] {
 
 export async function run(): Promise<void> {
   const home = homeDir();
-  const exts = discoverModulesForSettings(home);
+  const mods = discoverModulesForSettings(home);
 
   for (;;) {
     const sectionChoices = [
       { name: 'core (telegram / ollama / models / tier)', value: '__core__' },
-      ...exts.map((e) => ({ name: e.name, value: e.name })),
+      ...mods.map((e) => ({ name: e.name, value: e.name })),
       { name: '(quit)', value: '__quit__' },
     ];
     const pick = await select({ message: 'Choose section:', choices: sectionChoices });
@@ -81,9 +81,9 @@ export async function run(): Promise<void> {
     if (pick === '__core__') {
       await editCore(home);
     } else {
-      const ext = exts.find((e) => e.name === pick);
-      if (!ext) continue;
-      await editModule(home, ext);
+      const mod = mods.find((e) => e.name === pick);
+      if (!mod) continue;
+      await editModule(home, mod);
     }
   }
 }
@@ -197,17 +197,17 @@ function effectiveDiffers(file: ModulusConfig, effective: ModulusConfig): boolea
   );
 }
 
-async function editModule(home: string, ext: ModuleEntry): Promise<void> {
-  if (!ext.schema) {
-    process.stdout.write(`(${ext.name} has no settings schema.)\n`);
+async function editModule(home: string, mod: ModuleEntry): Promise<void> {
+  if (!mod.schema) {
+    process.stdout.write(`(${mod.name} has no settings schema.)\n`);
     return;
   }
   const log = createLogger({ level: 'warn' });
   const db = openDb({ path: join(home, 'modulus.db'), log });
   try {
     for (;;) {
-      const current = readSettings(db, ext.name, ext.schema);
-      const choices = Object.entries(ext.schema.properties).map(([k, decl]) => {
+      const current = readSettings(db, mod.name, mod.schema);
+      const choices = Object.entries(mod.schema.properties).map(([k, decl]) => {
         const v = current[k];
         const display = decl.secret
           ? v === undefined
@@ -220,14 +220,14 @@ async function editModule(home: string, ext: ModuleEntry): Promise<void> {
         };
       });
       choices.push({ name: '(back)', value: '__back__' });
-      const pick = await select({ message: `${ext.name} settings:`, choices });
+      const pick = await select({ message: `${mod.name} settings:`, choices });
       if (pick === '__back__') return;
-      const decl = ext.schema.properties[pick]!;
+      const decl = mod.schema.properties[pick]!;
       const newValue = await promptForSchemaValue(pick, decl, current[pick]);
       if (newValue === undefined) {
-        deleteSetting(db, ext.name, pick);
+        deleteSetting(db, mod.name, pick);
       } else {
-        writeSetting(db, ext.name, pick, newValue);
+        writeSetting(db, mod.name, pick, newValue);
       }
     }
   } finally {
@@ -285,12 +285,12 @@ async function promptForSchemaValue(
 
 function readSettings(
   db: ReturnType<typeof openDb>,
-  ext: string,
+  mod: string,
   schema: SettingsSchema,
 ): Record<string, string | number | boolean | undefined> {
   const rows = db
     .prepare(`SELECT key, value FROM module_settings WHERE module = ?`)
-    .all(ext) as Array<{ key: string; value: string }>;
+    .all(mod) as Array<{ key: string; value: string }>;
   const out: Record<string, string | number | boolean | undefined> = {};
   for (const [k, decl] of Object.entries(schema.properties)) {
     if (decl.default !== undefined) out[k] = decl.default;
@@ -307,7 +307,7 @@ function readSettings(
 
 function writeSetting(
   db: ReturnType<typeof openDb>,
-  ext: string,
+  mod: string,
   key: string,
   value: string | number | boolean,
 ): void {
@@ -315,9 +315,9 @@ function writeSetting(
     `INSERT INTO module_settings (module, key, value, updated_at)
      VALUES (?, ?, ?, ?)
      ON CONFLICT(module, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  ).run(ext, key, String(value), Date.now());
+  ).run(mod, key, String(value), Date.now());
 }
 
-function deleteSetting(db: ReturnType<typeof openDb>, ext: string, key: string): void {
-  db.prepare(`DELETE FROM module_settings WHERE module = ? AND key = ?`).run(ext, key);
+function deleteSetting(db: ReturnType<typeof openDb>, mod: string, key: string): void {
+  db.prepare(`DELETE FROM module_settings WHERE module = ? AND key = ?`).run(mod, key);
 }

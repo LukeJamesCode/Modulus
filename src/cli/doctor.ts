@@ -128,7 +128,7 @@ export async function run(): Promise<void> {
 
 function checkHome(home: string): CheckResult {
   if (!existsSync(home)) {
-    return { name: 'home', ok: false, msg: `${home} does not exist — run 'modulus init'` };
+    return { name: 'home', ok: false, msg: `${home} does not exist — run 'modulus start' to set up` };
   }
   return { name: 'home', ok: true, msg: home };
 }
@@ -435,10 +435,12 @@ function resolveVoicePath(
     if (looksLikePath(raw)) {
       return { found: existsSync(raw), where: raw, kind: 'path' };
     }
-    // Bare command name → which/where lookup.
+    // Bare command name → which/where lookup. where.exe is a real executable,
+    // so spawn it without a shell — that way a name with spaces stays one
+    // argument instead of being word-split by cmd.exe.
     const which =
       process.platform === 'win32'
-        ? spawnSync('where', [raw], { encoding: 'utf8', shell: true })
+        ? spawnSync('where', [raw], { encoding: 'utf8' })
         : spawnSync('sh', ['-c', `command -v ${shQuote(raw)}`], { encoding: 'utf8' });
     const out =
       String(which.stdout ?? '')
@@ -454,7 +456,7 @@ function resolveVoicePath(
   }
   const which =
     process.platform === 'win32'
-      ? spawnSync('where', [fallback], { encoding: 'utf8', shell: true })
+      ? spawnSync('where', [fallback], { encoding: 'utf8' })
       : spawnSync('sh', ['-c', `command -v ${shQuote(fallback)}`], { encoding: 'utf8' });
   const out =
     String(which.stdout ?? '')

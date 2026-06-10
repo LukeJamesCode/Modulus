@@ -403,12 +403,21 @@ export function hasPermissions(p: ModulePermissions): boolean {
 }
 
 // Plain-language consent lines for the UI/CLI. Everyday people read these, so
-// no jargon: say what the module can DO.
+// no jargon. "Declares" not "can": these come from the module's manifest — it's
+// what the module says it will do, which consent then grants, not a capability
+// it already holds. `network: ["*"]` is the wildcard ("any host"); spelling out
+// a literal "*" would read as a typo, so it gets its own line.
 export function describePermissions(p: ModulePermissions): string[] {
   const lines: string[] = [];
-  for (const d of p.network ?? []) lines.push(`Can contact ${d} on the internet`);
-  for (const b of p.subprocess ?? []) lines.push(`Can run the program "${b}" on this computer`);
-  for (const f of p.filesystem ?? []) lines.push(`Can read and write files under ${f}`);
+  for (const d of p.network ?? [])
+    lines.push(
+      d === '*'
+        ? 'Declares it contacts any site on the internet'
+        : `Declares it contacts ${d} on the internet`,
+    );
+  for (const b of p.subprocess ?? [])
+    lines.push(`Declares it runs the program "${b}" on this computer`);
+  for (const f of p.filesystem ?? []) lines.push(`Declares it reads and writes files under ${f}`);
   if (lines.length === 0) lines.push('Needs no special permissions');
   return lines;
 }

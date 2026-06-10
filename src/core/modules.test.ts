@@ -13,7 +13,7 @@ import type { LLM, ProfileConfig, ProfileName } from './llm.js';
 const log = createLogger({ level: 'error', out: () => {}, err: () => {} });
 
 function tmp(): string {
-  return mkdtempSync(join(tmpdir(), 'modulus-ext-'));
+  return mkdtempSync(join(tmpdir(), 'modulus-mod-'));
 }
 
 const fakeLlm: LLM = {
@@ -40,7 +40,7 @@ const fakeLlm: LLM = {
   stopIdleEviction: () => {},
 };
 
-function writeExt(
+function writeModule(
   root: string,
   name: string,
   manifest: Record<string, unknown>,
@@ -125,7 +125,7 @@ test('loader: discovers module, runs migrations, registers tool/command/job/auth
     mkdirSync(stateRoot);
 
     // Write a self-contained module with all entrypoints.
-    const extFolder = writeExt(
+    const extFolder = writeModule(
       root,
       'demo',
       {
@@ -242,7 +242,7 @@ test('host.telegram.onCallback: registers handler, exposed via loader.callbacks(
     const sched = createScheduler({ log });
     const root = join(dir, 'exts');
     mkdirSync(root);
-    writeExt(
+    writeModule(
       root,
       'cbdemo',
       {
@@ -300,7 +300,7 @@ test('host.telegram.onCallback: rejects prefixes with characters that break disp
     const root = join(dir, 'exts');
     mkdirSync(root);
     // A prefix containing ':' would be ambiguous with the dispatcher's split.
-    writeExt(
+    writeModule(
       root,
       'badcb',
       {
@@ -347,7 +347,7 @@ test('loader: rejects module whose modulus range exceeds host version', async ()
     const sched = createScheduler({ log });
     const root = join(dir, 'exts');
     mkdirSync(root);
-    writeExt(root, 'too-new', { name: 'too-new', version: '1.0.0', modulus: '>=99.0.0' });
+    writeModule(root, 'too-new', { name: 'too-new', version: '1.0.0', modulus: '>=99.0.0' });
     const loader = createModuleLoader({
       roots: [root],
       stateRoot: join(dir, 'state'),
@@ -377,7 +377,7 @@ test('loader: disabled module is recorded but not registered', async () => {
     const sched = createScheduler({ log });
     const root = join(dir, 'exts');
     mkdirSync(root);
-    writeExt(
+    writeModule(
       root,
       'disabled',
       {
@@ -428,7 +428,7 @@ test('loader: settings reads defaults from schema and writes round-trip', async 
     const sched = createScheduler({ log });
     const root = join(dir, 'exts');
     mkdirSync(root);
-    writeExt(
+    writeModule(
       root,
       'cfg',
       {
@@ -485,7 +485,7 @@ test('loader: settings sees auth written outside the running module host', async
     const sched = createScheduler({ log });
     const root = join(dir, 'exts');
     mkdirSync(root);
-    writeExt(
+    writeModule(
       root,
       'cfg',
       {
@@ -544,13 +544,13 @@ test('loader: intent filter skips trivial and low-signal messages', async () => 
     const sched = createScheduler({ log });
     const root = join(dir, 'exts');
     mkdirSync(root);
-    writeExt(root, 'calendarish', {
+    writeModule(root, 'calendarish', {
       name: 'calendarish',
       version: '1.0.0',
       modulus: '*',
       intent_pattern: '\\b(calendar|events?)\\b',
     });
-    writeExt(root, 'weatherish', {
+    writeModule(root, 'weatherish', {
       name: 'weatherish',
       version: '1.0.0',
       modulus: '*',
@@ -600,7 +600,7 @@ test('loader: a mid-load throw rolls back tool/command/intercept/prompt fragment
     // The module registers a tool, command, intercept, prompt fragment,
     // AND a scheduler job, then explodes from an auth-entrypoint throw.
     // After load all of that should be gone.
-    writeExt(
+    writeModule(
       root,
       'broken',
       {
@@ -687,7 +687,7 @@ test('host telegram knownChats exposes only allowlisted chats and default fallba
       `INSERT INTO telegram_chats (chat_id, user_id, devmode, last_seen_at) VALUES (?, ?, ?, ?)`,
     ).run(9999, 99, 0, 300);
 
-    writeExt(
+    writeModule(
       root,
       'chats-demo',
       {
@@ -769,7 +769,7 @@ test('loader: hot-reloads when a nested module file changes', async (t) => {
     const sched = createScheduler({ log });
     const root = join(dir, 'exts');
     mkdirSync(root);
-    writeExt(
+    writeModule(
       root,
       'nested-reload',
       {
@@ -811,6 +811,143 @@ test('loader: hot-reloads when a nested module file changes', async (t) => {
       const tool = tools.get('reload_value');
       return tool ? (await tool.invoke({}, { log })) === 'v2' : false;
     }, 5000);
+
+    await loader.shutdown();
+    db.close();
+  } finally {
+    await rmTempDir(dir);
+  }
+});
+
+test('loader: writes under node_modules never trigger a reload', async () => {
+  const dir = tmp();
+  try {
+    const db = open({ path: join(dir, 'g.db') });
+    const tools = createToolRegistry({ log });
+    const sched = createScheduler({ log });
+    const root = join(dir, 'exts');
+    mkdirSync(root);
+    writeModule(
+      root,
+      'heavy-mod',
+      {
+        name: 'heavy-mod',
+        version: '1.0.0',
+        modulus: '*',
+        entrypoints: { tools: './tools.js' },
+      },
+      {
+        'tools.js':
+          'export function register(host) {\n' +
+          "  host.tools.register({ name: 'heavy_value', description: '', parameters: {}, tier: 'auto', invoke: async () => 'v1' });\n" +
+          '}\n',
+      },
+    );
+
+    let reloads = 0;
+    const loader = createModuleLoader({
+      roots: [root],
+      stateRoot: join(dir, 'state'),
+      db,
+      llm: fakeLlm,
+      log,
+      scheduler: sched,
+      tools,
+      hostVersion: '0.1.0',
+      chatId: 0,
+      watch: true,
+      onDidReload: () => {
+        reloads += 1;
+      },
+    });
+    await loader.loadAll();
+
+    // Simulate `npm install --prefix <folder>`: many files under node_modules.
+    const modFolder = join(root, 'heavy-mod');
+    for (let i = 0; i < 5; i++) {
+      const pkgDir = join(modFolder, 'node_modules', `pkg${i}`);
+      mkdirSync(pkgDir, { recursive: true });
+      writeFileSync(join(pkgDir, 'package.json'), `{"name":"pkg${i}"}`);
+      writeFileSync(join(pkgDir, 'index.js'), 'module.exports = {};');
+    }
+    // Wait past the poll interval (250ms) + debounce (100ms) with margin.
+    await new Promise((r) => setTimeout(r, 700));
+    assert.equal(reloads, 0, 'node_modules churn must not trigger a reload');
+
+    // Control: a real source-file change still reloads, proving the watcher is
+    // live and the exclusion is targeted (not a dead watcher).
+    writeFileSync(
+      join(modFolder, 'tools.js'),
+      'export function register(host) {\n' +
+        "  host.tools.register({ name: 'heavy_value', description: '', parameters: {}, tier: 'auto', invoke: async () => 'v2' });\n" +
+        '}\n',
+    );
+    await waitFor(() => reloads >= 1, 5000);
+
+    await loader.shutdown();
+    db.close();
+  } finally {
+    await rmTempDir(dir);
+  }
+});
+
+test('loader: suspendReload pauses hot-reload until resumed', async () => {
+  const dir = tmp();
+  try {
+    const db = open({ path: join(dir, 'g.db') });
+    const tools = createToolRegistry({ log });
+    const sched = createScheduler({ log });
+    const root = join(dir, 'exts');
+    mkdirSync(root);
+    writeModule(
+      root,
+      'paused-mod',
+      {
+        name: 'paused-mod',
+        version: '1.0.0',
+        modulus: '*',
+        entrypoints: { tools: './tools.js' },
+      },
+      {
+        'tools.js':
+          'export function register(host) {\n' +
+          "  host.tools.register({ name: 'paused_value', description: '', parameters: {}, tier: 'auto', invoke: async () => 'v1' });\n" +
+          '}\n',
+      },
+    );
+
+    let reloads = 0;
+    const loader = createModuleLoader({
+      roots: [root],
+      stateRoot: join(dir, 'state'),
+      db,
+      llm: fakeLlm,
+      log,
+      scheduler: sched,
+      tools,
+      hostVersion: '0.1.0',
+      chatId: 0,
+      watch: true,
+      onDidReload: () => {
+        reloads += 1;
+      },
+    });
+    await loader.loadAll();
+
+    loader.suspendReload('paused-mod');
+    writeFileSync(
+      join(root, 'paused-mod', 'tools.js'),
+      'export function register(host) {\n' +
+        "  host.tools.register({ name: 'paused_value', description: '', parameters: {}, tier: 'auto', invoke: async () => 'v2' });\n" +
+        '}\n',
+    );
+    await new Promise((r) => setTimeout(r, 700));
+    assert.equal(reloads, 0, 'no reload should fire while suspended');
+
+    loader.resumeReload('paused-mod');
+    // resume() does not itself reload; the caller drives one explicit reload.
+    await loader.reload('paused-mod');
+    assert.equal(reloads, 1, 'exactly one reload after the explicit reload()');
 
     await loader.shutdown();
     db.close();

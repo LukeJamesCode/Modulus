@@ -1,5 +1,4 @@
-/* global React, window */
-const { useState, useEffect, useCallback, useRef, useMemo } = React;
+const { useState, useEffect, useRef, useMemo } = React;
 const { Icon, Button, Input, Select, Label } = window;
 
 const NODE_DEFS = {
@@ -36,7 +35,7 @@ function JsonTextArea({ value, onChange }) {
   );
 }
 
-function NodeComponent({ node, selected, onSelect, onDragStart, onDrag, status, output }) {
+function NodeComponent({ node, selected, onSelect, onDragStart, onDrag, status }) {
   const def = NODE_DEFS[node.type];
   const borderCol = selected
     ? 'var(--accent-ring)'
@@ -362,7 +361,7 @@ function Inspector({ node, onChange, onDelete, agents, tools }) {
   );
 }
 
-function WorkflowBuilder({ state }) {
+function WorkflowBuilder() {
   const [workflows, setWorkflows] = useState([]);
   const [activeWfId, setActiveWfId] = useState(null);
 

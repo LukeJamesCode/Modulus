@@ -23,15 +23,7 @@
 // jobs behind. Without this rollback the previous loader could leak commands
 // from a broken module and the only way out was a process restart.
 
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  lstatSync,
-  mkdirSync,
-  watch,
-} from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { DB } from '../storage/db.js';
@@ -45,6 +37,7 @@ import type { FastCache } from './fast-cache.js';
 import type { ModulePermissions } from './installer.js';
 import { namespacedCache } from './fast-cache.js';
 import { createChatDispatcher, type ChatDispatcher, type InboundMessage } from './chat-dispatch.js';
+import { createModuleWatcher } from './module-watcher.js';
 
 // ---------------------------------------------------------------------------
 // Manifest + Host API
@@ -83,7 +76,7 @@ export interface Manifest {
   // exposing every tool (preserves the pre-filter behaviour).
   intent_pattern?: string;
   // Agent personas this module ships (manifest v2). Upserted into the fleet
-  // on load with origin 'ext:<name>', kept in sync on reload, removed on
+  // on load with origin 'module:<name>', kept in sync on reload, removed on
   // uninstall/disable. Installing a module thus adds a delegatable specialist
   // with zero glue code — the "modules are mods" promise extended to agents.
   agents?: ManifestAgent[];
@@ -306,7 +299,7 @@ export interface KnownTelegramChat {
 }
 
 export interface AuthFlow {
-  // User-visible label for `modulus auth <ext>`.
+  // User-visible label for `modulus auth <module>`.
   label: string;
   // The runner returns a settings patch that the loader writes back into the
   // module_settings table. CLI orchestrates the I/O (prompts, callback
@@ -675,6 +668,19 @@ export interface ModuleLoader {
   // every tool" rather than "expose no tools". An empty array means the
   // message looks trivial or low-signal and tools should be skipped entirely.
   relevantModules(message: string): string[] | null;
+  // Pause/resume hot-reload for one module while a privileged operation mutates
+  // its folder. The enable/setup flow wraps a module's setup entrypoint in
+  // suspend → (run setup) → resume → reload(name): the npm-install churn no
+  // longer triggers a storm of mid-setup reloads, and the module loads exactly
+  // once when its dependencies are in place. Idempotent; resume does not itself
+  // reload — the caller decides when (and resume() does not lose a pending
+  // change, since the explicit reload() supersedes it).
+  suspendReload(name: string): void;
+  resumeReload(name: string): void;
+  // Per-module count of watcher-driven hot reloads since startup. A counter that
+  // keeps climbing with no one editing files flags a reload leak; surfaced in
+  // metrics + `modulus status` so it's noticeable before it pegs the CPU.
+  reloadCounts(): Record<string, number>;
   shutdown(): Promise<void>;
 }
 
@@ -745,12 +751,22 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
   const loaded = new Map<string, LoadedModule>();
   const registrations = new Map<string, RegistrationsForModule>();
   const dirs = new Map<string, string>(); // module name -> resolved folder
-  const watchers: Array<() => void> = [];
-  const moduleWatchers = new Map<string, () => void>();
-  const reloadTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const activeReloads = new Set<Promise<void>>();
   let importVersion = 0;
   let shuttingDown = false;
+
+  // Hot-reload watcher. Owns its own timers/watchers/suspend state; calls back
+  // into the loader for the semantic load/unload decisions. Disabled entirely
+  // when opts.watch === false (tests).
+  const watcher = createModuleWatcher({
+    log,
+    roots: opts.roots,
+    isShuttingDown: () => shuttingDown,
+    loadModule: (folder) => loadOne(folder),
+    unloadModule: (name) => unloadInternal(name),
+    ...(opts.onDidReload ? { onDidReload: opts.onDidReload } : {}),
+    isFolderLoaded: (folder) => [...dirs.values()].some((f) => f === folder),
+    nameForFolder: (folder) => [...dirs.entries()].find(([, f]) => f === folder)?.[0],
+  });
 
   // -- module-provided agents (manifest v2) ---------------------------------
   // Agents are durable fleet rows, not transient registrations: a hot-reload
@@ -762,7 +778,7 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
   function syncManifestAgents(manifest: Manifest, cl: Logger): string[] {
     const registrar = opts.agents;
     if (!registrar) return [];
-    const origin = `ext:${manifest.name}`;
+    const origin = `module:${manifest.name}`;
     const wanted = new Set<string>();
     const registered: string[] = [];
     for (const spec of manifest.agents ?? []) {
@@ -809,10 +825,10 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
     return registered;
   }
 
-  function removeManifestAgents(extName: string): void {
+  function removeManifestAgents(moduleName: string): void {
     const registrar = opts.agents;
     if (!registrar) return;
-    const origin = `ext:${extName}`;
+    const origin = `module:${moduleName}`;
     for (const a of registrar.list()) {
       if (a.origin === origin) registrar.remove(a.id);
     }
@@ -932,7 +948,7 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
         // error (not warn) — a failing disposer can leave the module in
         // an inconsistent state; operators must see this when grepping logs.
         log.error('module disposer failed', {
-          ext: name,
+          mod: name,
           error: e instanceof Error ? e.message : 'disposer error',
         });
       }
@@ -960,9 +976,9 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
 
     const enabled = ensureStateRow(manifest);
     dirs.set(manifest.name, folder);
-    if (opts.watch !== false && !shuttingDown) watchModuleFolder(manifest.name, folder);
+    if (opts.watch !== false && !shuttingDown) watcher.watchModuleFolder(manifest.name, folder);
 
-    const cl = log.child({ ext: manifest.name });
+    const cl = log.child({ mod: manifest.name });
     if (!enabled) {
       cl.info('module is disabled — skipping load');
       // A disabled module's tools are gone, so a fleet agent allowlisted to
@@ -1355,16 +1371,7 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
     if (!folder || !existsSync(folder)) removeManifestAgents(name);
     registrations.delete(name);
     loaded.delete(name);
-    const close = moduleWatchers.get(name);
-    if (close) {
-      close();
-      moduleWatchers.delete(name);
-    }
-    const timer = reloadTimers.get(name);
-    if (timer) {
-      clearTimeout(timer);
-      reloadTimers.delete(name);
-    }
+    watcher.detach(name);
   }
 
   async function loadAll(): Promise<void> {
@@ -1390,20 +1397,20 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
       }
     }
     // Orphan sweep: a module uninstalled while the daemon was down never got
-    // its unload, so ext-origin agents for modules that aren't present (or
+    // its unload, so module-origin agents for modules that aren't present (or
     // didn't load) would linger as dead personas in the fleet.
     if (opts.agents) {
       const present = new Set(
-        [...loaded.values()].filter((e) => e.enabled && !e.error).map((e) => `ext:${e.name}`),
+        [...loaded.values()].filter((e) => e.enabled && !e.error).map((e) => `module:${e.name}`),
       );
       for (const a of opts.agents.list()) {
-        if (a.origin && a.origin.startsWith('ext:') && !present.has(a.origin)) {
+        if (a.origin && a.origin.startsWith('module:') && !present.has(a.origin)) {
           log.info('removing orphaned module agent', { agent: a.name, origin: a.origin });
           opts.agents.remove(a.id);
         }
       }
     }
-    if (opts.watch !== false) startWatching();
+    if (opts.watch !== false) watcher.startRootWatchers();
   }
 
   async function reload(name: string): Promise<void> {
@@ -1426,224 +1433,6 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
 
   async function unload(name: string): Promise<void> {
     await unloadInternal(name);
-  }
-
-  function scheduleReload(name: string, folder: string): void {
-    if (shuttingDown) return;
-    const existing = reloadTimers.get(name);
-    if (existing) clearTimeout(existing);
-    const timer = setTimeout(() => {
-      reloadTimers.delete(name);
-      const reloadTask = (async () => {
-        if (shuttingDown) return;
-        if (!existsSync(folder) || !existsSync(join(folder, 'manifest.json'))) {
-          await unloadInternal(name);
-          return;
-        }
-        log.info('module change detected, reloading', { ext: name });
-        await loadOne(folder);
-        if (!shuttingDown) await opts.onDidReload?.();
-      })();
-      activeReloads.add(reloadTask);
-      reloadTask
-        .catch((e) => {
-          log.warn('reload failed', {
-            ext: name,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        })
-        .finally(() => {
-          activeReloads.delete(reloadTask);
-        });
-    }, 100);
-    timer.unref?.();
-    reloadTimers.set(name, timer);
-  }
-
-  function trackReloadTask(task: Promise<void>): void {
-    activeReloads.add(task);
-    task.then(
-      () => activeReloads.delete(task),
-      () => activeReloads.delete(task),
-    );
-  }
-
-  function watchModuleFolder(name: string, folder: string): void {
-    if (shuttingDown) return;
-    if (moduleWatchers.has(name)) return;
-    try {
-      const closes: Array<() => void> = [];
-      const watchDir = (dir: string): void => {
-        const w = watch(dir, { persistent: false }, () => {
-          scheduleReload(name, folder);
-        });
-        w.on('error', (e) => {
-          if (shuttingDown) return;
-          log.warn('module folder watcher failed', {
-            ext: name,
-            folder: dir,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        });
-        closes.push(() => w.close());
-        let entries: string[] = [];
-        try {
-          entries = readdirSync(dir);
-        } catch {
-          return;
-        }
-        for (const entry of entries) {
-          const child = join(dir, entry);
-          try {
-            // lstatSync: never follow symlinks. Otherwise a symlink loop or
-            // a link pointing outside the module folder would cause the
-            // watcher to recurse forever / watch arbitrary directories.
-            const st = lstatSync(child);
-            if (st.isSymbolicLink()) continue;
-            if (st.isDirectory()) watchDir(child);
-          } catch {
-            /* ignore vanished paths */
-          }
-        }
-      };
-      watchDir(folder);
-
-      // Polling safety net: fs.watch is unreliable on some platforms /
-      // filesystems (notably GitHub Actions' Linux runners, where an in-place
-      // rewrite of an existing file occasionally doesn't deliver IN_MODIFY).
-      // A 250ms mtime scan ensures we still notice a change within ~half a
-      // second even when the kernel watcher misses the event. scheduleReload
-      // already debounces, so double-triggers from fs.watch + polling collapse
-      // into a single reload.
-      // Fingerprint each file by mtime AND size. Coarse-mtime filesystems (and
-      // CI runners) can rewrite a file's contents within the same mtime tick;
-      // folding the byte size in catches a same-mtime length change that the
-      // mtime alone would miss.
-      const seenStamps = new Map<string, string>();
-      const stampOf = (st: { mtimeMs: number; size: number }): string => `${st.mtimeMs}:${st.size}`;
-      const snapshotMtimes = (dir: string): void => {
-        let entries: string[] = [];
-        try {
-          entries = readdirSync(dir);
-        } catch {
-          return;
-        }
-        for (const entry of entries) {
-          const child = join(dir, entry);
-          try {
-            const st = lstatSync(child);
-            if (st.isSymbolicLink()) continue;
-            if (st.isDirectory()) {
-              snapshotMtimes(child);
-            } else if (st.isFile()) {
-              seenStamps.set(child, stampOf(st));
-            }
-          } catch {
-            /* ignore vanished paths */
-          }
-        }
-      };
-      snapshotMtimes(folder);
-      const checkMtimes = (dir: string): boolean => {
-        let entries: string[] = [];
-        try {
-          entries = readdirSync(dir);
-        } catch {
-          return false;
-        }
-        for (const entry of entries) {
-          const child = join(dir, entry);
-          try {
-            const st = lstatSync(child);
-            if (st.isSymbolicLink()) continue;
-            if (st.isDirectory()) {
-              if (checkMtimes(child)) return true;
-            } else if (st.isFile()) {
-              const stamp = stampOf(st);
-              const prev = seenStamps.get(child);
-              if (prev === undefined || prev !== stamp) {
-                seenStamps.set(child, stamp);
-                return true;
-              }
-            }
-          } catch {
-            /* ignore vanished paths */
-          }
-        }
-        return false;
-      };
-      const poll = setInterval(() => {
-        if (shuttingDown) return;
-        if (checkMtimes(folder)) scheduleReload(name, folder);
-      }, 250);
-      poll.unref?.();
-      closes.push(() => clearInterval(poll));
-
-      moduleWatchers.set(name, () => {
-        for (const close of closes) close();
-      });
-    } catch (e) {
-      log.warn('failed to watch module folder', {
-        ext: name,
-        folder,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }
-
-  function startWatching(): void {
-    for (const root of opts.roots) {
-      try {
-        const w = watch(root, { persistent: false }, (_event, file) => {
-          if (shuttingDown) return;
-          if (!file) return;
-          // We only react to top-level folder changes — nested file edits get
-          // detected by the per-folder watcher below if we add one. For now
-          // a coarse rescan is fine and simpler than walking event types.
-          const seg = String(file).split(/[\\/]/);
-          const top = seg[0];
-          if (!top) return;
-          const folder = join(root, top);
-          const reloadTask = (async () => {
-            if (shuttingDown) return;
-            if (!existsSync(folder) || !statSync(folder).isDirectory()) {
-              const found = [...dirs.entries()].find(([, f]) => f === folder);
-              if (found) {
-                log.info('module folder removed', { ext: found[0] });
-                await unloadInternal(found[0]);
-              }
-              return;
-            }
-            if (!existsSync(join(folder, 'manifest.json'))) return;
-            log.info('module change detected, reloading', { folder: top });
-            try {
-              await loadOne(folder);
-              await opts.onDidReload?.();
-            } catch (e) {
-              log.warn('reload failed', {
-                folder: top,
-                error: e instanceof Error ? e.message : String(e),
-              });
-            }
-          })();
-          trackReloadTask(reloadTask);
-          reloadTask.catch(() => {});
-        });
-        w.on('error', (e) => {
-          if (shuttingDown) return;
-          log.warn('modules root watcher failed', {
-            root,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        });
-        watchers.push(() => w.close());
-      } catch (e) {
-        log.warn('failed to watch modules root', {
-          root,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
   }
 
   function list(): LoadedModule[] {
@@ -1748,7 +1537,7 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
         matched_ = reg.intentPattern.test(message);
       } catch (e) {
         log.warn('intent_pattern threw on test; disabling', {
-          ext: name,
+          mod: name,
           error: e instanceof Error ? e.message : 'regex error',
         });
         reg.intentPattern = undefined;
@@ -1757,7 +1546,7 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
       const elapsedMs = Number(process.hrtime.bigint() - startNs) / 1_000_000;
       if (elapsedMs > 50) {
         log.warn('intent_pattern exceeded 50ms budget; disabling', {
-          ext: name,
+          mod: name,
           elapsedMs,
         });
         reg.intentPattern = undefined;
@@ -1779,25 +1568,7 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
 
   async function shutdown(): Promise<void> {
     shuttingDown = true;
-    for (const timer of reloadTimers.values()) clearTimeout(timer);
-    reloadTimers.clear();
-    for (const close of watchers) {
-      try {
-        close();
-      } catch {
-        /* ignore */
-      }
-    }
-    watchers.length = 0;
-    for (const close of moduleWatchers.values()) {
-      try {
-        close();
-      } catch {
-        /* ignore */
-      }
-    }
-    moduleWatchers.clear();
-    await Promise.allSettled([...activeReloads]);
+    await watcher.stop();
     for (const name of [...loaded.keys()]) await unloadInternal(name);
   }
 
@@ -1817,6 +1588,9 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
     chatSurfaces,
     promptFragment,
     relevantModules,
+    suspendReload: (name: string) => watcher.suspend(name),
+    resumeReload: (name: string) => watcher.resume(name),
+    reloadCounts: () => watcher.reloadCounts(),
     shutdown,
   };
 }

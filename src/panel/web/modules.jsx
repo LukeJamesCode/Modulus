@@ -1,4 +1,3 @@
-/* global React, window */
 // Modules tab. Lists the modules Modulus actually has installed (from
 // GET /api/modules, which merges each manifest with its readiness state and
 // settings schema). Enable/disable/uninstall shell out to the `modulus` CLI on
@@ -8,19 +7,19 @@
 // registry (GET /api/modules/registry) and installs them through the consent-
 // gated POST /api/modules/registry/install. Local/git installs still go through
 // the CLI (`modulus mod install <path|git-url>`).
-const { useState: useStateExt, useEffect: useEffectExt, useRef: useRefExt } = React;
+const { useState: useStateMod, useEffect: useEffectMod, useRef: useRefMod } = React;
 
 function ModulesTab() {
-  const [exts, setExts] = useStateExt(null); // null = loading
-  const [error, setError] = useStateExt(null);
-  const [detail, setDetail] = useStateExt(null); // ext name
-  const [tab, setTab] = useStateExt('all'); // all | enabled | disabled
-  const [confirm, setConfirm] = useStateExt(null); // { ext }
-  const [settingsFor, setSettingsFor] = useStateExt(null); // ext name
-  const [authFor, setAuthFor] = useStateExt(null); // ext name being connected
-  const [busy, setBusy] = useStateExt(null); // name currently mutating
-  const [setupPromptDismissed, setSetupPromptDismissed] = useStateExt(false);
-  const [view, setView] = useStateExt('installed'); // installed | browse
+  const [mods, setExts] = useStateMod(null); // null = loading
+  const [error, setError] = useStateMod(null);
+  const [detail, setDetail] = useStateMod(null); // mod name
+  const [tab, setTab] = useStateMod('all'); // all | enabled | disabled
+  const [confirm, setConfirm] = useStateMod(null); // { mod }
+  const [settingsFor, setSettingsFor] = useStateMod(null); // mod name
+  const [authFor, setAuthFor] = useStateMod(null); // mod name being connected
+  const [busy, setBusy] = useStateMod(null); // name currently mutating
+  const [setupPromptDismissed, setSetupPromptDismissed] = useStateMod(false);
+  const [view, setView] = useStateMod('installed'); // installed | browse
 
   const load = async () => {
     const r = await window.api.get('/api/modules');
@@ -29,7 +28,7 @@ function ModulesTab() {
       setError(null);
     } else setError(r.error || 'Could not load modules.');
   };
-  useEffectExt(() => {
+  useEffectMod(() => {
     load();
   }, []);
 
@@ -47,17 +46,17 @@ function ModulesTab() {
     await act(name, 'uninstall');
   };
 
-  if (exts === null && !error) return <window.SectionTitle>Modules</window.SectionTitle>;
+  if (mods === null && !error) return <window.SectionTitle>Modules</window.SectionTitle>;
 
   if (settingsFor) {
-    const ext = exts.find((e) => e.name === settingsFor);
-    if (!ext) {
+    const mod = mods.find((e) => e.name === settingsFor);
+    if (!mod) {
       setSettingsFor(null);
       return null;
     }
     return (
-      <ExtSettings
-        ext={ext}
+      <ModuleSettingsView
+        mod={mod}
         onBack={() => setSettingsFor(null)}
         onSaved={() => {
           setSettingsFor(null);
@@ -68,29 +67,29 @@ function ModulesTab() {
   }
 
   if (detail) {
-    const ext = exts.find((e) => e.name === detail);
-    if (!ext) {
+    const mod = mods.find((e) => e.name === detail);
+    if (!mod) {
       setDetail(null);
       return null;
     }
     return (
       <>
-        <ExtDetail
-          ext={ext}
-          exts={exts}
+        <ModuleDetail
+          mod={mod}
+          mods={mods}
           busy={busy}
           onBack={() => setDetail(null)}
-          onToggle={(v) => act(ext.name, v ? 'enable' : 'disable')}
-          onUninstall={() => setConfirm({ ext })}
-          onSettings={() => setSettingsFor(ext.name)}
-          onConnect={() => setAuthFor(ext.name)}
+          onToggle={(v) => act(mod.name, v ? 'enable' : 'disable')}
+          onUninstall={() => setConfirm({ mod })}
+          onSettings={() => setSettingsFor(mod.name)}
+          onConnect={() => setAuthFor(mod.name)}
           confirm={confirm}
           setConfirm={setConfirm}
           uninstall={uninstall}
         />
-        {authFor === ext.name && (
+        {authFor === mod.name && (
           <AuthFlowModal
-            ext={ext}
+            mod={mod}
             onClose={() => setAuthFor(null)}
             onDone={() => {
               setAuthFor(null);
@@ -113,11 +112,11 @@ function ModulesTab() {
     );
   }
 
-  const visibleExts = exts.filter((e) => !e.self);
-  const enabled = visibleExts.filter((e) => e.enabled);
-  const disabled = visibleExts.filter((e) => !e.enabled);
-  const filtered = tab === 'all' ? visibleExts : tab === 'enabled' ? enabled : disabled;
-  const setupNeeded = visibleExts.filter((e) => e.source === 'user' && e.status !== 'ready');
+  const visibleMods = mods.filter((e) => !e.self);
+  const enabled = visibleMods.filter((e) => e.enabled);
+  const disabled = visibleMods.filter((e) => !e.enabled);
+  const filtered = tab === 'all' ? visibleMods : tab === 'enabled' ? enabled : disabled;
+  const setupNeeded = visibleMods.filter((e) => e.source === 'user' && e.status !== 'ready');
   const showSetupPrompt = setupNeeded.length > 0 && !setupPromptDismissed;
 
   return (
@@ -141,7 +140,7 @@ function ModulesTab() {
           value={tab}
           onChange={setTab}
           options={[
-            { value: 'all', label: `All (${visibleExts.length})` },
+            { value: 'all', label: `All (${visibleMods.length})` },
             { value: 'enabled', label: `Enabled (${enabled.length})` },
             { value: 'disabled', label: `Disabled (${disabled.length})` },
           ]}
@@ -157,7 +156,7 @@ function ModulesTab() {
         </window.Button>
       </div>
 
-      {visibleExts.length === 0 && !error && (
+      {visibleMods.length === 0 && !error && (
         <div
           style={{
             textAlign: 'center',
@@ -172,7 +171,7 @@ function ModulesTab() {
             No modules installed
           </p>
           <p style={{ fontSize: 13, marginTop: 3 }}>
-            Install one with <span className="mono">modulus ext install &lt;name&gt;</span>.
+            Install one with <span className="mono">modulus mod install &lt;name&gt;</span>.
           </p>
         </div>
       )}
@@ -185,9 +184,9 @@ function ModulesTab() {
         }}
       >
         {filtered.map((e) => (
-          <ExtCard
+          <ModuleCard
             key={e.name}
-            ext={e}
+            mod={e}
             busy={busy}
             onOpen={() => setDetail(e.name)}
             onToggle={(v) => act(e.name, v ? 'enable' : 'disable')}
@@ -236,11 +235,11 @@ function SetupNeededModal({ open, modules, onClose, onReview }) {
         settings so Modulus can use their tools and commands.
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {shown.map((ext) => (
+        {shown.map((mod) => (
           <button
-            key={ext.name}
+            key={mod.name}
             type="button"
-            onClick={() => onReview(ext.name)}
+            onClick={() => onReview(mod.name)}
             style={{
               width: '100%',
               display: 'flex',
@@ -255,10 +254,10 @@ function SetupNeededModal({ open, modules, onClose, onReview }) {
               cursor: 'pointer',
             }}
           >
-            <window.StatusDot state={ext.enabled ? 'warn' : 'stopped'} size={8} />
+            <window.StatusDot state={mod.enabled ? 'warn' : 'stopped'} size={8} />
             <span style={{ flex: 1, minWidth: 0 }}>
               <span style={{ display: 'block', fontSize: 13.5, fontWeight: 700 }}>
-                {prettyName(ext)}
+                {prettyName(mod)}
               </span>
               <span
                 style={{
@@ -268,7 +267,7 @@ function SetupNeededModal({ open, modules, onClose, onReview }) {
                   marginTop: 2,
                 }}
               >
-                {setupStatusText(ext)}
+                {setupStatusText(mod)}
               </span>
             </span>
             <window.Icon name="fwd" size={15} style={{ color: 'var(--text-3)', marginTop: 2 }} />
@@ -285,11 +284,11 @@ function SetupNeededModal({ open, modules, onClose, onReview }) {
   );
 }
 
-function setupStatusText(ext) {
-  if (ext.status === 'disabled') return 'Disabled. Turn it on to run setup.';
-  if (ext.status === 'needs_auth') return 'Needs an account connection.';
-  if (ext.status === 'needs_settings') return 'Missing required settings.';
-  return ext.reasons && ext.reasons[0] ? ext.reasons[0] : 'Review this module.';
+function setupStatusText(mod) {
+  if (mod.status === 'disabled') return 'Disabled. Turn it on to run setup.';
+  if (mod.status === 'needs_auth') return 'Needs an account connection.';
+  if (mod.status === 'needs_settings') return 'Missing required settings.';
+  return mod.reasons && mod.reasons[0] ? mod.reasons[0] : 'Review this module.';
 }
 
 function ErrorNote({ text, onRetry }) {
@@ -317,16 +316,16 @@ function ErrorNote({ text, onRetry }) {
   );
 }
 
-function prettyName(ext) {
-  return ext.name
+function prettyName(mod) {
+  return mod.name
     .replace(/^modulus-/, '')
     .replace(/-/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
-function blurbFor(ext) {
+function blurbFor(mod) {
   return (
-    (window.EXT_BLURBS && window.EXT_BLURBS[ext.name]) ||
-    ext.description ||
+    (window.MODULE_BLURBS && window.MODULE_BLURBS[mod.name]) ||
+    mod.description ||
     'No description provided.'
   );
 }
@@ -349,8 +348,8 @@ function CapChips({ caps }) {
   );
 }
 
-function ExtGlyph({ ext, size = 42 }) {
-  const initials = prettyName(ext)
+function ModuleGlyph({ mod, size = 42 }) {
+  const initials = prettyName(mod)
     .replace(/[^A-Za-z ]/g, '')
     .split(' ')
     .slice(0, 2)
@@ -378,8 +377,8 @@ function ExtGlyph({ ext, size = 42 }) {
 }
 
 /* ---- gallery card ---- */
-function ExtCard({ ext, busy, onOpen, onToggle }) {
-  const toggling = busy === ext.name + ':enable' || busy === ext.name + ':disable';
+function ModuleCard({ mod, busy, onOpen, onToggle }) {
+  const toggling = busy === mod.name + ':enable' || busy === mod.name + ':disable';
   return (
     <div
       style={{
@@ -412,7 +411,7 @@ function ExtCard({ ext, busy, onOpen, onToggle }) {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <ExtGlyph ext={ext} />
+            <ModuleGlyph mod={mod} />
             <div>
               <div
                 style={{
@@ -423,9 +422,9 @@ function ExtCard({ ext, busy, onOpen, onToggle }) {
                   gap: 8,
                 }}
               >
-                {prettyName(ext)}
+                {prettyName(mod)}
                 {['modulus-minimax', 'modulus-openai-compatible', 'modulus-tudor'].includes(
-                  ext.name,
+                  mod.name,
                 ) && (
                   <window.Badge
                     tone="warn"
@@ -442,14 +441,14 @@ function ExtCard({ ext, busy, onOpen, onToggle }) {
                 )}
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-                v{ext.version}
-                {ext.source === 'repo' ? ' · bundled' : ''}
+                v{mod.version}
+                {mod.source === 'repo' ? ' · bundled' : ''}
               </div>
             </div>
           </div>
-          <window.Badge tone={ext.enabled ? 'ok' : 'neutral'}>
-            <window.StatusDot state={ext.enabled ? 'ok' : 'stopped'} size={6} />
-            {ext.enabled ? 'Enabled' : 'Disabled'}
+          <window.Badge tone={mod.enabled ? 'ok' : 'neutral'}>
+            <window.StatusDot state={mod.enabled ? 'ok' : 'stopped'} size={6} />
+            {mod.enabled ? 'Enabled' : 'Disabled'}
           </window.Badge>
         </div>
         <p
@@ -461,10 +460,10 @@ function ExtCard({ ext, busy, onOpen, onToggle }) {
             minHeight: 40,
           }}
         >
-          {blurbFor(ext)}
+          {blurbFor(mod)}
         </p>
-        <CapChips caps={ext.capabilities} />
-        {ext.needsAuth && !ext.authConnected && (
+        <CapChips caps={mod.capabilities} />
+        {mod.needsAuth && !mod.authConnected && (
           <div style={{ marginTop: 10 }}>
             <window.Badge tone="warn">
               <window.Icon name="link" size={11} />
@@ -472,7 +471,7 @@ function ExtCard({ ext, busy, onOpen, onToggle }) {
             </window.Badge>
           </div>
         )}
-        {ext.needsAuth && ext.authConnected && (
+        {mod.needsAuth && mod.authConnected && (
           <div style={{ marginTop: 10 }}>
             <window.Badge tone="ok">
               <window.Icon name="check" size={11} />
@@ -492,7 +491,7 @@ function ExtCard({ ext, busy, onOpen, onToggle }) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {ext.self ? (
+          {mod.self ? (
             <span
               style={{
                 display: 'inline-flex',
@@ -514,9 +513,9 @@ function ExtCard({ ext, busy, onOpen, onToggle }) {
             />
           ) : (
             <>
-              <window.Toggle checked={ext.enabled} onChange={onToggle} label="Enable" />
+              <window.Toggle checked={mod.enabled} onChange={onToggle} label="Enable" />
               <span style={{ fontSize: 13, color: 'var(--text-2)', fontWeight: 500 }}>
-                {ext.enabled ? 'On' : 'Off'}
+                {mod.enabled ? 'On' : 'Off'}
               </span>
             </>
           )}
@@ -530,23 +529,11 @@ function ExtCard({ ext, busy, onOpen, onToggle }) {
 }
 
 /* ---- detail view ---- */
-function ExtDetail({
-  ext,
-  exts,
-  busy,
-  onBack,
-  onToggle,
-  onUninstall,
-  onSettings,
-  onConnect,
-  confirm,
-  setConfirm,
-  uninstall,
-}) {
-  const dep = (ext.deps || []).map(
-    (d) => exts.find((e) => e.name === d) || { name: d, installed: false, enabled: false },
+function ModuleDetail({ mod, mods, busy, onBack, onToggle, onUninstall, onSettings, onConnect }) {
+  const dep = (mod.deps || []).map(
+    (d) => mods.find((e) => e.name === d) || { name: d, installed: false, enabled: false },
   );
-  const toggling = busy === ext.name + ':enable' || busy === ext.name + ':disable';
+  const toggling = busy === mod.name + ':enable' || busy === mod.name + ':disable';
   return (
     <div className="fade">
       <button
@@ -577,12 +564,12 @@ function ExtDetail({
           flexWrap: 'wrap',
         }}
       >
-        <ExtGlyph ext={ext} size={56} />
+        <ModuleGlyph mod={mod} size={56} />
         <div style={{ flex: 1, minWidth: 220 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <h2 style={{ fontSize: 23 }}>{prettyName(ext)}</h2>
+            <h2 style={{ fontSize: 23 }}>{prettyName(mod)}</h2>
             {['modulus-minimax', 'modulus-openai-compatible', 'modulus-tudor'].includes(
-              ext.name,
+              mod.name,
             ) && (
               <window.Badge
                 tone="warn"
@@ -598,13 +585,13 @@ function ExtDetail({
               </window.Badge>
             )}
             <span style={{ fontSize: 13, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-              v{ext.version}
+              v{mod.version}
             </span>
-            <window.Badge tone={ext.enabled ? 'ok' : 'neutral'}>
-              <window.StatusDot state={ext.enabled ? 'ok' : 'stopped'} size={6} />
-              {ext.enabled ? 'Enabled' : 'Disabled'}
+            <window.Badge tone={mod.enabled ? 'ok' : 'neutral'}>
+              <window.StatusDot state={mod.enabled ? 'ok' : 'stopped'} size={6} />
+              {mod.enabled ? 'Enabled' : 'Disabled'}
             </window.Badge>
-            {ext.source === 'repo' && <window.Badge tone="neutral">Bundled</window.Badge>}
+            {mod.source === 'repo' && <window.Badge tone="neutral">Bundled</window.Badge>}
           </div>
           <p
             style={{
@@ -615,32 +602,32 @@ function ExtDetail({
               maxWidth: 620,
             }}
           >
-            {blurbFor(ext)}
+            {blurbFor(mod)}
           </p>
           <div style={{ marginTop: 12 }}>
-            <CapChips caps={ext.capabilities} />
+            <CapChips caps={mod.capabilities} />
           </div>
         </div>
         <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
-          {ext.needsAuth && (
+          {mod.needsAuth && (
             <window.Button
-              variant={ext.authConnected ? 'ok' : 'warn'}
-              icon={ext.authConnected ? 'check' : 'link'}
+              variant={mod.authConnected ? 'ok' : 'warn'}
+              icon={mod.authConnected ? 'check' : 'link'}
               onClick={onConnect}
             >
-              {ext.authConnected ? 'Connected' : 'Connect'}
+              {mod.authConnected ? 'Connected' : 'Connect'}
             </window.Button>
           )}
           <window.Button
             variant="default"
             icon="gear"
             onClick={onSettings}
-            disabled={!ext.schema || ext.schema.length === 0}
-            style={{ opacity: !ext.schema || ext.schema.length === 0 ? 0.5 : 1 }}
+            disabled={!mod.schema || mod.schema.length === 0}
+            style={{ opacity: !mod.schema || mod.schema.length === 0 ? 0.5 : 1 }}
           >
             Settings
           </window.Button>
-          {ext.removable && (
+          {mod.removable && (
             <window.Button variant="outline_danger" icon="trash" onClick={onUninstall}>
               Uninstall
             </window.Button>
@@ -658,7 +645,7 @@ function ExtDetail({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1 }}>
-          {ext.self ? (
+          {mod.self ? (
             <>
               <window.StatusDot state="ok" size={11} />
               <div>
@@ -679,14 +666,14 @@ function ExtDetail({
                   style={{ color: 'var(--text-3)' }}
                 />
               ) : (
-                <window.Toggle checked={ext.enabled} onChange={onToggle} label="Enable module" />
+                <window.Toggle checked={mod.enabled} onChange={onToggle} label="Enable module" />
               )}
               <div>
                 <div style={{ fontWeight: 600, fontSize: 14 }}>
-                  {ext.enabled ? 'Module is enabled' : 'Module is disabled'}
+                  {mod.enabled ? 'Module is enabled' : 'Module is disabled'}
                 </div>
                 <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
-                  {ext.enabled
+                  {mod.enabled
                     ? 'Its tools and commands are available to Modulus.'
                     : 'Turn on to make its tools available.'}
                 </div>
@@ -696,7 +683,7 @@ function ExtDetail({
         </div>
       </window.Card>
 
-      {!ext.self && !ext.removable && (
+      {!mod.self && !mod.removable && (
         <p
           style={{
             fontSize: 12.5,
@@ -712,7 +699,7 @@ function ExtDetail({
         </p>
       )}
 
-      {ext.status && ext.status !== 'ready' && ext.reasons && ext.reasons.length > 0 && (
+      {mod.status && mod.status !== 'ready' && mod.reasons && mod.reasons.length > 0 && (
         <window.Card
           style={{
             marginBottom: 16,
@@ -739,11 +726,11 @@ function ExtDetail({
                 lineHeight: 1.5,
               }}
             >
-              {ext.reasons.map((r, i) => (
+              {mod.reasons.map((r, i) => (
                 <li key={i}>{r}</li>
               ))}
             </ul>
-            {ext.nextAction && (
+            {mod.nextAction && (
               <div
                 style={{
                   fontSize: 12.5,
@@ -758,7 +745,7 @@ function ExtDetail({
                   size={13}
                   style={{ color: 'var(--warn)', flex: 'none', marginTop: 1 }}
                 />{' '}
-                {ext.nextAction}
+                {mod.nextAction}
               </div>
             )}
           </div>
@@ -808,7 +795,7 @@ function ExtDetail({
         <DetailList
           title="Tools it adds"
           icon="plug"
-          items={ext.tools}
+          items={mod.tools}
           empty="No tools"
           render={(x) => (
             <>
@@ -822,7 +809,7 @@ function ExtDetail({
         <DetailList
           title="Telegram commands"
           icon="chat"
-          items={ext.commands}
+          items={mod.commands}
           empty="No commands"
           render={(x) => (
             <>
@@ -836,7 +823,7 @@ function ExtDetail({
         <DetailList
           title="Scheduled jobs"
           icon="refresh"
-          items={(ext.jobs || []).map((j) => ({ name: j }))}
+          items={(mod.jobs || []).map((j) => ({ name: j }))}
           empty="No scheduled jobs"
           render={(x) => <span style={{ fontSize: 13.5, color: 'var(--text)' }}>{x.name}</span>}
         />
@@ -894,18 +881,18 @@ function DetailList({ title, icon, items, render, empty }) {
 }
 
 /* ---- schema-driven settings form ---- */
-function ExtSettings({ ext, onBack, onSaved }) {
-  const [vals, setVals] = useStateExt(() =>
-    Object.fromEntries((ext.schema || []).map((f) => [f.key, f.value])),
+function ModuleSettingsView({ mod, onBack, onSaved }) {
+  const [vals, setVals] = useStateMod(() =>
+    Object.fromEntries((mod.schema || []).map((f) => [f.key, f.value])),
   );
-  const [saving, setSaving] = useStateExt(false);
-  const [err, setErr] = useStateExt(null);
+  const [saving, setSaving] = useStateMod(false);
+  const [err, setErr] = useStateMod(null);
   const set = (k, v) => setVals((s) => ({ ...s, [k]: v }));
 
   const save = async () => {
     setSaving(true);
     setErr(null);
-    const r = await window.api.post(`/api/modules/${encodeURIComponent(ext.name)}/settings`, vals);
+    const r = await window.api.post(`/api/modules/${encodeURIComponent(mod.name)}/settings`, vals);
     setSaving(false);
     if (r.ok) onSaved();
     else setErr(r.error || 'Could not save settings.');
@@ -929,16 +916,16 @@ function ExtSettings({ ext, onBack, onSaved }) {
           padding: 0,
         }}
       >
-        <window.Icon name="back" size={16} /> {prettyName(ext)}
+        <window.Icon name="back" size={16} /> {prettyName(mod)}
       </button>
       <window.SectionTitle
-        sub={`Generated from ${prettyName(ext)}'s settings schema. Secret fields are masked.`}
+        sub={`Generated from ${prettyName(mod)}'s settings schema. Secret fields are masked.`}
       >
-        {prettyName(ext)} settings
+        {prettyName(mod)} settings
       </window.SectionTitle>
       {err && <ErrorNote text={err} />}
       <window.Card style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {(ext.schema || []).map((f) => (
+        {(mod.schema || []).map((f) => (
           <div key={f.key}>
             <window.Label hint={f.help}>
               {f.label} {f.required && <span style={{ color: 'var(--err)' }}>*</span>}{' '}
@@ -971,7 +958,7 @@ function ExtSettings({ ext, onBack, onSaved }) {
               </window.Select>
             ) : f.format === 'user-audio-map' ? (
               <UserAudioMapInput
-                extName={ext.name}
+                moduleName={mod.name}
                 value={vals[f.key] || ''}
                 onChange={(val) => set(f.key, val)}
               />
@@ -1030,13 +1017,13 @@ function ConfirmUninstall({ confirm, setConfirm, uninstall }) {
       open={!!confirm}
       onClose={() => setConfirm(null)}
       tone="err"
-      title={`Uninstall ${prettyName(confirm.ext)}?`}
+      title={`Uninstall ${prettyName(confirm.mod)}?`}
       footer={
         <>
           <window.Button variant="ghost" onClick={() => setConfirm(null)}>
             Cancel
           </window.Button>
-          <window.Button variant="danger" icon="trash" onClick={() => uninstall(confirm.ext.name)}>
+          <window.Button variant="danger" icon="trash" onClick={() => uninstall(confirm.mod.name)}>
             Uninstall
           </window.Button>
         </>
@@ -1045,7 +1032,7 @@ function ConfirmUninstall({ confirm, setConfirm, uninstall }) {
       <p>
         This removes the module and its tools, commands, and scheduled jobs. Bundled modules can be
         re-enabled later; installed ones you'd re-add with{' '}
-        <span className="mono">modulus ext install</span>.
+        <span className="mono">modulus mod install</span>.
       </p>
     </window.Modal>
   );
@@ -1053,7 +1040,7 @@ function ConfirmUninstall({ confirm, setConfirm, uninstall }) {
 
 /* ---- interactive auth flow ---- */
 // Renders an module's `modulus auth` flow in the browser. The server runs the
-// real flow (runAuthForExt); we stream its printed output, surface each prompt
+// real flow (runAuthForModule); we stream its printed output, surface each prompt
 // as an input, and POST the user's answers back. URLs in the output are made
 // clickable so the OAuth consent link is one tap away.
 function linkify(text) {
@@ -1075,20 +1062,20 @@ function linkify(text) {
   );
 }
 
-function AuthFlowModal({ ext, onClose, onDone }) {
-  const [lines, setLines] = useStateExt([]);
-  const [prompt, setPrompt] = useStateExt(null); // { question, secret }
-  const [answer, setAnswer] = useStateExt('');
-  const [status, setStatus] = useStateExt('starting'); // starting|running|done|error
-  const [error, setError] = useStateExt(null);
-  const sessionRef = useRefExt(null);
-  const esRef = useRefExt(null);
-  const boxRef = useRefExt(null);
-  const lastSeqRef = useRefExt(-1);
+function AuthFlowModal({ mod, onClose, onDone }) {
+  const [lines, setLines] = useStateMod([]);
+  const [prompt, setPrompt] = useStateMod(null); // { question, secret }
+  const [answer, setAnswer] = useStateMod('');
+  const [status, setStatus] = useStateMod('starting'); // starting|running|done|error
+  const [error, setError] = useStateMod(null);
+  const sessionRef = useRefMod(null);
+  const esRef = useRefMod(null);
+  const boxRef = useRefMod(null);
+  const lastSeqRef = useRefMod(-1);
   const url = (action, qs) =>
-    `/api/modules/${encodeURIComponent(ext.name)}/auth/${action}${qs ? '?' + qs : ''}`;
+    `/api/modules/${encodeURIComponent(mod.name)}/auth/${action}${qs ? '?' + qs : ''}`;
 
-  useEffectExt(() => {
+  useEffectMod(() => {
     let cancelled = false;
     (async () => {
       const r = await window.api.post(url('start'));
@@ -1107,7 +1094,7 @@ function AuthFlowModal({ ext, onClose, onDone }) {
             let evt;
             try {
               evt = JSON.parse(data);
-            } catch (e) {
+            } catch {
               return;
             }
             // Skip anything already processed — a reconnecting EventSource gets
@@ -1139,10 +1126,9 @@ function AuthFlowModal({ ext, onClose, onDone }) {
       const s = sessionRef.current;
       if (s) window.api.post(url('cancel'), { session: s });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffectExt(() => {
+  useEffectMod(() => {
     if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
   }, [lines, prompt]);
 
@@ -1161,7 +1147,7 @@ function AuthFlowModal({ ext, onClose, onDone }) {
       open
       onClose={onClose}
       width={620}
-      title={`Connect ${prettyName(ext)}`}
+      title={`Connect ${prettyName(mod)}`}
       footer={
         status === 'done' ? (
           <window.Button variant="primary" icon="check" onClick={onDone}>
@@ -1175,8 +1161,8 @@ function AuthFlowModal({ ext, onClose, onDone }) {
       }
     >
       <p style={{ fontSize: 13.5, color: 'var(--text-2)', marginBottom: 12 }}>
-        This runs {prettyName(ext)}'s sign-in right here — the same flow as{' '}
-        <span className="mono">modulus auth {ext.name}</span>. Follow the steps below; open any link
+        This runs {prettyName(mod)}'s sign-in right here — the same flow as{' '}
+        <span className="mono">modulus auth {mod.name}</span>. Follow the steps below; open any link
         it shows, then paste anything it asks for.
       </p>
 
@@ -1266,8 +1252,8 @@ function AuthFlowModal({ ext, onClose, onDone }) {
 }
 
 /* ---- custom inputs ---- */
-function UserAudioMapInput({ extName, value, onChange }) {
-  const [rows, setRows] = useStateExt(() => {
+function UserAudioMapInput({ moduleName, value, onChange }) {
+  const [rows, setRows] = useStateMod(() => {
     if (!value) return [];
     return value.split(',').map((pair) => {
       const idx = pair.indexOf(':');
@@ -1302,7 +1288,7 @@ function UserAudioMapInput({ extName, value, onChange }) {
             style={{ width: 150 }}
           />
           <DropZoneInput
-            extName={extName}
+            moduleName={moduleName}
             value={row.path}
             onChange={(path) => setRow(i, 'path', path)}
           />
@@ -1318,9 +1304,9 @@ function UserAudioMapInput({ extName, value, onChange }) {
   );
 }
 
-function DropZoneInput({ extName, value, onChange }) {
-  const [dragging, setDragging] = useStateExt(false);
-  const [uploading, setUploading] = useStateExt(false);
+function DropZoneInput({ moduleName, value, onChange }) {
+  const [dragging, setDragging] = useStateMod(false);
+  const [uploading, setUploading] = useStateMod(false);
 
   const onDrop = async (e) => {
     e.preventDefault();
@@ -1331,7 +1317,7 @@ function DropZoneInput({ extName, value, onChange }) {
     setUploading(true);
     try {
       const res = await fetch(
-        window.api.url(`/api/modules/${encodeURIComponent(extName)}/upload`),
+        window.api.url(`/api/modules/${encodeURIComponent(moduleName)}/upload`),
         {
           method: 'POST',
           headers: { 'x-filename': file.name },
@@ -1382,11 +1368,11 @@ function DropZoneInput({ extName, value, onChange }) {
 // POST acceptAdded:true once the user has seen and confirmed them, so the
 // server's fail-closed consent gate is never bypassed silently.
 function MarketplaceView({ onBack }) {
-  const [mods, setMods] = useStateExt(null); // null = loading
-  const [error, setError] = useStateExt(null);
-  const [consent, setConsent] = useStateExt(null); // entry awaiting confirmation
-  const [busy, setBusy] = useStateExt(null); // name installing
-  const [installError, setInstallError] = useStateExt(null);
+  const [mods, setMods] = useStateMod(null); // null = loading
+  const [error, setError] = useStateMod(null);
+  const [consent, setConsent] = useStateMod(null); // entry awaiting confirmation
+  const [busy, setBusy] = useStateMod(null); // name installing
+  const [installError, setInstallError] = useStateMod(null);
 
   const load = async () => {
     setError(null);
@@ -1395,7 +1381,7 @@ function MarketplaceView({ onBack }) {
     if (r.ok) setMods(r.data.modules || []);
     else setError((r.data && r.data.error) || r.error || 'Could not reach the marketplace.');
   };
-  useEffectExt(() => {
+  useEffectMod(() => {
     load();
   }, []);
 
@@ -1494,7 +1480,7 @@ function MarketplaceView({ onBack }) {
 }
 
 function MarketCard({ entry, busy, onInstall }) {
-  const name = { name: entry.name }; // ExtGlyph/prettyName take an object with .name
+  const name = { name: entry.name }; // ModuleGlyph/prettyName take an object with .name
   const action = entry.updateAvailable ? 'Update' : entry.installed ? 'Installed' : 'Install';
   return (
     <div
@@ -1509,7 +1495,7 @@ function MarketCard({ entry, busy, onInstall }) {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-        <ExtGlyph ext={name} />
+        <ModuleGlyph mod={name} />
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 600, fontSize: 15.5 }}>
             {entry.displayName || prettyName(name)}
@@ -1544,7 +1530,7 @@ function MarketCard({ entry, busy, onInstall }) {
             marginBottom: 6,
           }}
         >
-          Can access
+          Declared access
         </div>
         <ul
           style={{

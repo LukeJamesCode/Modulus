@@ -40,7 +40,7 @@ export function register(host: Host): void {
           const modelPath = host.settings.get<string>('whisper_model_path', '');
           if (!modelPath) {
             await ctx.reply(
-              'voice transcription on — but no whisper model is configured. Run `modulus ext install modulus-voice` to download one.',
+              'voice transcription on — but no whisper model is configured. Run `modulus mod install modulus-voice` to download one.',
             );
             return;
           }
@@ -80,7 +80,7 @@ export function register(host: Host): void {
         const whisperConfigured = !!host.settings.get<string>('whisper_model_path', '');
         const sttNote = whisperConfigured
           ? 'voice transcription on'
-          : 'voice transcription on (but no whisper model configured — run `modulus ext install modulus-voice` to download one)';
+          : 'voice transcription on (but no whisper model configured — run `modulus mod install modulus-voice` to download one)';
         await ctx.reply(`voice replies on - ${source}\n${sttNote}`);
         return;
       }

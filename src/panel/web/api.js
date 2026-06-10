@@ -14,7 +14,7 @@
       // browser history carries no token — without a persistent store,
       // reopening from history would 401.
       localStorage.setItem('modulus_token', fromUrl);
-    } catch (e) {
+    } catch {
       /* localStorage may be unavailable; header still set below */
     }
     // Strip the token from the visible URL bar without reloading.
@@ -25,7 +25,7 @@
   let token = fromUrl || '';
   try {
     token = token || localStorage.getItem('modulus_token') || '';
-  } catch (e) {
+  } catch {
     /* ignore */
   }
 
@@ -46,7 +46,7 @@
       let data = null;
       try {
         data = text ? JSON.parse(text) : null;
-      } catch (e) {
+      } catch {
         data = { raw: text };
       }
       if (!res.ok) {
@@ -116,7 +116,7 @@
               let parsed = dataStr;
               try {
                 parsed = JSON.parse(dataStr);
-              } catch (e) {
+              } catch {
                 /* keep string */
               }
               onEvent && onEvent(ev, parsed);
@@ -141,7 +141,7 @@
       let data = null;
       try {
         data = text ? JSON.parse(text) : null;
-      } catch (e) {
+      } catch {
         data = { raw: text };
       }
       if (!res.ok) {
@@ -171,7 +171,7 @@
       let data = null;
       try {
         data = text ? JSON.parse(text) : null;
-      } catch (e) {
+      } catch {
         data = { raw: text };
       }
       if (!res.ok) {

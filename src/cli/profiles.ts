@@ -101,6 +101,40 @@ const TUNING: Record<Tier, TierTuning> = {
   },
 };
 
+// A model recommendation per hardware tier, surfaced by the setup wizard so a
+// fresh install can pull a sensible default without the user having to know
+// Ollama tags. `chat` is the everyday model; `tools` (when set) is a separate
+// tool-calling model. These are starting points the user can override in the
+// wizard — they are NOT load-bearing for any tier tuning (that lives in TUNING
+// above, keyed only on the tier name). Sizes are the Ollama Q4_K_M download
+// footprint, rounded.
+export interface RecommendedModel {
+  chat: string;
+  tools?: string;
+  reason?: string;
+  approxSize: string;
+}
+
+export const RECOMMENDED_MODELS: Record<Tier, RecommendedModel> = {
+  small: {
+    chat: 'qwen3.5:0.8b',
+    reason: 'Tiny and quick — fits a Pi’s RAM and stays responsive on CPU.',
+    approxSize: '~0.6 GB',
+  },
+  standard: {
+    chat: 'qwen2.5:7b',
+    tools: 'qwen2.5:7b',
+    reason: 'A capable 7B a 16 GB machine runs comfortably on CPU.',
+    approxSize: '~4.7 GB',
+  },
+  heavy: {
+    chat: 'qwen2.5:14b',
+    tools: 'qwen2.5:7b',
+    reason: 'A larger model for a 32 GB box; a faster 7B handles tool turns.',
+    approxSize: '~9 GB',
+  },
+};
+
 export function profilesForTier(tier: Tier | undefined, models: ModelSelection): TierProfiles {
   // Unknown/unset tier falls back to the conservative small profile so a
   // misconfigured host never over-commits RAM.

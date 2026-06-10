@@ -280,7 +280,14 @@ test('permissionDiff surfaces only ADDED capabilities (re-consent trigger)', () 
 
 test('consent lines are plain language, not jargon', () => {
   const lines = describePermissions({ network: ['duckduckgo.com'], subprocess: ['ffmpeg'] });
-  assert.ok(lines.some((l) => l.includes('contact duckduckgo.com')));
-  assert.ok(lines.some((l) => l.includes('run the program "ffmpeg"')));
+  // "Declares …" framing: these describe what the manifest claims, not granted access.
+  assert.ok(lines.every((l) => l.startsWith('Declares ')));
+  assert.ok(lines.some((l) => l.includes('contacts duckduckgo.com')));
+  assert.ok(lines.some((l) => l.includes('runs the program "ffmpeg"')));
   assert.deepEqual(describePermissions({}), ['Needs no special permissions']);
+});
+
+test('network "*" wildcard reads as "any site", not a literal star', () => {
+  const lines = describePermissions({ network: ['*'] });
+  assert.deepEqual(lines, ['Declares it contacts any site on the internet']);
 });
