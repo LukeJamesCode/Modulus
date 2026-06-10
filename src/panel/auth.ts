@@ -15,13 +15,16 @@ import { panelTokenPath } from '../cli/daemon.js';
 
 // Content-Security-Policy for the served HTML. The UI has no build step: React,
 // Babel-standalone and marked are vendored same-origin (src/panel/web/vendor/)
-// and Babel transpiles the .jsx in the browser (hence 'unsafe-eval'); components
-// use inline style attributes (hence style-src 'unsafe-inline'). No third-party
-// origin is allowed — everything is locked to same-origin, so the panel renders
-// with the network blocked and can't be steered at an external script host.
+// and Babel transpiles the .jsx in the browser. Babel-standalone runs each
+// transpiled module by injecting an inline <script>, so script-src needs both
+// 'unsafe-eval' and 'unsafe-inline' or the whole app is blocked and never
+// mounts. Components also use inline style attributes (hence style-src
+// 'unsafe-inline'). No third-party origin is allowed — everything is locked to
+// same-origin, so the panel renders with the network blocked and can't be
+// steered at an external script host.
 export const PANEL_CSP =
   "default-src 'self'; " +
-  "script-src 'self' 'unsafe-eval'; " +
+  "script-src 'self' 'unsafe-eval' 'unsafe-inline'; " +
   "style-src 'self' 'unsafe-inline'; " +
   "img-src 'self' data:; " +
   "font-src 'self'; " +
