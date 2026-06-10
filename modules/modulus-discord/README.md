@@ -49,6 +49,18 @@ core router that Telegram also routes through — no free-text "yes/no".
 modulus ext install modulus-discord
 ```
 
+Enabling the module installs its npm deps (`discord.js` + `@discordjs/voice`)
+into the module's own folder via its `setup` entrypoint — core doesn't carry
+them, so a Pi-class install stays lean. Both are import-time deps, so the bridge
+can't boot until they land; watch the enable output for progress. If the install
+is interrupted, finish it by hand:
+```sh
+npm install --prefix ~/.modulus/modules/modulus-discord discord.js @discordjs/voice
+```
+The `/vcjoin` voice feature additionally needs an encryption backend and an opus
+encoder (see [Voice](#voice)); those are only used when you actually join a voice
+channel, so they aren't auto-installed.
+
 Then create the bot, capture the token, and pick an allowlist.
 
 ### 1. Create the Discord application

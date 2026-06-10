@@ -26,7 +26,7 @@
 // them.
 
 import { randomBytes, createHash } from 'node:crypto';
-import { setupOAuthCallbackServer } from '../../../src/util/oauth-loopback.js';
+import { setupOAuthCallbackServer } from './oauth-loopback.js';
 
 // Public Codex CLI OAuth client id. This is a public client (no secret); PKCE
 // is what protects the exchange.

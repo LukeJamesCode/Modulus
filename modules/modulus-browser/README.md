@@ -6,9 +6,17 @@ Lets agents drive a real headless browser (navigate, read, click, type, screensh
 
 ## Installation
 
-You must install Chromium via Playwright:
+Heavy deps install themselves when you enable the module — core never carries
+them. On enable (via the panel or `modulus mod install modulus-browser`) the
+module's `setup` entrypoint installs the `playwright` npm package into the
+module's own folder and downloads a Chromium binary. No manual step is needed;
+watch the enable output for progress.
+
+If the automatic install is interrupted, finish it by hand from the module
+folder (`~/.modulus/modules/modulus-browser/`):
 ```bash
-npx playwright install chromium
+npm install --prefix ~/.modulus/modules/modulus-browser playwright
+node ~/.modulus/modules/modulus-browser/node_modules/playwright/cli.js install chromium
 ```
 
 ## Tools

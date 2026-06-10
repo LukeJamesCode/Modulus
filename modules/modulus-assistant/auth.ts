@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { Host } from '../../src/core/modules.js';
-import { setupOAuthCallbackServer } from '../../src/util/oauth-loopback.js';
+import { setupOAuthCallbackServer } from './helpers/oauth-loopback.js';
 
 // Combined scope: both Calendar and Tasks in one consent screen.
 const SCOPE = 'https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/tasks';

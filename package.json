@@ -38,7 +38,6 @@
     "@inquirer/prompts": "^8.4.2",
     "better-sqlite3": "^12.9.0",
     "commander": "^14.0.3",
-    "discord.js": "^14.26.4",
     "grammy": "^1.42.0",
     "tsx": "^4.19.2",
     "unpdf": "^1.6.2",

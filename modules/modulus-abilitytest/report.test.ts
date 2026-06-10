@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { renderReport, summarize, type TestResult } from './report.js';
+import { renderReport, renderScorecard, summarize, type TestResult } from './report.js';
 
 // The exact regex `modulus abilitytest --fails` uses in src/cli/index.ts to pull
 // failed/errored ids out of the latest report. Kept here verbatim — this test
@@ -58,6 +58,44 @@ test('a passing row uses the ✓ pass cell the parser ignores', () => {
 
 test('summarize counts pass/fail/error', () => {
   assert.deepEqual(summarize(results), { pass: 1, fail: 1, error: 1, total: 3 });
+});
+
+test('the scorecard puts one column per profile and a per-dimension pass rate', () => {
+  // Two profiles, two dimensions, with the second profile strictly worse on
+  // tool-selection — the scorecard exists to make exactly that gap visible at a
+  // glance, so the rendered rates must reflect it.
+  const local: TestResult[] = [
+    {
+      id: 'a',
+      ability: 'x',
+      dimension: 'tool-selection',
+      status: 'pass',
+      detail: '',
+      elapsedMs: 0,
+    },
+    { id: 'b', ability: 'y', dimension: 'delegation', status: 'pass', detail: '', elapsedMs: 0 },
+  ];
+  const power: TestResult[] = [
+    {
+      id: 'a',
+      ability: 'x',
+      dimension: 'tool-selection',
+      status: 'fail',
+      detail: '',
+      elapsedMs: 0,
+    },
+    { id: 'b', ability: 'y', dimension: 'delegation', status: 'pass', detail: '', elapsedMs: 0 },
+  ];
+  const md = renderScorecard([
+    { label: 'local:m', results: local },
+    { label: 'power:n', results: power },
+  ]);
+  // Header carries both profile labels as columns.
+  assert.match(md, /\| Dimension \| local:m \| power:n \|/);
+  // tool-selection: local 1/1, power 0/1 — the regression is legible.
+  assert.match(md, /\| tool-selection \| 1\/1 \| 0\/1 \|/);
+  // Overall rolls up across dimensions: local 2/2, power 1/2.
+  assert.match(md, /\| \*\*Overall\*\* \| \*\*2\/2\*\* \| \*\*1\/2\*\* \|/);
 });
 
 test('detail cells with pipes are escaped so the table stays valid', () => {

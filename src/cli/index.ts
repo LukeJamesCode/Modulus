@@ -157,82 +157,113 @@ program
     '--fails',
     're-run only the tests that failed or errored in the most recent ~/.modulus/ability-test-*.md report (forces --tier full so filter spans every tier)',
   )
-  .action(async (opts: { tier?: string; filter?: string; out?: string; fails?: boolean }) => {
-    // The runner lives in the modulus-abilitytest module (so it can ship,
-    // be hot-reloaded, and own its catalog). The CLI is a thin shim that
-    // resolves the .ts file by absolute path and dynamically imports it —
-    // tsx handles the on-the-fly transpile.
-    const here = dirname(fileURLToPath(import.meta.url));
-    const runnerPath = resolve(here, '..', '..', 'modules', 'modulus-abilitytest', 'runner.ts');
-    const mod = (await import(pathToFileURL(runnerPath).href)) as {
-      run: (opts: {
-        tier: 'smoke' | 'standard' | 'full';
-        filter?: string;
-        outFile?: string;
-      }) => Promise<void>;
-    };
+  .option(
+    '--live',
+    'score the catalog against the real configured model(s) — local Ollama, plus Power Mode if an OpenAI-compatible endpoint is set — instead of the deterministic FakeLLM. Requires Ollama up and the daemon stopped.',
+  )
+  .action(
+    async (opts: {
+      tier?: string;
+      filter?: string;
+      out?: string;
+      fails?: boolean;
+      live?: boolean;
+    }) => {
+      // The runner lives in the modulus-abilitytest module (so it can ship,
+      // be hot-reloaded, and own its catalog). The CLI is a thin shim that
+      // resolves the .ts file by absolute path and dynamically imports it —
+      // tsx handles the on-the-fly transpile.
+      const here = dirname(fileURLToPath(import.meta.url));
+      const runnerPath = resolve(here, '..', '..', 'modules', 'modulus-abilitytest', 'runner.ts');
+      const mod = (await import(pathToFileURL(runnerPath).href)) as {
+        run: (opts: {
+          tier: 'smoke' | 'standard' | 'full';
+          filter?: string;
+          outFile?: string;
+        }) => Promise<void>;
+        runLive: (opts: {
+          tier: 'smoke' | 'standard' | 'full';
+          filter?: string;
+          outFile?: string;
+        }) => Promise<void>;
+      };
 
-    let tier = (opts.tier ?? 'standard') as 'smoke' | 'standard' | 'full';
-    if (tier !== 'smoke' && tier !== 'standard' && tier !== 'full') {
-      throw new Error(`Unknown tier '${tier}'. Use smoke | standard | full.`);
-    }
+      let tier = (opts.tier ?? 'standard') as 'smoke' | 'standard' | 'full';
+      if (tier !== 'smoke' && tier !== 'standard' && tier !== 'full') {
+        throw new Error(`Unknown tier '${tier}'. Use smoke | standard | full.`);
+      }
 
-    let filter = opts.filter;
+      let filter = opts.filter;
 
-    if (opts.fails) {
-      if (opts.filter !== undefined) {
-        throw new Error('--fails and --filter are mutually exclusive.');
-      }
-      // Derived filter from the latest saved report. We force tier=full because
-      // failed tests can come from any tier in the previous run, and a narrower
-      // tier would silently drop some of the rows we mean to re-run.
-      const cfg = await import('./config-store.js');
-      const home = cfg.homeDir();
-      const fs = await import('node:fs');
-      const path = await import('node:path');
-      let reports: string[];
-      try {
-        reports = fs
-          .readdirSync(home)
-          .filter((f) => f.startsWith('ability-test-') && f.endsWith('.md'))
-          .sort();
-      } catch (e) {
-        throw new Error(
-          `Cannot read ${home}: ${e instanceof Error ? e.message : String(e)}. Run 'modulus abilitytest' once before --fails.`,
-        );
-      }
-      if (reports.length === 0) {
-        throw new Error(
-          `No prior ability-test report in ${home}. Run 'modulus abilitytest' first to generate one.`,
-        );
-      }
-      const latest = reports.at(-1)!;
-      const md = fs.readFileSync(path.join(home, latest), 'utf8');
-      // Parse table rows. judgeTest writes either `✗ fail` or `! error` into
-      // the first column; renderMarkdown wraps the id in backticks.
-      const ids: string[] = [];
-      for (const line of md.split('\n')) {
-        const m = /^\|\s+[✗!]\s+(?:fail|error)\s+\|\s+`([^`]+)`/.exec(line);
-        if (m) ids.push(m[1]!);
-      }
-      if (ids.length === 0) {
-        process.stdout.write(`No failed/errored tests in ${latest} — nothing to re-run.\n`);
+      if (opts.live) {
+        if (opts.fails) {
+          throw new Error(
+            '--live and --fails are mutually exclusive: --fails re-runs the deterministic subset, --live scores real models.',
+          );
+        }
+        await call('abilitytest', mod.runLive, {
+          tier,
+          ...(filter !== undefined ? { filter } : {}),
+          ...(opts.out !== undefined ? { outFile: opts.out } : {}),
+        });
         return;
       }
-      const escaped = ids.map((id) => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      filter = `^(${escaped.join('|')})$`;
-      tier = 'full';
-      process.stdout.write(
-        `re-running ${ids.length} failed test(s) from ${latest}:\n  ${ids.join('\n  ')}\n\n`,
-      );
-    }
 
-    await call('abilitytest', mod.run, {
-      tier,
-      ...(filter !== undefined ? { filter } : {}),
-      ...(opts.out !== undefined ? { outFile: opts.out } : {}),
-    });
-  });
+      if (opts.fails) {
+        if (opts.filter !== undefined) {
+          throw new Error('--fails and --filter are mutually exclusive.');
+        }
+        // Derived filter from the latest saved report. We force tier=full because
+        // failed tests can come from any tier in the previous run, and a narrower
+        // tier would silently drop some of the rows we mean to re-run.
+        const cfg = await import('./config-store.js');
+        const home = cfg.homeDir();
+        const fs = await import('node:fs');
+        const path = await import('node:path');
+        let reports: string[];
+        try {
+          reports = fs
+            .readdirSync(home)
+            .filter((f) => f.startsWith('ability-test-') && f.endsWith('.md'))
+            .sort();
+        } catch (e) {
+          throw new Error(
+            `Cannot read ${home}: ${e instanceof Error ? e.message : String(e)}. Run 'modulus abilitytest' once before --fails.`,
+          );
+        }
+        if (reports.length === 0) {
+          throw new Error(
+            `No prior ability-test report in ${home}. Run 'modulus abilitytest' first to generate one.`,
+          );
+        }
+        const latest = reports.at(-1)!;
+        const md = fs.readFileSync(path.join(home, latest), 'utf8');
+        // Parse table rows. judgeTest writes either `✗ fail` or `! error` into
+        // the first column; renderMarkdown wraps the id in backticks.
+        const ids: string[] = [];
+        for (const line of md.split('\n')) {
+          const m = /^\|\s+[✗!]\s+(?:fail|error)\s+\|\s+`([^`]+)`/.exec(line);
+          if (m) ids.push(m[1]!);
+        }
+        if (ids.length === 0) {
+          process.stdout.write(`No failed/errored tests in ${latest} — nothing to re-run.\n`);
+          return;
+        }
+        const escaped = ids.map((id) => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        filter = `^(${escaped.join('|')})$`;
+        tier = 'full';
+        process.stdout.write(
+          `re-running ${ids.length} failed test(s) from ${latest}:\n  ${ids.join('\n  ')}\n\n`,
+        );
+      }
+
+      await call('abilitytest', mod.run, {
+        tier,
+        ...(filter !== undefined ? { filter } : {}),
+        ...(opts.out !== undefined ? { outFile: opts.out } : {}),
+      });
+    },
+  );
 
 // `modulus mod` is the command; `ext` stays as a hidden alias so existing
 // scripts and muscle memory from the extension era keep working.

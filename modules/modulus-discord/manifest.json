@@ -11,7 +11,8 @@
   "entrypoints": {
     "jobs": "./jobs.ts",
     "auth": "./auth.ts",
-    "commands": "./commands.ts"
+    "commands": "./commands.ts",
+    "setup": "./setup.ts"
   },
   "telegram_commands": [
     {

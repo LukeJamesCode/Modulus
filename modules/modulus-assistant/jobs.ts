@@ -10,7 +10,6 @@
 import type { DB } from '../../src/storage/db.js';
 import type { Host } from '../../src/core/modules.js';
 import type { Nudge } from '../../src/core/scheduler.js';
-import { matchesCron, parseCron } from '../../src/core/cron.js';
 import { getClient as getCalClient } from './helpers/calendar.js';
 import { buildMorningBrief, buildNightBrief, briefingTimeZone } from './gather.js';
 import { weatherRescheduleCheckNudges } from './tools/planning.js';
@@ -260,7 +259,7 @@ export function register(host: Host): void {
       .trim();
     if (deliveryCron) {
       host.scheduler.cron('learned-routine-delivery-sweep', deliveryCron, async ({ firedAt }) => {
-        return dueLearnedRoutineNudges(host.db, firedAt);
+        return dueLearnedRoutineNudges(host, firedAt);
       });
     }
   }
@@ -377,7 +376,8 @@ async function learnedRoutineSweep(
   return nudges;
 }
 
-function dueLearnedRoutineNudges(db: DB, firedAt: Date): Nudge[] {
+function dueLearnedRoutineNudges(host: Host, firedAt: Date): Nudge[] {
+  const db = host.db;
   const rows = db
     .prepare(`SELECT id, chat_id, cron, text FROM routine_rules WHERE status='active'`)
     .all() as LearnedRoutineRuleRow[];
@@ -388,7 +388,9 @@ function dueLearnedRoutineNudges(db: DB, firedAt: Date): Nudge[] {
   for (const row of rows) {
     let matches = false;
     try {
-      matches = matchesCron(parseCron(row.cron), firedAt);
+      // Matched through the host so the module's idea of "due" can never
+      // drift from the dialect the core scheduler actually runs.
+      matches = host.scheduler.cronMatches(row.cron, firedAt);
     } catch {
       recordRoutineEvent(db, row.id, row.chat_id, 'invalid_cron', row.cron, firedAt.getTime());
       continue;

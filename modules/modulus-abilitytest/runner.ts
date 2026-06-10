@@ -15,10 +15,28 @@ import { open } from '../../src/storage/db.js';
 import { createLogger } from '../../src/util/log.js';
 import { createOrchestrator, type ReplyChunk } from '../../src/core/orchestrator.js';
 import { createToolRegistry } from '../../src/core/tools.js';
+import type { LLM } from '../../src/core/llm.js';
 import { ensurePrivateDir, homeDir } from '../../src/cli/config-store.js';
+import { readPid, isAlive } from '../../src/cli/daemon.js';
 import { CATALOG, type AbilityTest, type Tier } from './catalog.js';
 import { createScriptedLLM } from './fake-llm.js';
-import { consoleRow, renderReport, summarize, type TestResult } from './report.js';
+import { buildLiveProfiles } from './live.js';
+import {
+  consoleRow,
+  renderReport,
+  renderScorecard,
+  summarize,
+  type ScoredProfile,
+  type TestResult,
+} from './report.js';
+
+// How a test gets its model. The deterministic subset returns a FakeLLM scripted
+// per test; the live scorecard returns one shared real LLM (Ollama / Power Mode),
+// in which case the test's `script` is ignored and the real model drives. Either
+// way runOne() is identical — only the model behind the orchestrator changes.
+export type LLMFactory = (test: AbilityTest) => LLM;
+
+const scriptedFactory: LLMFactory = (test) => createScriptedLLM(test.script);
 
 const TIER_RANK: Record<Tier, number> = { smoke: 0, standard: 1, full: 2 };
 
@@ -34,18 +52,21 @@ export async function runCatalog(opts: {
   tier: Tier;
   filter?: string;
   catalog?: readonly AbilityTest[];
+  // The model source. Defaults to the deterministic per-test FakeLLM.
+  makeLLM?: LLMFactory;
 }): Promise<TestResult[]> {
   const wanted = TIER_RANK[opts.tier];
   const re = opts.filter ? new RegExp(opts.filter) : null;
   const selected = (opts.catalog ?? CATALOG).filter(
     (t) => TIER_RANK[t.tier] <= wanted && (!re || re.test(t.id) || re.test(t.ability)),
   );
+  const makeLLM = opts.makeLLM ?? scriptedFactory;
   const results: TestResult[] = [];
-  for (const t of selected) results.push(await runOne(t));
+  for (const t of selected) results.push(await runOne(t, makeLLM));
   return results;
 }
 
-async function runOne(t: AbilityTest): Promise<TestResult> {
+async function runOne(t: AbilityTest, makeLLM: LLMFactory): Promise<TestResult> {
   const started = Date.now();
   const base: Omit<TestResult, 'status' | 'detail' | 'elapsedMs'> = {
     id: t.id,
@@ -70,7 +91,7 @@ async function runOne(t: AbilityTest): Promise<TestResult> {
         },
       });
     }
-    const llm = createScriptedLLM(t.script);
+    const llm = makeLLM(t);
     const orch = createOrchestrator({ db, llm, tools, log });
 
     const chunks: ReplyChunk[] = [];
@@ -135,11 +156,16 @@ function judge(
   return { ok: true, detail: ran };
 }
 
-function defaultOutFile(now: Date): string {
+// Deterministic runs write `ability-test-<ts>.md`; live runs write
+// `ability-live-<ts>.md`. The distinct prefix keeps live reports out of the
+// `--fails` scan (which only globs `ability-test-*.md`), so a live scorecard
+// never gets re-run deterministically as if it were the last failure set.
+function defaultOutFile(now: Date, kind: 'det' | 'live' = 'det'): string {
   const home = homeDir();
   ensurePrivateDir(home);
   const stamp = now.toISOString().replace(/[:.]/g, '-');
-  return join(home, `ability-test-${stamp}.md`);
+  const prefix = kind === 'live' ? 'ability-live' : 'ability-test';
+  return join(home, `${prefix}-${stamp}.md`);
 }
 
 export async function run(opts: RunOptions): Promise<void> {
@@ -160,4 +186,60 @@ export async function run(opts: RunOptions): Promise<void> {
   process.stdout.write(`Report written to ${outFile}\n`);
 
   if (s.fail > 0 || s.error > 0) process.exitCode = 1;
+}
+
+// Live scorecard: run the same catalog against real model(s) built from config —
+// the local Ollama chat model, plus Power Mode when an OpenAI-compatible endpoint
+// is configured. Needs Ollama running; refuses if a daemon is up so the two
+// don't contend over the real SQLite writer and the heavy-model slot.
+export async function runLive(opts: RunOptions): Promise<void> {
+  const home = homeDir();
+  const pid = readPid(home);
+  if (pid !== null && isAlive(pid)) {
+    throw new Error(
+      `A Modulus daemon is running (pid ${pid}). Stop it with 'modulus stop' before a live ability run — they would fight over the model and the database.`,
+    );
+  }
+
+  const now = new Date();
+  const log = createLogger({ level: 'error', out: () => {}, err: () => {} });
+  const db = open({ path: join(home, 'modulus.db'), log });
+  try {
+    const profiles = buildLiveProfiles({ db, home, log });
+    if (profiles.length === 0) {
+      process.stdout.write('No model profiles available — is Ollama configured?\n');
+      return;
+    }
+
+    const scored: ScoredProfile[] = [];
+    for (const p of profiles) {
+      process.stdout.write(`\n== ${p.label} ==\n`);
+      const results = await runCatalog({
+        tier: opts.tier,
+        ...(opts.filter !== undefined ? { filter: opts.filter } : {}),
+        makeLLM: () => p.llm,
+      });
+      for (const r of results) process.stdout.write(consoleRow(r) + '\n');
+      scored.push({ label: p.label, results });
+    }
+
+    const scorecard = renderScorecard(scored);
+    process.stdout.write('\n' + scorecard + '\n');
+
+    const outFile = opts.outFile ?? defaultOutFile(now, 'live');
+    const body =
+      scorecard +
+      '\n' +
+      scored
+        .map(
+          (p) => `### ${p.label}\n\n${renderReport(p.results, opts.tier, now, `live: ${p.label}`)}`,
+        )
+        .join('\n');
+    writeFileSync(outFile, body, 'utf8');
+    process.stdout.write(`Report written to ${outFile}\n`);
+
+    if (scored.some((p) => p.results.some((r) => r.status !== 'pass'))) process.exitCode = 1;
+  } finally {
+    db.close();
+  }
 }

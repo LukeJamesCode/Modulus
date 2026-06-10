@@ -40,6 +40,7 @@ import type { Logger } from '../util/log.js';
 import type { LLM } from './llm.js';
 import type { AfterExecuteListener, ToolHandler, ToolRegistry } from './tools.js';
 import type { Scheduler, JobHandler, ScheduledJob, NudgeAction, Nudge } from './scheduler.js';
+import { matchesCron, parseCron } from './cron.js';
 import type { FastCache } from './fast-cache.js';
 import type { ModulePermissions } from './installer.js';
 import { namespacedCache } from './fast-cache.js';
@@ -326,6 +327,13 @@ export interface ModuleSetupContext {
   interactive: boolean;
   stdout: (text: string) => void;
   settings: ModuleSettings;
+  // Install npm packages into the module's own folder (<folder>/node_modules)
+  // when they don't already resolve from there. Host-provided so a setup
+  // entrypoint never reaches into core for install machinery — a shipped
+  // module's folder is its whole world. Returns true when every dep resolves
+  // afterwards; failures report manual instructions on stdout (best-effort by
+  // contract: the caller surfaces the result but does not undo the enable).
+  ensureNpmDeps: (deps: ReadonlyArray<{ pkg: string; version: string }>) => Promise<boolean>;
 }
 
 export interface SetupEntrypointModule {
@@ -478,6 +486,12 @@ export interface Host {
       handler: JobHandler,
       opts?: Pick<ScheduledJob, 'timeZone'>,
     ) => void;
+    // Evaluate a cron expression against a point in time, using the SAME
+    // dialect the core scheduler runs jobs with. Modules that store their own
+    // cron strings (e.g. learned routines) must match through this instead of
+    // re-implementing cron, so "when does this fire" can never drift between
+    // a module's idea and the scheduler's. Throws on an invalid expression.
+    cronMatches: (expr: string, at: Date) => boolean;
   };
   // Shared TTL cache namespaced to this module. Useful for memoizing per-
   // tick work in cron jobs (e.g. "list today's events" once even if three
@@ -1180,6 +1194,7 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
             reg.jobsRegistered = Math.max(0, reg.jobsRegistered - 1);
           });
         },
+        cronMatches: (expr, at) => matchesCron(parseCron(expr), at),
       },
       cache: namespacedCache(manifest.name, opts.scheduler.cache),
       prompts: {

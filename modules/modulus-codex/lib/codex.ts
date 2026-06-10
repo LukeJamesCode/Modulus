@@ -10,7 +10,7 @@
 // of talking to the backend.
 
 import { randomUUID } from 'node:crypto';
-import { composeAbort } from '../../../src/util/abort.js';
+import { composeAbort } from './abort.js';
 
 export interface CodexRequest {
   baseUrl: string;

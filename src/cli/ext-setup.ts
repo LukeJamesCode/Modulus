@@ -19,6 +19,7 @@ import type {
   SetupEntrypointModule,
 } from '../core/modules.js';
 import { effectiveConfig, homeDir } from './config-store.js';
+import { ensureNpmDeps } from '../core/module-npm-deps.js';
 
 export type { DiscoveredModule };
 
@@ -185,6 +186,7 @@ async function runSetupEntrypoint(
     interactive: opts.interactive ?? (process.stdin.isTTY && process.stdout.isTTY),
     stdout,
     settings: setupSettings(db, ext.name),
+    ensureNpmDeps: (deps) => ensureNpmDeps(deps, { folder: ext.folder, stdout }),
   };
   await fn(ctx);
 }

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Live ability scorecard** (`modulus abilitytest --live`): runs the same ability catalog against the real configured model(s) instead of the deterministic FakeLLM, measuring actual tool-selection and delegation judgement. Scores up to two profiles side by side — the local Ollama small model (the Pi profile) and Power Mode when an OpenAI-compatible endpoint is configured — and leads with a per-dimension scorecard. Refuses while a daemon is running (to avoid contending over the DB and heavy-model slot) and writes to `~/.modulus/ability-live-<ts>.md`, a distinct prefix that keeps live runs out of the `--fails` re-run scan.
+- **Heavy-module dependency bootstrap**: `modulus-browser` and `modulus-discord` now install their npm deps into their own folder on enable (via a `setup` entrypoint), so core no longer carries them. Browser fetches the `playwright` package plus a Chromium binary; Discord fetches `discord.js` + `@discordjs/voice` (both import-time deps the bridge needs to boot). A shared `ensureNpmDeps` helper skips anything already resolvable, so re-enabling is a fast no-op.
+
+### Changed
+
+- **Core stays Pi-lean**: removed `discord.js` from core `dependencies` — it's now installed only when `modulus-discord` is enabled, honoring the "heavy is opt-in, never core" North Star.
+
 ## [1.0.0] - 2026-06-10
 
 ### Added

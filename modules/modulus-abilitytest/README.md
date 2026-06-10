@@ -20,11 +20,29 @@ modulus abilitytest --tier full     # every catalog entry
 modulus abilitytest --filter delegate   # only tests whose id/ability matches
 modulus abilitytest --out report.md     # where to write the markdown report
 modulus abilitytest --fails         # re-run only what failed in the last report
+modulus abilitytest --live          # score the catalog against the REAL model(s)
 ```
 
 Tiers are cumulative: `smoke ⊆ standard ⊆ full`. The report is written to
 `~/.modulus/ability-test-<timestamp>.md`; `--fails` re-reads the latest one and re-runs only
 the rows that failed or errored.
+
+## Live scorecard (`--live`)
+
+`--fails` and the default run use the deterministic `FakeLLM`. `--live` instead drives the
+**real** configured model(s) through the same catalog — so it measures the small model's
+actual tool-selection and delegation judgement, not just pipeline wiring. It builds up to two
+profiles from your config: `local:<chat model>` (the Ollama small model, the Pi profile) and,
+when an OpenAI-compatible endpoint is configured in `modulus-openai`, `power:<alias:model>`
+(Power Mode). The catalog's per-round `script` is ignored in this mode — the real model
+decides.
+
+A live run touches the real `~/.modulus/modulus.db`, so it **refuses if a daemon is running**
+(`modulus stop` first) to avoid contending over the SQLite writer and the heavy-model slot. It
+needs Ollama up, is operator-run, and never runs in CI. Output goes to
+`~/.modulus/ability-live-<timestamp>.md` (a distinct prefix so `--fails` never picks a live
+scorecard up as the last failure set) and leads with a **scorecard**: per-dimension pass rates
+with one column per profile, so the Pi profile and Power Mode sit side by side.
 
 ## The catalog
 
@@ -42,8 +60,8 @@ script ends in text, expectations reference declared tools).
 
 ## Scope
 
-This is the **deterministic subset**. It validates pipeline *wiring* — "when the model emits
-tool call X, the orchestrator runs X and returns the right end-state" — not the small model's
-live judgement. The live scorecard (real Ollama on the Pi profile vs. Power Mode, measuring
-whether the actual model selects/delegates correctly) is the planned follow-on; it reuses this
-catalog's expectations against a real `LLM` instead of the FakeLLM.
+The default run is the **deterministic subset**. It validates pipeline *wiring* — "when the
+model emits tool call X, the orchestrator runs X and returns the right end-state" — not the
+small model's live judgement, and that is what runs in CI. To measure whether the actual model
+selects/delegates correctly, use `--live` (above): it reuses this same catalog's expectations
+against a real `LLM` instead of the FakeLLM.

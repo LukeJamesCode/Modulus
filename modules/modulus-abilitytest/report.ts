@@ -51,12 +51,13 @@ export function renderReport(
   results: readonly TestResult[],
   tier: string,
   now: Date = new Date(),
+  source = 'deterministic FakeLLM subset',
 ): string {
   const s = summarize(results);
   const lines: string[] = [];
   lines.push(`# Modulus ability test — ${tier}`);
   lines.push('');
-  lines.push(`Run at ${now.toISOString()} (deterministic FakeLLM subset).`);
+  lines.push(`Run at ${now.toISOString()} (${source}).`);
   lines.push('');
   lines.push(`**${s.pass}/${s.total} passed** · ${s.fail} failed · ${s.error} errored.`);
   lines.push('');
@@ -76,4 +77,31 @@ export function renderReport(
 // One-line console row, e.g. "✓ pass  tool-weather            get_weather invoked".
 export function consoleRow(r: TestResult): string {
   return `${STATUS_CELL[r.status]}  ${r.id.padEnd(22)} ${r.detail}`;
+}
+
+// The headline of a live run: per-dimension pass rates with one column per model
+// profile, so the Pi profile and Power Mode sit side by side. `modulus
+// abilitytest --live` runs the catalog against each profile and renders this.
+export interface ScoredProfile {
+  label: string;
+  results: readonly TestResult[];
+}
+
+export function renderScorecard(profiles: readonly ScoredProfile[]): string {
+  const dims = [...new Set(profiles.flatMap((p) => p.results.map((r) => r.dimension)))].sort();
+  const rate = (rs: readonly TestResult[]): string =>
+    `${rs.filter((r) => r.status === 'pass').length}/${rs.length}`;
+
+  const lines: string[] = [];
+  lines.push('## Scorecard');
+  lines.push('');
+  lines.push(`| Dimension | ${profiles.map((p) => p.label).join(' | ')} |`);
+  lines.push(`| --- | ${profiles.map(() => '---').join(' | ')} |`);
+  for (const dim of dims) {
+    const cells = profiles.map((p) => rate(p.results.filter((r) => r.dimension === dim)));
+    lines.push(`| ${dim} | ${cells.join(' | ')} |`);
+  }
+  lines.push(`| **Overall** | ${profiles.map((p) => `**${rate(p.results)}**`).join(' | ')} |`);
+  lines.push('');
+  return lines.join('\n');
 }
