@@ -1,0 +1,54 @@
+{
+  "type": "object",
+  "properties": {
+    "bot_token": {
+      "type": "string",
+      "description": "Discord bot token (Bot User OAuth Token from the Discord Developer Portal). Stored plaintext in SQLite — masked in UI; do not commit to env or config.json.",
+      "secret": true
+    },
+    "allowed_dm_user_ids": {
+      "type": "string",
+      "description": "Comma-separated Discord user IDs allowed to DM the bot. Empty = no DM access. IDs are 17-19 digit snowflakes from Discord's Developer Mode 'Copy ID'.",
+      "default": ""
+    },
+
+    "rate_limit_per_minute": {
+      "type": "number",
+      "description": "Max user-initiated turns per minute per Discord user. Defends against runaway loops and noisy clients.",
+      "default": 10
+    },
+    "shared_telegram_chat_id": {
+      "type": "number",
+      "description": "Identity mode. 0 (default) = Discord DMs get their own isolated conversation thread. Set to your Telegram chat id to SHARE one continuous conversation/history across both surfaces (DMs only; guild channels always stay isolated). Note: in shared mode, confirm-tier prompts render in Telegram, not as Discord buttons.",
+      "default": 0
+    },
+    "proactive_dm_user_id": {
+      "type": "string",
+      "description": "Discord user id to DM proactive briefings/nudges/reminders to (mirrored from the same proactive jobs Telegram uses). Empty = the first id in allowed_dm_user_ids. The bot must share a guild with the user (or the user must allow DMs).",
+      "default": ""
+    },
+    "idle_disconnect_minutes": {
+      "type": "number",
+      "description": "Disconnect the Discord gateway after this many minutes with no inbound messages (0 = stay connected). Useful on Pi targets.",
+      "default": 0
+    },
+    "taunt_mode": {
+      "type": "boolean",
+      "description": "When ON, the voice channel plays the entrance and talking sounds below (a soundboard). When OFF, Modulus acts as a normal voice assistant instead: it listens for the wake word (\"hey modulus\" / \"modulus\") and you can talk to it like a normal chat. The two modes are mutually exclusive.",
+      "default": false
+    },
+    "entrance_sounds": {
+      "type": "string",
+      "format": "user-audio-map",
+      "description": "Taunt mode only. Comma-separated list of <user_id>:<absolute_path_to_mp3> for playing an entrance sound when a specific user joins a voice channel Modulus is in.",
+      "default": ""
+    },
+    "talking_sounds": {
+      "type": "string",
+      "format": "user-audio-map",
+      "description": "Taunt mode only. Comma-separated list of <user_id>:<absolute_path_to_mp3> for playing a sound whenever a specific user starts talking in a voice channel.",
+      "default": ""
+    }
+  },
+  "required": ["bot_token"]
+}

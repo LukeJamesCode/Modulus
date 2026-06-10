@@ -31,5 +31,13 @@
   // installed only when a user enables it. Their tool entrypoints can't resolve
   // here, so they're excluded from the core typecheck; the pure, safety-critical
   // logic each ships (e.g. the SSRF guard) lives in its own file and IS checked.
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "modulus-browser/tools.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts",
+    "modulus-browser/tools.ts",
+    "modulus-discord/jobs.ts",
+    "modulus-discord/lib/client.ts",
+    "modulus-discord/lib/voice.ts"
+  ]
 }
