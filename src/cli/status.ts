@@ -12,13 +12,14 @@
 // the same data so they stay aligned automatically.
 
 import { existsSync, readFileSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { extensionFolders } from './extension-paths.js';
 import { open as openDb } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import { readMetrics } from '../core/metrics.js';
 import { effectiveConfig, homeDir } from './config-store.js';
-import { isAlive, metricsFilePath, readPid } from './daemon.js';
+import { isAlive, metricsFilePath, panelTokenPath, readPid } from './daemon.js';
 import { probeOllama } from './ollama-probe.js';
 
 interface Row {
@@ -28,9 +29,13 @@ interface Row {
 
 export interface StatusRunOptions {
   json?: boolean;
+  // Output sink, defaults to stdout. Injectable so tests can capture the report
+  // without monkey-patching the shared stream (which clobbers the test runner).
+  write?: (chunk: string) => void;
 }
 
 export async function run(options: StatusRunOptions = {}): Promise<void> {
+  const write = options.write ?? ((chunk: string) => void process.stdout.write(chunk));
   const home = homeDir();
   const cfg = effectiveConfig(home);
 
@@ -66,6 +71,12 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
 
   const metrics = readMetrics(metricsFilePath(home));
 
+  // Panel link: when the panel is enabled and its bearer token has been
+  // generated (on first `modulus start`). Read-only — never create the token
+  // here. The URL mirrors how the panel server forms it (see src/panel/).
+  const panelEnabled = cfg.panel?.enabled !== false;
+  const panelUrl = panelEnabled ? readPanelUrl(home, cfg) : null;
+
   if (options.json) {
     const total = metrics ? metrics.scheduler.cache.hits + metrics.scheduler.cache.misses : 0;
     const hitRate = metrics && total > 0 ? metrics.scheduler.cache.hits / total : null;
@@ -94,6 +105,10 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
         status: dbStatus,
         error: dbError,
       },
+      panel: {
+        enabled: panelEnabled,
+        url: panelUrl,
+      },
       scheduler: metrics
         ? {
             jobsRegistered: metrics.scheduler.jobsRegistered,
@@ -112,9 +127,9 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
           }
         : null,
       // Kept stable for downstream consumers; bump if we change shape.
-      schemaVersion: 1,
+      schemaVersion: 2,
     };
-    process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+    write(JSON.stringify(out, null, 2) + '\n');
     return;
   }
 
@@ -153,6 +168,10 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
     rows.push({ label: 'db', value: '(not initialized)' });
   }
 
+  if (panelUrl) {
+    rows.push({ label: 'panel', value: panelUrl });
+  }
+
   if (metrics) {
     const ageS = Math.round((Date.now() - metrics.updatedAt) / 1000);
     const stale = ageS > 120 ? ` (stale ${ageS}s)` : '';
@@ -180,8 +199,38 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
 
   const width = Math.max(...rows.map((r) => r.label.length));
   for (const r of rows) {
-    process.stdout.write(`${r.label.padEnd(width)}  ${r.value}\n`);
+    write(`${r.label.padEnd(width)}  ${r.value}\n`);
   }
+}
+
+// Reconstruct the tokenized panel link without starting the server. Returns
+// null when the token file hasn't been written yet (panel never started) or is
+// unreadable — status is read-only and must not mint a token of its own.
+function readPanelUrl(home: string, cfg: ReturnType<typeof effectiveConfig>): string | null {
+  const file = panelTokenPath(home);
+  if (!existsSync(file)) return null;
+  let token: string;
+  try {
+    token = readFileSync(file, 'utf8').trim();
+  } catch {
+    return null;
+  }
+  if (!token) return null;
+  const bind = cfg.panel?.bind ?? '127.0.0.1';
+  const port = cfg.panel?.port ?? 7777;
+  return `http://${panelHost(bind)}:${port}/?token=${token}`;
+}
+
+// 0.0.0.0 isn't browsable, so when the panel is LAN-exposed show a reachable
+// host (a LAN IP, else localhost). Mirrors the rule in src/panel/server.ts.
+function panelHost(bind: string): string {
+  if (bind !== '0.0.0.0') return bind;
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family === 'IPv4' && !a.internal) return a.address;
+    }
+  }
+  return 'localhost';
 }
 
 function listInstalled(home: string): Array<{ name: string }> {
