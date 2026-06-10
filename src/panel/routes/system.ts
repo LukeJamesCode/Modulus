@@ -9,18 +9,19 @@
 // The read-only projections use the daemon's live db/scheduler directly, no
 // second runtime and no DB polling.
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { freemem, totalmem } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DB } from '../../storage/db.js';
 import type { ModulusConfig } from '../../cli/config-store.js';
-import { metricsFilePath } from '../../cli/daemon.js';
+import { logFilePath, metricsFilePath } from '../../cli/daemon.js';
 import { collectDoctorChecks } from '../../cli/doctor.js';
 import { parseCron, nextFireAfter } from '../../core/cron.js';
 import { readMetrics } from '../../core/metrics.js';
 import { createPrefsStore, formatWindow } from '../../core/prefs.js';
-import { readJson, sendJson } from '../http.js';
+import { readJson, sendJson, sse, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
 import { buildState } from '../state.js';
 import type { PanelDeps, PanelRuntime } from '../types.js';
@@ -218,6 +219,63 @@ function readDocs(): unknown {
   return { ok: true, docs };
 }
 
+function tailLines(file: string, max = 400): string[] {
+  if (!existsSync(file)) return [];
+  try {
+    return readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(-max);
+  } catch {
+    return [];
+  }
+}
+
+// Follow the daemon's own log file: replay the current tail, then poll for
+// appended bytes (fs.watch is unreliable across platforms; a 1.5s stat is
+// cheap). A shrinking file means rotation/truncation — restart from zero.
+// Frames are unnamed for EventSource.onmessage.
+function streamLogs(deps: PanelDeps, req: IncomingMessage, res: ServerResponse): void {
+  const file = logFilePath(deps.home);
+  writeSseHead(res);
+  let offset = 0;
+  try {
+    offset = existsSync(file) ? statSync(file).size : 0;
+  } catch {
+    offset = 0;
+  }
+  for (const line of tailLines(file)) sse(res, null, line);
+  const tick = setInterval(() => {
+    try {
+      if (!existsSync(file)) return;
+      const size = statSync(file).size;
+      if (size < offset) offset = 0;
+      if (size > offset) {
+        const stream = createReadStream(file, { start: offset, end: size - 1, encoding: 'utf8' });
+        let buf = '';
+        stream.on('data', (c) => (buf += c));
+        stream.on('end', () => {
+          for (const line of buf.split('\n').filter(Boolean)) sse(res, null, line);
+        });
+        offset = size;
+      }
+    } catch {
+      /* ignore transient read errors */
+    }
+  }, 1500);
+  tick.unref?.();
+  // Comment frames keep proxies from idling the connection out.
+  const keepAlive = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch {
+      /* client gone */
+    }
+  }, 20_000);
+  keepAlive.unref?.();
+  req.on('close', () => {
+    clearInterval(tick);
+    clearInterval(keepAlive);
+  });
+}
+
 export function createSystemRoutes(deps: PanelDeps, runtime: PanelRuntime): RouteModule {
   return async ({ req, res, path, method }) => {
     if (path === '/api/state' && method === 'GET') {
@@ -303,6 +361,11 @@ export function createSystemRoutes(deps: PanelDeps, runtime: PanelRuntime): Rout
 
     if (path === '/api/docs' && method === 'GET') {
       sendJson(res, 200, readDocs());
+      return true;
+    }
+
+    if (path === '/api/logs/stream' && method === 'GET') {
+      streamLogs(deps, req, res);
       return true;
     }
 

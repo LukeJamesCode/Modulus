@@ -4,7 +4,14 @@
 // fine for these assertions.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -16,7 +23,7 @@ import { createPrefsStore } from '../core/prefs.js';
 import { createScheduler } from '../core/scheduler.js';
 import { createToolRegistry } from '../core/tools.js';
 import { effectiveConfig } from '../cli/config-store.js';
-import { panelTokenPath } from '../cli/daemon.js';
+import { logFilePath, panelTokenPath } from '../cli/daemon.js';
 import { createPanelConfirmBus } from './confirm-bus.js';
 import { createPanel, type PanelDeps, type PanelHandle } from './server.js';
 
@@ -295,6 +302,24 @@ test('run-view stream snapshots on connect, on live events, and closes on done',
   assert.equal(frames.sawNamed, false);
   // The server must drop its subscription once the stream closes.
   assert.equal(runEventSubs.get(task.id)?.size ?? 0, 0);
+});
+
+test('logs stream replays the tail, then follows appended lines', async () => {
+  mkdirSync(join(home, 'log'), { recursive: true });
+  writeFileSync(logFilePath(home), '{"msg":"alpha"}\n{"msg":"beta"}\n');
+  const ac = new AbortController();
+  const res = await fetch(`${base}/api/logs/stream?token=${encodeURIComponent(token)}`, {
+    signal: ac.signal,
+  });
+  assert.equal(res.status, 200);
+  const frames = sseFrames(res);
+  assert.equal(await frames.next(), '{"msg":"alpha"}');
+  assert.equal(await frames.next(), '{"msg":"beta"}');
+  // Appended bytes arrive on the follow tick (1.5s poll).
+  appendFileSync(logFilePath(home), '{"msg":"gamma"}\n');
+  assert.equal(await frames.next(), '{"msg":"gamma"}');
+  assert.equal(frames.sawNamed, false);
+  ac.abort();
 });
 
 test('run-view stream for a missing task reports gone and ends', async () => {
