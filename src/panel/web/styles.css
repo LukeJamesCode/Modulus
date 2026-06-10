@@ -6,7 +6,30 @@
    a calm warm-neutral light theme remains for the toggle.
    =========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/* Fonts are vendored as variable woff2 under fonts/ (latin subset) — the panel
+   names no third-party origin and renders fully offline. To refresh them, see
+   the families/weights below and re-pull the latin woff2 from Google Fonts. */
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('fonts/hanken-grotesk.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url('fonts/space-grotesk.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('fonts/jetbrains-mono.woff2') format('woff2');
+}
 
 :root {
   --font-ui: 'Hanken Grotesk', system-ui, sans-serif;
