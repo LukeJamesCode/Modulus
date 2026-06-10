@@ -28,6 +28,7 @@ import { createPanelConfirmBus } from './confirm-bus.js';
 import { createPanel, type PanelDeps, type PanelHandle } from './server.js';
 
 let home: string;
+let cliStub: string;
 let db: DB;
 let panel: PanelHandle;
 let base: string;
@@ -94,6 +95,13 @@ function sseFrames(res: Response): {
 
 before(async () => {
   home = mkdtempSync(join(tmpdir(), 'modulus-panel-'));
+  // A stub CLI entry that always exits non-zero. Every panel-driven CLI spawn
+  // (ext enable, maintenance update) routes through this, so a spawn-failure
+  // test is deterministic and — critically — a real `modulus update` (git pull
+  // + npm install + rebuild) can never run from the test, with or without a
+  // dist/ build present.
+  cliStub = join(home, 'cli-stub.cjs');
+  writeFileSync(cliStub, 'process.exit(1);\n');
   const log = createLogger({ level: 'error' });
   db = openDb({ path: join(home, 'modulus.db'), log });
   const scheduler = createScheduler({
@@ -155,6 +163,7 @@ before(async () => {
     } as unknown as PanelDeps['orchestrator'],
     loader: { intercepts: () => [], commands: () => [] } as unknown as PanelDeps['loader'],
     confirmBus: createPanelConfirmBus(),
+    cliEntry: cliStub,
     onStop: () => {
       stopCalls += 1;
     },
@@ -409,8 +418,8 @@ test('upload: stages bytes under the module uploads dir; a traversing name canno
 });
 
 test('enable-stream ends with an unnamed done frame when the CLI run fails', async () => {
-  // No cliEntry/execArgv in the test deps, so the spawned CLI cannot run a
-  // TypeScript entry — the route must still surface that as done ok:false.
+  // cliEntry points at a stub that exits non-zero, so the spawned CLI run
+  // fails — the route must still surface that as done ok:false.
   const res = await fetch(
     `${base}/api/extensions/no-such-module/enable-stream?token=${encodeURIComponent(token)}`,
   );
@@ -485,10 +494,10 @@ test('maintenance: fresh refuses without RESET and hands off to the terminal wit
   assert.match(body.output, /modulus fresh/);
 });
 
-test('maintenance: update reports failure when the CLI entry cannot run', async () => {
-  // No cliEntry/execArgv in the test deps and no dist build, so the spawned
-  // `modulus update` can't run a TS entry — the route surfaces that as a failure
-  // rather than hanging or 200-ing.
+test('maintenance: update reports failure when the CLI run fails', async () => {
+  // cliEntry is a stub that exits non-zero (so a real `modulus update` — git
+  // pull + npm install + rebuild — never runs from a test); the route surfaces
+  // the non-zero exit as a failure rather than hanging or 200-ing.
   const r = await authed('/api/maintenance/update', { method: 'POST' });
   assert.equal(r.status, 500);
   const body = (await r.json()) as { ok: boolean; command: string };
