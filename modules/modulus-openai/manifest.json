@@ -1,6 +1,6 @@
 {
   "name": "modulus-openai",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Register OpenAI-compatible chat-completions endpoints as Modulus LLM provider aliases.",
   "modulus": ">=0.1.0",
   "deps": [],

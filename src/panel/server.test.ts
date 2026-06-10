@@ -145,6 +145,7 @@ before(async () => {
       resolveModel: () => 'test-model',
       listProfiles: () => ({ chat: { model: 'qwen3.5:0.8b', contextTokens: 4096, heavy: false } }),
       health: async () => ({ ok: true, models: ['qwen3.5:0.8b'] }),
+      providerModels: () => ['deepseek:deepseek-chat'],
     } as unknown as PanelDeps['llm'],
     memory: setupMemory({
       db,
@@ -215,6 +216,15 @@ test('a bad token is rejected', async () => {
 test('?token= is accepted (the only option EventSource has)', async () => {
   const res = await fetch(`${base}/api/state?token=${encodeURIComponent(token)}`);
   assert.equal(res.status, 200);
+});
+
+test('GET /api/models surfaces registered provider aliases for Power Mode', async () => {
+  const res = await authed('/api/models');
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { models: string[] };
+  // The Power-Mode picker must offer the openai-compatible alias the stub LLM
+  // advertises, alongside whatever local Ollama tags the probe returned.
+  assert.ok(body.models.includes('deepseek:deepseek-chat'));
 });
 
 test('static index is open and carries a CSP header', async () => {

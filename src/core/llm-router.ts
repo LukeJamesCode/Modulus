@@ -12,6 +12,12 @@ import { composeAbort } from '../util/abort.js';
 
 export interface RoutedLLM extends LLM {
   registerProvider(provider: LLMProvider): () => void;
+  // The read-side counterpart to registerProvider: the model tags every
+  // currently-registered provider advertises (e.g. 'deepseek',
+  // 'deepseek:deepseek-chat'). Power Mode's Settings picker offers these so a
+  // profile can be pointed at a cloud/big-GPU endpoint. Static and network-free
+  // (unlike health()), so it's cheap to call on every Settings load.
+  providerModels(): string[];
 }
 
 export interface RoutedLLMOptions {
@@ -145,6 +151,14 @@ export function createRoutedLLM(base: LLM, routedOpts: RoutedLLMOptions = {}): R
     };
   }
 
+  function providerModels(): string[] {
+    const out: string[] = [];
+    for (const provider of providers.values()) {
+      out.push(...(provider.models?.() ?? [provider.id]));
+    }
+    return [...new Set(out)];
+  }
+
   return {
     chat,
     health,
@@ -155,5 +169,6 @@ export function createRoutedLLM(base: LLM, routedOpts: RoutedLLMOptions = {}): R
     stopIdleEviction,
     releaseHeavy,
     registerProvider,
+    providerModels,
   };
 }

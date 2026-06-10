@@ -157,10 +157,12 @@ export function createSettingsRoutes(deps: PanelDeps): RouteModule {
 
     if (path === '/api/models' && method === 'GET') {
       const probe = await probeOllama(effectiveConfig(deps.home).ollama.url);
-      sendJson(res, 200, {
-        ...probe,
-        models: availableModelTags(probe.ok ? probe.models : [], deps.home),
-      });
+      const ollamaTags = availableModelTags(probe.ok ? probe.models : [], deps.home);
+      // Power Mode: offer registered OpenAI-compatible provider aliases (e.g.
+      // 'deepseek:deepseek-chat') so a profile can be pointed at a cloud endpoint
+      // from Settings, not just at a locally-pulled Ollama tag.
+      const models = [...new Set([...ollamaTags, ...deps.llm.providerModels()])];
+      sendJson(res, 200, { ...probe, models });
       return true;
     }
 

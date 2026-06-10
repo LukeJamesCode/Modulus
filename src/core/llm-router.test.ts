@@ -104,3 +104,25 @@ test('a non-provider model delegates to the base (no timeout wrapper)', async ()
   assert.equal(baseCalled !== null, true);
   assert.equal(chunks[0]!.delta, 'from base');
 });
+
+test('providerModels lists the tags of every registered provider (Power Mode picker)', () => {
+  const llm = createRoutedLLM(fakeBase());
+  assert.deepEqual(llm.providerModels(), []);
+  const off = llm.registerProvider({
+    id: 'deepseek',
+    models: () => ['deepseek', 'deepseek:deepseek-chat', 'deepseek:deepseek-reasoner'],
+    async *chat() {
+      yield { delta: '', done: true };
+    },
+  });
+  // A provider with no models() falls back to advertising its bare id.
+  llm.registerProvider(hangingProvider);
+  assert.deepEqual(llm.providerModels(), [
+    'deepseek',
+    'deepseek:deepseek-chat',
+    'deepseek:deepseek-reasoner',
+    'slow',
+  ]);
+  off();
+  assert.deepEqual(llm.providerModels(), ['slow']);
+});
