@@ -6,7 +6,7 @@
 //   1. discover    — find <root>/<name>/manifest.json
 //   2. validate    — parse manifest, check name + version + modulus range
 //   3. migrate     — run extension-owned migrations against the shared DB
-//                    using a private `_ext_<name>_migrations` table
+//                    using a private `_mod_<name>_migrations` table
 //   4. settings    — load settings.schema.json (if present), merge defaults
 //   5. prompt      — load prompt.md (if present)
 //   6. import      — dynamic-import each entrypoint and call register(host)
@@ -301,7 +301,7 @@ export interface AuthFlow {
   // User-visible label for `modulus auth <ext>`.
   label: string;
   // The runner returns a settings patch that the loader writes back into the
-  // extension_settings table. CLI orchestrates the I/O (prompts, callback
+  // module_settings table. CLI orchestrates the I/O (prompts, callback
   // server). Phase 2 ships the declaration; Phase 3 ships the prompt UI.
   run: (io: AuthFlowIO) => Promise<Record<string, string | number | boolean>>;
 }
@@ -799,12 +799,12 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
 
   function ensureStateRow(manifest: Manifest): boolean {
     const existing = opts.db
-      .prepare(`SELECT enabled, version FROM extension_state WHERE name = ?`)
+      .prepare(`SELECT enabled, version FROM module_state WHERE name = ?`)
       .get(manifest.name) as { enabled: number; version: string } | undefined;
     if (!existing) {
       opts.db
         .prepare(
-          `INSERT INTO extension_state (name, version, enabled, installed_at, last_loaded_at)
+          `INSERT INTO module_state (name, version, enabled, installed_at, last_loaded_at)
            VALUES (?, ?, 1, ?, ?)`,
         )
         .run(manifest.name, manifest.version, Date.now(), Date.now());
@@ -812,11 +812,11 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     }
     if (existing.version !== manifest.version) {
       opts.db
-        .prepare(`UPDATE extension_state SET version = ?, last_loaded_at = ? WHERE name = ?`)
+        .prepare(`UPDATE module_state SET version = ?, last_loaded_at = ? WHERE name = ?`)
         .run(manifest.version, Date.now(), manifest.name);
     } else {
       opts.db
-        .prepare(`UPDATE extension_state SET last_loaded_at = ? WHERE name = ?`)
+        .prepare(`UPDATE module_state SET last_loaded_at = ? WHERE name = ?`)
         .run(Date.now(), manifest.name);
     }
     return existing.enabled !== 0;
@@ -831,7 +831,7 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
     }
     function readAll(): Record<string, string | number | boolean> {
       const rows = opts.db
-        .prepare(`SELECT key, value FROM extension_settings WHERE extension = ?`)
+        .prepare(`SELECT key, value FROM module_settings WHERE module = ?`)
         .all(name) as Array<{ key: string; value: string }>;
       const out: Record<string, string | number | boolean> = { ...defaults };
       for (const r of rows) {
@@ -851,9 +851,9 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
       set(key, value) {
         opts.db
           .prepare(
-            `INSERT INTO extension_settings (extension, key, value, updated_at)
+            `INSERT INTO module_settings (module, key, value, updated_at)
              VALUES (?, ?, ?, ?)
-             ON CONFLICT(extension, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+             ON CONFLICT(module, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
           )
           .run(name, key, String(value), Date.now());
       },
@@ -1804,9 +1804,9 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): ExtensionLo
 // ---------------------------------------------------------------------------
 
 function tableNameFor(extensionName: string): string {
-  // _ext_<safe>_migrations. Map any character outside [a-z0-9_] to underscore.
+  // _mod_<safe>_migrations. Map any character outside [a-z0-9_] to underscore.
   const safe = extensionName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
-  return `_ext_${safe}_migrations`;
+  return `_mod_${safe}_migrations`;
 }
 
 const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)/;

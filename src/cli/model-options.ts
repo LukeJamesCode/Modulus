@@ -60,7 +60,7 @@ export function codexExtensionEnabled(home: string = homeDir()): boolean {
   return (
     withDb(home, (db) => {
       const row = db
-        .prepare(`SELECT enabled FROM extension_state WHERE name = ?`)
+        .prepare(`SELECT enabled FROM module_state WHERE name = ?`)
         .get(CODEX_EXTENSION) as { enabled: number } | undefined;
       return row?.enabled !== 0;
     }) ?? false

@@ -274,7 +274,7 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   const panelConfirmBus = createPanelConfirmBus();
 
   const extensionsRoots = defaultExtensionRoots(home);
-  const stateRoot = join(home, 'extension_state');
+  const stateRoot = join(home, 'module_state');
   ensurePrivateDir(stateRoot);
 
   // Voice-note sink for extensions like modulus-voice. The Telegram adapter

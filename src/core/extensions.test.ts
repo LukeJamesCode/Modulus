@@ -213,9 +213,9 @@ test('loader: discovers extension, runs migrations, registers tool/command/job/a
       .all() as Array<{ name: string }>;
     assert.equal(tablesBefore.length, 1);
 
-    // extension_state row created and enabled
+    // module_state row created and enabled
     const state = db
-      .prepare(`SELECT enabled, version FROM extension_state WHERE name = 'demo'`)
+      .prepare(`SELECT enabled, version FROM module_state WHERE name = 'demo'`)
       .get() as { enabled: number; version: string };
     assert.equal(state.enabled, 1);
     assert.equal(state.version, '1.0.0');
@@ -395,7 +395,7 @@ test('loader: disabled extension is recorded but not registered', async () => {
     );
     // Pre-create state row with enabled=0
     db.prepare(
-      `INSERT INTO extension_state (name, version, enabled, installed_at) VALUES (?, ?, 0, ?)`,
+      `INSERT INTO module_state (name, version, enabled, installed_at) VALUES (?, ?, 0, ?)`,
     ).run('disabled', '1.0.0', Date.now());
 
     const loader = createExtensionLoader({
@@ -523,7 +523,7 @@ test('loader: settings sees auth written outside the running extension host', as
 
     assert.equal(await tools.get('cfg_token')!.invoke({}, { log }), '');
     db.prepare(
-      `INSERT INTO extension_settings (extension, key, value, updated_at)
+      `INSERT INTO module_settings (module, key, value, updated_at)
        VALUES ('cfg', 'google_refresh_token', 'fresh-token', ?)`,
     ).run(Date.now());
 

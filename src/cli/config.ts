@@ -4,7 +4,7 @@
 //   1. Core settings (`telegram.*`, `ollama.url`, `models.*`, `tier`, `logLevel`)
 //      stored in ~/.modulus/config.json.
 //   2. Per-extension settings declared via the extension's settings.schema.json,
-//      stored in the `extension_settings` SQLite table.
+//      stored in the `module_settings` SQLite table.
 //
 // The TUI presents both in one menu organised by section so the user can move
 // between core and any installed extension without re-launching.
@@ -289,7 +289,7 @@ function readSettings(
   schema: SettingsSchema,
 ): Record<string, string | number | boolean | undefined> {
   const rows = db
-    .prepare(`SELECT key, value FROM extension_settings WHERE extension = ?`)
+    .prepare(`SELECT key, value FROM module_settings WHERE module = ?`)
     .all(ext) as Array<{ key: string; value: string }>;
   const out: Record<string, string | number | boolean | undefined> = {};
   for (const [k, decl] of Object.entries(schema.properties)) {
@@ -312,12 +312,12 @@ function writeSetting(
   value: string | number | boolean,
 ): void {
   db.prepare(
-    `INSERT INTO extension_settings (extension, key, value, updated_at)
+    `INSERT INTO module_settings (module, key, value, updated_at)
      VALUES (?, ?, ?, ?)
-     ON CONFLICT(extension, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+     ON CONFLICT(module, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   ).run(ext, key, String(value), Date.now());
 }
 
 function deleteSetting(db: ReturnType<typeof openDb>, ext: string, key: string): void {
-  db.prepare(`DELETE FROM extension_settings WHERE extension = ? AND key = ?`).run(ext, key);
+  db.prepare(`DELETE FROM module_settings WHERE module = ? AND key = ?`).run(ext, key);
 }

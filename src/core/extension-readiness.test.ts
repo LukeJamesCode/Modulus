@@ -73,7 +73,7 @@ test('extension readiness classifies ready, disabled, settings, and auth states'
     const db = openDb({ path: join(home, 'modulus.db'), log });
     try {
       db.prepare(
-        `INSERT INTO extension_state (name, version, enabled, installed_at, last_loaded_at)
+        `INSERT INTO module_state (name, version, enabled, installed_at, last_loaded_at)
          VALUES ('modulus-disabled', '0.1.0', 0, ?, ?)`,
       ).run(Date.now(), Date.now());
 

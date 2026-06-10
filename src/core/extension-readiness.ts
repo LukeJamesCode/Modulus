@@ -40,7 +40,7 @@ export function collectExtensionReadiness(roots: readonly string[], db: DB): Ext
         source: ext.source,
         enabled: false,
         status: 'disabled',
-        reasons: ['disabled in extension_state'],
+        reasons: ['disabled in module_state'],
         nextAction: `modulus ext enable ${ext.name}`,
       };
     }
@@ -170,7 +170,7 @@ function discoverInstalledExtensions(roots: readonly string[]): InstalledExtensi
 }
 
 function readEnabledMap(db: DB): Map<string, boolean> {
-  const rows = db.prepare(`SELECT name, enabled FROM extension_state`).all() as Array<{
+  const rows = db.prepare(`SELECT name, enabled FROM module_state`).all() as Array<{
     name: string;
     enabled: number;
   }>;
@@ -178,16 +178,16 @@ function readEnabledMap(db: DB): Map<string, boolean> {
 }
 
 function readSettingsMap(db: DB): Map<string, Map<string, string>> {
-  const rows = db.prepare(`SELECT extension, key, value FROM extension_settings`).all() as Array<{
-    extension: string;
+  const rows = db.prepare(`SELECT module, key, value FROM module_settings`).all() as Array<{
+    module: string;
     key: string;
     value: string;
   }>;
   const out = new Map<string, Map<string, string>>();
   for (const row of rows) {
-    const settings = out.get(row.extension) ?? new Map<string, string>();
+    const settings = out.get(row.module) ?? new Map<string, string>();
     settings.set(row.key, row.value);
-    out.set(row.extension, settings);
+    out.set(row.module, settings);
   }
   return out;
 }

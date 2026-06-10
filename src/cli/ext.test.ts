@@ -62,11 +62,11 @@ test('ext.list shows installed extensions and their state', async () => {
     writeManifest(join(home, 'extensions', 'modulus-a'), 'modulus-a', '1.0.0');
     writeManifest(join(home, 'extensions', 'modulus-b'), 'modulus-b', '2.0.0');
 
-    // Open DB to apply migrations so extension_state exists.
+    // Open DB to apply migrations so module_state exists.
     const log = createLogger({ level: 'error', out: () => {}, err: () => {} });
     const db = openDb({ path: join(home, 'modulus.db'), log });
     db.prepare(
-      `INSERT INTO extension_state (name, version, enabled, installed_at, last_loaded_at)
+      `INSERT INTO module_state (name, version, enabled, installed_at, last_loaded_at)
        VALUES ('modulus-a', '1.0.0', 0, ?, ?)`,
     ).run(Date.now(), Date.now());
     db.close();
@@ -82,7 +82,7 @@ test('ext.list shows installed extensions and their state', async () => {
   }
 });
 
-test('ext.enable / ext.disable flip extension_state.enabled', async () => {
+test('ext.enable / ext.disable flip module_state.enabled', async () => {
   const home = mkHome();
   const oldHome = process.env['MODULUS_HOME'];
   process.env['MODULUS_HOME'] = home;
@@ -92,7 +92,7 @@ test('ext.enable / ext.disable flip extension_state.enabled', async () => {
     await captureStdout(() => ext.disable('modulus-x'));
     let log = createLogger({ level: 'error', out: () => {}, err: () => {} });
     let db = openDb({ path: join(home, 'modulus.db'), log });
-    let row = db.prepare(`SELECT enabled FROM extension_state WHERE name = ?`).get('modulus-x') as
+    let row = db.prepare(`SELECT enabled FROM module_state WHERE name = ?`).get('modulus-x') as
       | { enabled: number }
       | undefined;
     assert.equal(row?.enabled, 0);
@@ -101,7 +101,7 @@ test('ext.enable / ext.disable flip extension_state.enabled', async () => {
     await captureStdout(() => ext.enable('modulus-x'));
     log = createLogger({ level: 'error', out: () => {}, err: () => {} });
     db = openDb({ path: join(home, 'modulus.db'), log });
-    row = db.prepare(`SELECT enabled FROM extension_state WHERE name = ?`).get('modulus-x') as
+    row = db.prepare(`SELECT enabled FROM module_state WHERE name = ?`).get('modulus-x') as
       | { enabled: number }
       | undefined;
     assert.equal(row?.enabled, 1);
@@ -124,11 +124,11 @@ test('ext.uninstall --purge drops settings and state rows', async () => {
     const log = createLogger({ level: 'error', out: () => {}, err: () => {} });
     const db = openDb({ path: join(home, 'modulus.db'), log });
     db.prepare(
-      `INSERT INTO extension_state (name, version, enabled, installed_at, last_loaded_at)
+      `INSERT INTO module_state (name, version, enabled, installed_at, last_loaded_at)
        VALUES ('modulus-y', '0.1.0', 1, ?, ?)`,
     ).run(Date.now(), Date.now());
     db.prepare(
-      `INSERT INTO extension_settings (extension, key, value, updated_at) VALUES ('modulus-y', 'k', 'v', ?)`,
+      `INSERT INTO module_settings (module, key, value, updated_at) VALUES ('modulus-y', 'k', 'v', ?)`,
     ).run(Date.now());
     db.close();
 
@@ -137,9 +137,9 @@ test('ext.uninstall --purge drops settings and state rows', async () => {
 
     const log2 = createLogger({ level: 'error', out: () => {}, err: () => {} });
     const db2 = openDb({ path: join(home, 'modulus.db'), log: log2 });
-    const stateRow = db2.prepare(`SELECT * FROM extension_state WHERE name = ?`).get('modulus-y');
+    const stateRow = db2.prepare(`SELECT * FROM module_state WHERE name = ?`).get('modulus-y');
     const settingsRow = db2
-      .prepare(`SELECT * FROM extension_settings WHERE extension = ?`)
+      .prepare(`SELECT * FROM module_settings WHERE module = ?`)
       .get('modulus-y');
     assert.equal(stateRow, undefined);
     assert.equal(settingsRow, undefined);

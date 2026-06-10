@@ -215,8 +215,8 @@ test('disabling a module removes its agents; orphaned module agents are swept', 
 
     // A leftover from a module uninstalled while the daemon was down.
     h.agents.create({ name: 'ghostling', systemPrompt: 'Orphan.', origin: 'ext:ghost-module' });
-    // Disable demo-codex the way the CLI/panel does: flip extension_state.
-    h.db.prepare(`UPDATE extension_state SET enabled = 0 WHERE name = 'demo-codex'`).run();
+    // Disable demo-codex the way the CLI/panel does: flip module_state.
+    h.db.prepare(`UPDATE module_state SET enabled = 0 WHERE name = 'demo-codex'`).run();
 
     const loader2 = h.makeLoader();
     await loader2.loadAll();

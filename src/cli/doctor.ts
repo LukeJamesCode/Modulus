@@ -482,10 +482,10 @@ function checkVoice(home: string): CheckResult {
     let enabledRow: { enabled: number } | undefined;
     try {
       enabledRow = db
-        .prepare(`SELECT enabled FROM extension_state WHERE name = ?`)
+        .prepare(`SELECT enabled FROM module_state WHERE name = ?`)
         .get('modulus-voice') as { enabled: number } | undefined;
     } catch {
-      return { name: 'voice', ok: true, msg: 'extension_state missing (skipped)' };
+      return { name: 'voice', ok: true, msg: 'module_state missing (skipped)' };
     }
     if (!enabledRow) return { name: 'voice', ok: true, msg: 'modulus-voice not installed' };
     if (enabledRow.enabled === 0) {
@@ -493,12 +493,12 @@ function checkVoice(home: string): CheckResult {
     }
 
     const rows = db
-      .prepare(`SELECT key, value FROM extension_settings WHERE extension = ?`)
+      .prepare(`SELECT key, value FROM module_settings WHERE module = ?`)
       .all('modulus-voice') as Array<{ key: string; value: string }>;
     const s = new Map(rows.map((r) => [r.key, r.value]));
     const voiceId = s.get('voice_id') ?? 'en_GB-northern_english_male-medium';
     const whisperModelId = s.get('whisper_model_id') ?? 'ggml-base.en';
-    const stateDir = join(home, 'extension_state', 'modulus-voice');
+    const stateDir = join(home, 'module_state', 'modulus-voice');
 
     const items: Array<{ label: string; r: ReturnType<typeof resolveVoicePath> }> = [
       { label: 'ffmpeg', r: resolveVoicePath(s.get('ffmpeg_bin') ?? '', 'ffmpeg') },

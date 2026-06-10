@@ -49,7 +49,7 @@ function maskToken(token: string): string {
 
 function readExtSettings(db: DB, ext: string): Map<string, string> {
   const rows = db
-    .prepare(`SELECT key, value FROM extension_settings WHERE extension = ?`)
+    .prepare(`SELECT key, value FROM module_settings WHERE module = ?`)
     .all(ext) as Array<{ key: string; value: string }>;
   return new Map(rows.map((r) => [r.key, r.value]));
 }
@@ -323,9 +323,9 @@ function saveExtSettings(deps: PanelDeps, name: string, body: Record<string, unk
   if (!schema) return false;
   const now = Date.now();
   const stmt = deps.db.prepare(
-    `INSERT INTO extension_settings (extension, key, value, updated_at)
+    `INSERT INTO module_settings (module, key, value, updated_at)
      VALUES (?, ?, ?, ?)
-     ON CONFLICT(extension, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+     ON CONFLICT(module, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   );
   for (const [key, decl] of Object.entries(schema.properties)) {
     if (!(key in body)) continue;

@@ -50,16 +50,16 @@ export async function promptRemainingSettings(
 
   const alreadySet = new Set(
     (
-      db.prepare(`SELECT key FROM extension_settings WHERE extension = ?`).all(extName) as Array<{
+      db.prepare(`SELECT key FROM module_settings WHERE module = ?`).all(extName) as Array<{
         key: string;
       }>
     ).map((r) => r.key),
   );
 
   const insertSetting = db.prepare(
-    `INSERT INTO extension_settings (extension, key, value, updated_at)
+    `INSERT INTO module_settings (module, key, value, updated_at)
      VALUES (?, ?, ?, ?)
-     ON CONFLICT(extension, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+     ON CONFLICT(module, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   );
 
   // Prompt for every non-secret field — including ones with defaults — so the
@@ -118,9 +118,9 @@ export async function promptRemainingSettings(
 
 function upsertSetting(db: DB, extName: string, key: string, value: string): void {
   db.prepare(
-    `INSERT INTO extension_settings (extension, key, value, updated_at)
+    `INSERT INTO module_settings (module, key, value, updated_at)
      VALUES (?, ?, ?, ?)
-     ON CONFLICT(extension, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+     ON CONFLICT(module, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   ).run(extName, key, value, Date.now());
 }
 
@@ -128,7 +128,7 @@ function setupSettings(db: DB, extName: string): ExtensionSettings {
   return {
     get<T = unknown>(key: string, fallback?: T): T {
       const row = db
-        .prepare(`SELECT value FROM extension_settings WHERE extension = ? AND key = ?`)
+        .prepare(`SELECT value FROM module_settings WHERE module = ? AND key = ?`)
         .get(extName, key) as { value: string } | undefined;
       if (!row) return fallback as T;
       return row.value as T;
@@ -138,7 +138,7 @@ function setupSettings(db: DB, extName: string): ExtensionSettings {
     },
     all(): Record<string, string | number | boolean> {
       const rows = db
-        .prepare(`SELECT key, value FROM extension_settings WHERE extension = ?`)
+        .prepare(`SELECT key, value FROM module_settings WHERE module = ?`)
         .all(extName) as Array<{ key: string; value: string }>;
       return Object.fromEntries(rows.map((row) => [row.key, row.value]));
     },

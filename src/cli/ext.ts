@@ -4,8 +4,8 @@
 //   list                       — installed + enabled state
 //   install <name|url|path>    — registry name, git URL, or local folder
 //   create <name> [dir]        — scaffold a new extension folder ready to publish
-//   enable <name>              — flip extension_state.enabled = 1
-//   disable <name>             — flip extension_state.enabled = 0
+//   enable <name>              — flip module_state.enabled = 1
+//   disable <name>             — flip module_state.enabled = 0
 //   uninstall <name> [--purge] — remove the folder; --purge also drops settings
 //   reload [<name>]            — touch the watched directory (or restart hint)
 //
@@ -382,7 +382,7 @@ async function setEnabled(name: string, enabled: boolean): Promise<void> {
     // yet; we still want enable/disable to take effect on next load.
     const now = Date.now();
     db.prepare(
-      `INSERT INTO extension_state (name, version, enabled, installed_at, last_loaded_at)
+      `INSERT INTO module_state (name, version, enabled, installed_at, last_loaded_at)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET enabled = excluded.enabled`,
     ).run(installed.name, installed.version, enabled ? 1 : 0, now, now);
@@ -414,8 +414,8 @@ export async function uninstall(
   rmSync(userFolder, { recursive: true, force: true });
   if (opts.purge) {
     withDb(home, (db) => {
-      db.prepare(`DELETE FROM extension_settings WHERE extension = ?`).run(name);
-      db.prepare(`DELETE FROM extension_state WHERE name = ?`).run(name);
+      db.prepare(`DELETE FROM module_settings WHERE module = ?`).run(name);
+      db.prepare(`DELETE FROM module_state WHERE name = ?`).run(name);
     });
   }
   process.stdout.write(

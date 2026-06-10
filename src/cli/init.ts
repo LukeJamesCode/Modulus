@@ -133,7 +133,7 @@ export function resolveExtensionSelection(
   };
 }
 
-// Write extension_state rows for every bundled extension BEFORE the loader
+// Write module_state rows for every bundled extension BEFORE the loader
 // runs, so unselected ones don't get auto-enabled on first start. Selected
 // extensions get enabled=1; everything else gets enabled=0.
 function presetExtensionStates(
@@ -145,7 +145,7 @@ function presetExtensionStates(
   const db = openDb({ path: join(home, 'modulus.db'), log });
   try {
     const stmt = db.prepare(
-      `INSERT INTO extension_state (name, version, enabled, installed_at, last_loaded_at)
+      `INSERT INTO module_state (name, version, enabled, installed_at, last_loaded_at)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET enabled = excluded.enabled`,
     );
@@ -171,7 +171,7 @@ async function startWebSetup(
   frontendExt: DiscoveredExtension,
 ): Promise<void> {
   // Enable only the panel for now; the user picks the rest in the browser.
-  // This also creates the DB and seeds extension_state rows for every bundled
+  // This also creates the DB and seeds module_state rows for every bundled
   // extension (disabled), so the web Extensions tab can list and toggle them.
   presetExtensionStates(home, bundled, [frontendExt.name]);
 
@@ -189,9 +189,9 @@ async function startWebSetup(
     });
     if (fromAnotherDevice) {
       db.prepare(
-        `INSERT INTO extension_settings (extension, key, value, updated_at)
+        `INSERT INTO module_settings (module, key, value, updated_at)
          VALUES (?, 'listen_host', '0.0.0.0', ?)
-         ON CONFLICT(extension, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+         ON CONFLICT(module, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
       ).run(frontendExt.name, Date.now());
     }
     // Run the panel's setup entrypoint (generates the access token and prints
@@ -416,7 +416,7 @@ export async function run(): Promise<void> {
     );
   }
 
-  // Pre-seed extension_state so unselected bundled extensions are disabled
+  // Pre-seed module_state so unselected bundled extensions are disabled
   // from the first start rather than auto-enabled by the loader.
   presetExtensionStates(
     home,

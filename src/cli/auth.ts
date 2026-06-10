@@ -3,7 +3,7 @@
 // The flow lives in <ext>/auth.ts and registers itself with `host.auth.flow`.
 // Here we set up just enough host plumbing to import that file, run the
 // declared flow with a real I/O stub (terminal prompts), and write the
-// returned settings into the extension_settings table.
+// returned settings into the module_settings table.
 
 import { input, password } from '@inquirer/prompts';
 import { existsSync, readFileSync, mkdirSync } from 'node:fs';
@@ -51,7 +51,7 @@ export async function runAuthForExt(
   if (!authEntry) throw new Error(`'${ext.name}' has no auth entrypoint`);
 
   const log = createLogger({ level: 'warn' });
-  const dataDir = join(homeDir(), 'extension_state', ext.name);
+  const dataDir = join(homeDir(), 'module_state', ext.name);
   mkdirSync(dataDir, { recursive: true });
 
   let captured: AuthFlow | null = null;
@@ -154,9 +154,9 @@ export async function runAuthForExt(
   const result = await flow.run(io);
 
   const insert = db.prepare(
-    `INSERT INTO extension_settings (extension, key, value, updated_at)
+    `INSERT INTO module_settings (module, key, value, updated_at)
      VALUES (?, ?, ?, ?)
-     ON CONFLICT(extension, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+     ON CONFLICT(module, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   );
   const tx = db.transaction((entries: Array<[string, string | number | boolean]>) => {
     const now = Date.now();

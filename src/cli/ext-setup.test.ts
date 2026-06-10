@@ -38,7 +38,7 @@ test('setupExtension runs optional extension setup entrypoint', async () => {
     try {
       await setupExtension(ext, db, dir);
       const row = db
-        .prepare(`SELECT value FROM extension_settings WHERE extension = ? AND key = ?`)
+        .prepare(`SELECT value FROM module_settings WHERE module = ? AND key = ?`)
         .get('demo', 'native_ready') as { value: string } | undefined;
       assert.equal(row?.value, 'true');
     } finally {

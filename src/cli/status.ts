@@ -56,7 +56,7 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
       const db = openDb({ path: dbPath, log });
       try {
         const exts = db
-          .prepare(`SELECT COUNT(*) AS n FROM extension_state WHERE enabled = 1`)
+          .prepare(`SELECT COUNT(*) AS n FROM module_state WHERE enabled = 1`)
           .get() as { n: number } | undefined;
         enabledExtensions = exts?.n ?? 0;
         dbStatus = 'ok';
