@@ -1,0 +1,27 @@
+{
+  // Typechecks the first-party bundled modules against the real core types
+  // (src/**), the same way the module loader runs them at runtime. Separate from
+  // the root tsconfig because modules live outside src/ (rootDir there is src/).
+  // Mirrors the root's strictness so a module that typechecks here behaves the
+  // same once installed. Run via `npm run typecheck:modules`.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts", "../src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

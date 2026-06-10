@@ -14,6 +14,7 @@
   "scripts": {
     "build": "tsc && node scripts/copy-migrations.mjs && node scripts/copy-web.mjs",
     "typecheck": "tsc --noEmit",
+    "typecheck:modules": "tsc -p modules/tsconfig.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

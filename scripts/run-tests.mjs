@@ -29,7 +29,7 @@ function findTests(dir) {
   return out;
 }
 
-const tests = [...findTests('src'), ...findTests('extensions')];
+const tests = [...findTests('src'), ...findTests('modules')];
 if (tests.length === 0) {
   console.log('No test files found.');
   process.exit(0);
