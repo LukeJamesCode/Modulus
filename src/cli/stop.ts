@@ -1,25 +1,14 @@
-// `modulus stop` — stop a running daemon and the web panel.
+// `modulus stop` — stop a running daemon.
 //
 // Reads the PID from ~/.modulus/modulus.pid (written by `modulus start`) and
 // sends SIGTERM. The bot's signal handler does an orderly shutdown that also
-// removes the pid file. Also stops the modulus-frontend web panel (and any
-// orphan panel process still holding its port), unless --agent-only is passed.
+// removes the pid file and closes the in-process web panel.
 
 import { homeDir } from './config-store.js';
 import { clearPid, isAlive, readPid } from './daemon.js';
-import { killPanel } from './panel.js';
 
-export interface StopRunOptions {
-  // Leave the modulus-frontend web panel running. Used by the panel itself
-  // when its Stop button calls /api/agent/stop — otherwise that click
-  // would kill the very UI making the request.
-  agentOnly?: boolean;
-}
-
-export async function run(options: StopRunOptions = {}): Promise<void> {
-  const home = homeDir();
-  stopAgent(home);
-  if (!options.agentOnly) killPanel(home);
+export async function run(): Promise<void> {
+  stopAgent(homeDir());
 }
 
 function stopAgent(home: string): void {

@@ -94,21 +94,19 @@ program
 
 program
   .command('stop')
-  .description('Stop a running modulus daemon and the web panel')
-  .option('--agent-only', 'Do not also stop the modulus-frontend web panel')
-  .action(async (opts: { agentOnly?: boolean }) => {
+  .description('Stop a running modulus daemon (and the in-process web panel)')
+  .action(async () => {
     const { run } = await import('./stop.js');
-    await call('stop', run, { agentOnly: !!opts.agentOnly });
+    await call('stop', run);
   });
 
 program
   .command('logs')
   .option('-f, --follow', 'Follow new log lines, like `tail -f`')
-  .option('--panel', "Stream the panel process's log (where Tudor course builds run)")
   .description('Stream the modulus log file')
-  .action(async (opts: { follow?: boolean; panel?: boolean }) => {
+  .action(async (opts: { follow?: boolean }) => {
     const { run } = await import('./logs.js');
-    await call('logs', run, { follow: !!opts.follow, panel: !!opts.panel });
+    await call('logs', run, { follow: !!opts.follow });
   });
 
 program
@@ -128,17 +126,6 @@ program
     await call('doctor', run);
   });
 
-// Internal: the panel runner. Hidden because the user-facing surface is
-// `modulus start` (which spawns it) and `modulus stop` (which kills it) —
-// see panel.ts.
-program
-  .command('__panel', { hidden: true })
-  .description('(internal) Run the modulus-frontend panel server in this process')
-  .action(async () => {
-    const { run } = await import('./frontend.js');
-    await call('__panel', run);
-  });
-
 program
   .command('update')
   .description('Pull latest code, reinstall dependencies, and rebuild')
@@ -152,13 +139,11 @@ program
   .description('Wipe all Modulus data, update code, and re-run the setup wizard')
   .option('-y, --yes', 'Skip the destructive confirmation prompt')
   .option('--skip-init', 'Wipe and update without launching the terminal setup wizard')
-  .option('--keep-panel', 'Do not stop the modulus-frontend panel process')
-  .action(async (opts: { yes?: boolean; skipInit?: boolean; keepPanel?: boolean }) => {
+  .action(async (opts: { yes?: boolean; skipInit?: boolean }) => {
     const { run } = await import('./fresh.js');
     await call('fresh', run, {
       yes: !!opts.yes,
       init: !opts.skipInit,
-      stopPanel: !opts.keepPanel,
     });
   });
 

@@ -16,22 +16,6 @@ export function logFilePath(home: string = homeDir()): string {
   return join(home, 'log', 'modulus.log');
 }
 
-// PID file for the modulus-frontend web server. It runs as its own process
-// (separate from the agent daemon) so the panel's Start/Stop controls can
-// drive the daemon without taking the UI down with it. `modulus stop` reads
-// this to find and kill the server — see src/cli/panel.ts.
-export function frontendPidFilePath(home: string = homeDir()): string {
-  return join(home, 'frontend.pid');
-}
-
-// Log file for the modulus-frontend panel process. The panel is spawned
-// detached, so without capturing its stdio its logs (including Tudor course
-// generation, which runs in the panel process) would be lost. `modulus start`
-// points the panel's stdout/stderr here so `modulus logs --panel` can tail it.
-export function frontendLogFilePath(home: string = homeDir()): string {
-  return join(home, 'log', 'frontend.log');
-}
-
 // Snapshot of live counters written by the running daemon. `modulus status`
 // reads this so it can report fast-cache hit rate and nudge counts without
 // having to talk to the bot process.
@@ -41,8 +25,8 @@ export function metricsFilePath(home: string = homeDir()): string {
 
 // Bearer token for the in-process web panel. Generated on first start and kept
 // owner-only here (not in config.json) so the config stays safe to share. The
-// browser obtains it via the ?token= link printed at startup / by `modulus
-// status`; see src/panel/auth.ts.
+// browser obtains it via the ?token= link `modulus start` prints at startup;
+// see src/panel/auth.ts.
 export function panelTokenPath(home: string = homeDir()): string {
   return join(home, 'panel-token');
 }

@@ -69,7 +69,7 @@ function SystemTab({ state, onReset }) {
 
   const runMaintenanceFresh = async (confirmText) => {
     const seq = ++commandSeq.current;
-    const command = 'modulus fresh --yes --skip-init --keep-panel';
+    const command = 'modulus fresh';
     setCmd({ running: true, result: { ok: true, command, output: '' } });
     const r = await window.api.post('/api/maintenance/fresh', { confirm: confirmText });
     const data = r.data || {};

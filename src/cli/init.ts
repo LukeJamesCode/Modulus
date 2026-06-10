@@ -37,7 +37,6 @@ import {
   printTelegramCommandsGuide,
   type DiscoveredExtension,
 } from './ext-setup.js';
-import { panelUrl, spawnPanel } from './panel.js';
 import type { Manifest } from '../core/extensions.js';
 
 const TELEGRAM_API = 'https://api.telegram.org';
@@ -207,13 +206,12 @@ async function startWebSetup(
     }
   }
 
-  // Start the panel in the background so the user can open it right away.
-  process.stdout.write('\nStarting the web panel…\n');
-  spawnPanel(home);
-  const url = panelUrl(home);
-  if (url) process.stdout.write(`Panel: ${url}\n`);
+  // The panel is served in-process by the daemon now (no separate process to
+  // spawn). Point the user at `modulus start`, which boots the daemon, serves
+  // the panel, and prints its tokenized URL on startup.
   process.stdout.write(
-    '\nOpen the URL above in your browser to finish setup. Nothing else to do here.\n',
+    '\nSetup staged. Run `modulus start` to launch Modulus with the web panel —\n' +
+      'it prints the panel URL (with its access token) on startup.\n',
   );
 }
 

@@ -8,25 +8,22 @@ import { spawnSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { homeDir } from './config-store.js';
 import { isAlive, readPid } from './daemon.js';
-import { killPanel } from './panel.js';
 import { run as runUpdate } from './update.js';
 import { run as runInit } from './init.js';
 
 export interface FreshOptions {
   yes?: boolean;
   init?: boolean;
-  stopPanel?: boolean;
 }
 
 export async function run(options: FreshOptions = {}): Promise<void> {
   const home = homeDir();
   const shouldRunInit = options.init !== false;
-  const shouldStopPanel = options.stopPanel !== false;
 
   process.stdout.write(
     'Fresh install will erase all Modulus config, the database, logs, installed extensions,\n' +
       'and extension state, including Modulus-managed Piper binaries, ffmpeg paths, and voice\n' +
-      `models${shouldStopPanel ? ', and will stop the web panel (killing any orphan still on its port)' : ''}.\n` +
+      'models. The web panel stops with the daemon below.\n' +
       'Ollama models in ~/.ollama are NOT touched — re-pull only if you want to.\n' +
       `Data directory: ${home}\n\n`,
   );
@@ -67,16 +64,6 @@ export async function run(options: FreshOptions = {}): Promise<void> {
         /* already gone */
       }
     }
-  }
-
-  // Kill the panel too — it's a separate process from the daemon, so the
-  // SIGTERM above doesn't reach it. killPanel also reaps orphans still holding
-  // the panel's port, which a previous crash can leave behind (the same
-  // ERR_EMPTY_RESPONSE situation users hit when 'modulus stop' missed them).
-  if (shouldStopPanel) {
-    killPanel(home);
-  } else {
-    process.stdout.write('Leaving modulus-frontend running for browser setup handoff.\n');
   }
 
   process.stdout.write(`Wiping ${home}...\n`);
