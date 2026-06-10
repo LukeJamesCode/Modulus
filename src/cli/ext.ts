@@ -10,10 +10,11 @@
 //   reload [<name>]            — touch the watched directory (or restart hint)
 //
 // install resolution order for a bare name:
-//   1. local path or git URL — direct
+//   1. local path or git URL — direct (the developer path)
 //   2. repo-bundled module under <repo>/modules/<name>/
-//   3. a public registry: a JSON map of name → git URL, fetched once. The
-//      registry URL defaults to the official one and can be overridden with
+//   3. the curated registry: index.json of name → pinned https tarball + sha256.
+//      Installs via installer.ts (download → verify → strict extract → commit),
+//      the same path the panel marketplace uses. Override the index URL with
 //      MODULUS_REGISTRY_URL for self-hosted forks.
 
 import { confirm } from '@inquirer/prompts';
@@ -41,6 +42,19 @@ import {
 } from './ext-setup.js';
 import type { Manifest } from '../core/modules.js';
 import { collectModuleReadiness, formatModuleReadinessLine } from '../core/module-readiness.js';
+import {
+  stageModule,
+  commitModule,
+  discardStage,
+  describePermissions,
+  hasPermissions,
+  InstallError,
+} from '../core/installer.js';
+import { fetchRegistryIndex, findRegistryEntry } from '../core/registry.js';
+
+// Best-effort core version for the registry entry's minCoreVersion gate; matches
+// package.json and the version the panel reports.
+const HOST_VERSION = '1.0.0';
 
 interface InstalledExt {
   name: string;
@@ -49,42 +63,66 @@ interface InstalledExt {
   source: 'user' | 'repo';
 }
 
-// Default registry URL. The repo ships a registry.json at this path so a fresh
-// `modulus mod install modulus-foo` works out of the box. Self-hosted forks can
-// override with MODULUS_REGISTRY_URL.
-const DEFAULT_REGISTRY_URL =
-  'https://raw.githubusercontent.com/LukeJamesCode/ModulusAgent/main/modules/registry.json';
+// Install a registry module by bare name through the same .tgz pipeline the
+// panel marketplace uses: fetch the index, download + sha256-verify + strictly
+// extract the pinned tarball, show what it can access, and (on a TTY) get
+// consent before committing it to the modules root. Returns the installed name.
+async function installFromRegistry(name: string, dest: string, home: string): Promise<string> {
+  let entries;
+  try {
+    entries = await fetchRegistryIndex();
+  } catch (e) {
+    process.stderr.write(
+      `Could not reach the registry: ${e instanceof Error ? e.message : String(e)}\n`,
+    );
+    process.exit(1);
+  }
+  const entry = findRegistryEntry(entries, name);
+  if (!entry) {
+    process.stderr.write(
+      `Cannot resolve '${name}' as a local path, git URL, repo module, or registry name.\n`,
+    );
+    process.exit(1);
+  }
 
-interface RegistryEntry {
-  name: string;
-  source: string; // a git URL we can clone
-  // Optional path inside the cloned repo where manifest.json lives. Useful
-  // when one repo holds many modules (the monorepo we ship).
-  subpath?: string;
-  description?: string;
-}
-
-async function resolveRegistryEntry(name: string): Promise<RegistryEntry | null> {
-  const url = process.env['MODULUS_REGISTRY_URL']?.trim() || DEFAULT_REGISTRY_URL;
-  // Try the local repo first so dev installs and offline tests work.
-  const localRegistry = join(repoModulesRoot(), 'registry.json');
-  if (existsSync(localRegistry)) {
-    try {
-      const entries = JSON.parse(readFileSync(localRegistry, 'utf8')) as RegistryEntry[];
-      const hit = entries.find((e) => e.name === name);
-      if (hit) return hit;
-    } catch {
-      /* fall through to network */
+  // Show the capabilities the module declares, and on an interactive terminal
+  // require an explicit yes before granting them — the CLI parity of the panel's
+  // consent screen. A non-interactive run treats the explicit install command
+  // as consent (and still prints what was granted).
+  const perms = entry.permissions ?? {};
+  process.stdout.write(`→ Installing ${entry.name} v${entry.version} from the registry\n`);
+  process.stdout.write('  This module can:\n');
+  for (const line of describePermissions(perms)) process.stdout.write(`    • ${line}\n`);
+  const canPrompt = process.stdin.isTTY && process.stdout.isTTY;
+  if (hasPermissions(perms) && canPrompt) {
+    const ok = await confirm({
+      message: `Grant ${entry.name} the access above and install?`,
+      default: true,
+    });
+    if (!ok) {
+      process.stderr.write('Install cancelled.\n');
+      process.exit(1);
     }
   }
+
+  let staged;
   try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const entries = (await res.json()) as RegistryEntry[];
-    return entries.find((e) => e.name === name) ?? null;
-  } catch {
-    return null;
+    staged = await stageModule(entry, {
+      stagingRoot: join(home, 'staging'),
+      hostVersion: HOST_VERSION,
+    });
+  } catch (e) {
+    process.stderr.write(`Install failed: ${e instanceof InstallError ? e.message : String(e)}\n`);
+    process.exit(1);
   }
+  try {
+    commitModule(staged, dest, { replace: existsSync(join(dest, entry.name)) });
+  } catch (e) {
+    discardStage(staged);
+    process.stderr.write(`Install failed: ${e instanceof InstallError ? e.message : String(e)}\n`);
+    process.exit(1);
+  }
+  return entry.name;
 }
 
 function listInstalled(home: string): InstalledExt[] {
@@ -144,22 +182,12 @@ export async function install(source: string | undefined): Promise<void> {
   } else if (looksLikeGitUrl(source)) {
     installedName = installFromGit(source, dest);
   } else {
-    // Bare name resolution: prefer repo-bundled, then registry lookup.
+    // Bare name resolution: prefer repo-bundled, then the registry.
     const repoCandidate = join(repoModulesRoot(), source);
     if (existsSync(join(repoCandidate, 'manifest.json'))) {
       installedName = installFromFolder(repoCandidate, dest);
     } else {
-      const entry = await resolveRegistryEntry(source);
-      if (entry) {
-        const where = entry.subpath ? `${entry.source}#${entry.subpath}` : entry.source;
-        process.stdout.write(`→ Resolved '${source}' from registry: ${where}\n`);
-        installedName = installFromGit(entry.source, dest, entry.subpath);
-      } else {
-        process.stderr.write(
-          `Cannot resolve '${source}' as a local path, git URL, repo module, or registry name.\n`,
-        );
-        process.exit(1);
-      }
+      installedName = await installFromRegistry(source, dest, home);
     }
   }
 
