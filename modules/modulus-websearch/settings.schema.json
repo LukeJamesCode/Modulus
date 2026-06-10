@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "properties": {
+    "confirm_before_search": {
+      "type": "boolean",
+      "default": true,
+      "description": "Ask for approval before Modulus searches the web. In chat/agent use this shows a Yes/No prompt before each web_search runs; in the Learn tab it confirms before a researched course is built. Turn off to allow all web access without asking. (The chat/agent prompt takes effect on the next agent start.)"
+    },
+    "backend": {
+      "type": "string",
+      "enum": ["duckduckgo", "searxng"],
+      "default": "duckduckgo",
+      "description": "Search backend. 'duckduckgo' needs no setup. 'searxng' uses your own self-hosted instance (set searxng_url) and falls back to DuckDuckGo if it returns nothing."
+    },
+    "searxng_url": {
+      "type": "string",
+      "default": "",
+      "description": "Base URL of your SearXNG instance, e.g. https://searx.example.com. Only used when backend is 'searxng'. Must be a public http(s) host (private/loopback addresses are refused)."
+    },
+    "max_results": {
+      "type": "number",
+      "default": 6,
+      "description": "How many results to return per search (1–10)."
+    },
+    "timeout_seconds": {
+      "type": "number",
+      "default": 12,
+      "description": "Per-request network timeout."
+    },
+    "fetch_pages": {
+      "type": "boolean",
+      "default": false,
+      "description": "When researching a topic, also fetch and read the top result pages (richer, but slower and a larger attack surface). Fetches are SSRF-guarded and stripped to text; leave off unless you want the extra depth."
+    }
+  }
+}
