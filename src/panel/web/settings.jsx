@@ -45,6 +45,7 @@ function SettingsTab({ onReRunWizard, onSaved }) {
       toolsModel: cfg.toolsModel,
       tier: cfg.tier,
       logLevel: cfg.logLevel,
+      instantResponses: cfg.instantResponses,
     };
     // Only send a new token if the user typed a real one (not the mask).
     if (cfg.newToken && !cfg.newToken.includes('•')) body.token = cfg.newToken;
@@ -116,7 +117,9 @@ function SettingsTab({ onReRunWizard, onSaved }) {
             onReRun={onReRunWizard}
           />
           <HardwareSection cfg={cfg} set={set} locks={locks} />
+          <BehaviourSection cfg={cfg} set={set} />
           <LoggingSection cfg={cfg} set={set} locks={locks} />
+          <MemoryBrowserSection />
           <FrontendSection onSaved={onSaved} />
         </div>
       </div>
@@ -528,6 +531,177 @@ function LoggingSection({ cfg, set, locks }) {
         )}
       </div>
     </Group>
+  );
+}
+
+function BehaviourSection({ cfg, set }) {
+  // cfg.instantResponses arrives from /api/config as a plain boolean and is
+  // saved back through the shared config save() with the other fields.
+  const on = cfg.instantResponses !== false;
+  return (
+    <Group icon="spark" title="Behaviour" desc="How Modulus replies before a slow turn finishes.">
+      <div>
+        <window.Label hint="Acknowledge instantly when a reply is predicted slow (reasoning, delegation), then stream the real answer when it’s ready — no extra model call for the ack.">
+          Instant responses
+        </window.Label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <window.Toggle
+            checked={on}
+            onChange={(v) => set({ instantResponses: v })}
+            label="Instant responses"
+          />
+          <span style={{ fontSize: 13.5, color: 'var(--text-2)' }}>{on ? 'On' : 'Off'}</span>
+        </div>
+      </div>
+    </Group>
+  );
+}
+
+// Browse the hive-mind memory the main chat and every agent share: list newest
+// first, full-text search (GET /api/memory?q=), and forget a row (DELETE
+// /api/memory/:id). Self-loading, independent of the config save flow.
+function MemoryBrowserSection() {
+  const [memories, setMemories] = useStateSet(null);
+  const [total, setTotal] = useStateSet(0);
+  const [query, setQuery] = useStateSet('');
+  const [error, setError] = useStateSet(null);
+  const [busy, setBusy] = useStateSet(false);
+
+  const load = async (q) => {
+    setBusy(true);
+    const trimmed = (q || '').trim();
+    const path = trimmed ? `/api/memory?q=${encodeURIComponent(trimmed)}` : '/api/memory';
+    const r = await window.api.get(path);
+    setBusy(false);
+    if (r.ok && r.data) {
+      setMemories(Array.isArray(r.data.memories) ? r.data.memories : []);
+      setTotal(typeof r.data.total === 'number' ? r.data.total : 0);
+      setError(null);
+    } else setError((r.data && r.data.error) || r.error || 'Could not load memories.');
+  };
+
+  useEffectSet(() => {
+    load('');
+  }, []);
+
+  const remove = async (id) => {
+    const r = await window.api.del(`/api/memory/${id}`);
+    if (r.ok) {
+      setMemories((m) => (m ? m.filter((x) => x.id !== id) : m));
+      setTotal((t) => (query.trim() ? t : Math.max(0, t - 1)));
+    } else setError((r.data && r.data.error) || r.error || 'Could not delete that memory.');
+  };
+
+  const clearSearch = () => {
+    setQuery('');
+    load('');
+  };
+
+  return (
+    <div>
+      <window.SectionTitle sub="Everything Modulus has remembered — one store shared by the main chat and every agent. Search to filter; delete to forget.">
+        Hive memory
+      </window.SectionTitle>
+      {error && <ErrorNote text={error} onRetry={() => load(query)} />}
+      <window.Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <window.Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && load(query)}
+              placeholder="Search memories…"
+            />
+          </div>
+          <window.Button variant="subtle" icon="search" onClick={() => load(query)} disabled={busy}>
+            {busy ? 'Searching' : 'Search'}
+          </window.Button>
+          {query && (
+            <window.Button variant="ghost" icon="x" onClick={clearSearch}>
+              Clear
+            </window.Button>
+          )}
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
+          {memories == null
+            ? 'Loading…'
+            : query.trim()
+              ? `${memories.length} match${memories.length === 1 ? '' : 'es'}`
+              : `${total} memor${total === 1 ? 'y' : 'ies'} stored`}
+        </div>
+        {memories && memories.length === 0 && (
+          <div style={{ fontSize: 13.5, color: 'var(--text-3)' }}>
+            {query.trim() ? 'Nothing matches that search.' : 'No memories stored yet.'}
+          </div>
+        )}
+        {memories &&
+          memories.map((m) => (
+            <div
+              key={m.id}
+              style={{
+                display: 'flex',
+                gap: 12,
+                alignItems: 'flex-start',
+                paddingTop: 12,
+                borderTop: '1px solid var(--border)',
+              }}
+            >
+              <window.Icon
+                name="database"
+                size={16}
+                style={{ color: 'var(--text-3)', marginTop: 3, flex: '0 0 auto' }}
+              />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 13.5,
+                    color: 'var(--text-1)',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {m.content}
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                  <window.Badge tone="neutral" style={{ fontSize: 10.5 }}>
+                    {m.source}
+                  </window.Badge>
+                  {m.scope && m.scope !== 'global' && (
+                    <window.Badge tone="neutral" style={{ fontSize: 10.5 }}>
+                      {m.scope}
+                    </window.Badge>
+                  )}
+                  <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                    importance {m.importance}
+                  </span>
+                  {m.uses > 0 && (
+                    <span style={{ fontSize: 11, color: 'var(--text-3)' }}>used {m.uses}×</span>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => remove(m.id)}
+                aria-label="Delete memory"
+                title="Forget this"
+                style={{
+                  flex: '0 0 auto',
+                  width: 30,
+                  height: 30,
+                  borderRadius: 8,
+                  border: '1px solid var(--border-2)',
+                  background: 'var(--surface-2)',
+                  color: 'var(--text-3)',
+                  cursor: 'pointer',
+                  display: 'grid',
+                  placeItems: 'center',
+                }}
+              >
+                <window.Icon name="trash" size={14} />
+              </button>
+            </div>
+          ))}
+      </window.Card>
+    </div>
   );
 }
 
