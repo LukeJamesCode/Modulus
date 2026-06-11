@@ -128,7 +128,11 @@ export async function run(): Promise<void> {
 
 function checkHome(home: string): CheckResult {
   if (!existsSync(home)) {
-    return { name: 'home', ok: false, msg: `${home} does not exist — run 'modulus start' to set up` };
+    return {
+      name: 'home',
+      ok: false,
+      msg: `${home} does not exist — run 'modulus start' to set up`,
+    };
   }
   return { name: 'home', ok: true, msg: home };
 }

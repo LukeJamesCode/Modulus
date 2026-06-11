@@ -59,15 +59,17 @@ program
   .option('--agent-only', 'Do not also start the in-process web panel')
   .option('--no-open', "Don't auto-open the browser when first-run setup is needed")
   .option('--lan', 'Bind the panel to all interfaces (0.0.0.0) for this run — Pi / headless')
-  .action(async (opts: { detach?: boolean; agentOnly?: boolean; open?: boolean; lan?: boolean }) => {
-    const { run } = await import('./start.js');
-    await call('start', run, {
-      detach: !!opts.detach,
-      agentOnly: !!opts.agentOnly,
-      noOpen: opts.open === false,
-      lan: !!opts.lan,
-    });
-  });
+  .action(
+    async (opts: { detach?: boolean; agentOnly?: boolean; open?: boolean; lan?: boolean }) => {
+      const { run } = await import('./start.js');
+      await call('start', run, {
+        detach: !!opts.detach,
+        agentOnly: !!opts.agentOnly,
+        noOpen: opts.open === false,
+        lan: !!opts.lan,
+      });
+    },
+  );
 
 program
   .command('init')

@@ -808,7 +808,9 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
           ctx.chat.id,
         );
         if (matched) {
-          await ctx.reply("✅ You're connected to Modulus. Restart Modulus to finish.").catch(() => {});
+          await ctx
+            .reply("✅ You're connected to Modulus. Restart Modulus to finish.")
+            .catch(() => {});
           return;
         }
       }
