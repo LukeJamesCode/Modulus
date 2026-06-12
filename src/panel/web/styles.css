@@ -1,8 +1,8 @@
 /* ===========================================================================
    Modulus Frontend — design tokens
-   "Helix" — clean, minimal, dark-only. Near-black backdrop with a violet
-   cast, quiet flat surfaces, hairline borders, and a pink→purple accent
-   pair (the DNA-helix brand). Calm chrome, generous radii, no glass noise:
+   "Helix" — clean, minimal, dark-only. Greyish-black neutral backdrop,
+   quiet flat surfaces, hairline borders, and a pink→purple accent pair
+   (the DNA-helix brand). Calm chrome, generous radii, no glass noise:
    the chat is the hero, everything else recedes.
    =========================================================================== */
 
@@ -42,21 +42,22 @@
   --radius-sm: 8px;
   --radius-lg: 16px;
 
-  /* Near-black with a violet cast; flat surface tiers, hairline borders. */
-  --bg: #0e0b14;
-  --bg-2: #0a0810;
-  --surface: #171221;
-  --surface-2: #1f1930;
-  --raised: #2a2240;
-  --border: rgba(220, 200, 255, 0.09);
-  --border-2: rgba(220, 200, 255, 0.17);
-  --text: #ece7f6;
-  --text-2: #b9b0cc;
-  --text-3: #7e7494;
-  --shadow: 0 4px 16px rgba(5, 2, 12, 0.5), 0 20px 48px rgba(5, 2, 12, 0.4);
-  --shadow-sm: 0 1px 3px rgba(5, 2, 12, 0.55);
-  --shadow-pop: 0 24px 70px rgba(5, 2, 12, 0.7);
-  --code-bg: #0a0712;
+  /* Greyish black: neutral charcoal tiers — the pink/purple lives only in
+     the accents, never the backdrop. */
+  --bg: #131316;
+  --bg-2: #0e0e10;
+  --surface: #1b1b1f;
+  --surface-2: #232329;
+  --raised: #2e2e35;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-2: rgba(255, 255, 255, 0.17);
+  --text: #e9e9ee;
+  --text-2: #b3b3bd;
+  --text-3: #7e7e8a;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 20px 48px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.55);
+  --shadow-pop: 0 24px 70px rgba(0, 0, 0, 0.7);
+  --code-bg: #0b0b0d;
 
   /* The helix pair: pink (--accent) flowing into purple (--accent-2). Solid
      fills use --accent; icons/active text use the brighter --accent-strong;
@@ -76,14 +77,14 @@
 
   /* Legacy glass tokens — kept as quiet flat aliases so existing component
      rules keep working; the blur is effectively decorative now. */
-  --glass-bg: rgba(23, 18, 33, 0.78);
-  --glass-bg-strong: rgba(23, 18, 33, 0.96);
+  --glass-bg: rgba(27, 27, 31, 0.78);
+  --glass-bg-strong: rgba(27, 27, 31, 0.96);
   --glass-border: var(--border);
   --glass-blur: 18px;
   --bloom: 0 0 20px rgba(233, 85, 159, 0.22);
   --bloom-strong: 0 0 28px rgba(157, 107, 255, 0.32);
-  --aurora-1: rgba(157, 107, 255, 0.05);
-  --aurora-2: rgba(233, 85, 159, 0.05);
+  --aurora-1: transparent;
+  --aurora-2: transparent;
   color-scheme: dark;
 }
 
