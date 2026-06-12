@@ -1942,13 +1942,53 @@ function AgentEditor({ initial, agents, onClose, onSave, error }) {
 // running; cleared by the loop on completion.
 function ThinkingPane({ text, running }) {
   const ref = useRef(null);
+  const [tps, setTps] = useState(0);
+  const metrics = useRef({ len: 0, time: 0 });
+
+  useEffect(() => {
+    if (!text || !running) {
+      metrics.current = { len: 0, time: 0 };
+      setTps(0);
+      return;
+    }
+    const len = text.length;
+    const now = Date.now();
+    const { len: lastLen, time: lastTime } = metrics.current;
+    
+    if (lastLen === 0) {
+      metrics.current = { len, time: now };
+      return;
+    }
+    
+    // Sample every ~2 seconds for stability
+    const deltaMs = now - lastTime;
+    if (deltaMs >= 2000) {
+      if (len > lastLen) {
+        const deltaChars = len - lastLen;
+        const deltaSecs = deltaMs / 1000;
+        // ~4 chars per token approximation
+        setTps(Math.round((deltaChars / 4) / deltaSecs));
+      }
+      metrics.current = { len, time: now };
+    }
+  }, [text, running]);
+
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [text]);
+
   if (!running || !text) return null;
+
   return (
     <div>
-      <window.Label hint="The model's live reasoning for the current step.">Thinking</window.Label>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+        <window.Label hint="The model's live reasoning for the current step.">Thinking</window.Label>
+        {tps > 0 && (
+          <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 6 }}>
+            ~{tps} t/s
+          </div>
+        )}
+      </div>
       <pre
         ref={ref}
         style={{
@@ -2004,12 +2044,17 @@ function PlanChecklist({ plan }) {
 }
 
 // Budget burn-down: rounds used vs cap, and elapsed wall-clock vs cap.
-function BudgetGauge({ task, agent }) {
-  if (!agent || agent.mode !== 'autonomous') return null;
+function BudgetGauge({ task, agent, transcript }) {
+  if (!agent) return null;
   const rounds = task.roundsUsed || 0;
   const maxRounds = agent.maxTotalRounds || 30;
   const elapsed = task.startedAt ? Date.now() - task.startedAt : 0;
   const maxWall = agent.maxWallClockMs || 30 * 60_000;
+  
+  const ctxLength = (task.prompt?.length || 0) + (transcript || []).reduce((acc, m) => acc + (m.content || '').length, 0);
+  const contextTokens = Math.round(ctxLength / 4);
+  const maxTokens = agent.budgetTokens || 4096;
+
   const pct = (n, d) => Math.min(100, Math.round((n / Math.max(1, d)) * 100));
   const mins = (ms) => `${Math.floor(ms / 60000)}m`;
   const bar = (label, used, max, text, tone) => (
@@ -2033,9 +2078,10 @@ function BudgetGauge({ task, agent }) {
   return (
     <div>
       <window.Label>Budget</window.Label>
-      <div style={{ display: 'flex', gap: 12 }}>
-        {bar('Rounds', rounds, maxRounds, `${rounds} / ${maxRounds}`, 'blue')}
-        {bar('Time', elapsed, maxWall, `${mins(elapsed)} / ${mins(maxWall)}`, 'green')}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        {bar('Context', contextTokens, maxTokens, `~${contextTokens} / ${maxTokens}t`, 'purple')}
+        {agent.mode === 'autonomous' && bar('Rounds', rounds, maxRounds, `${rounds} / ${maxRounds}`, 'blue')}
+        {agent.mode === 'autonomous' && bar('Time', elapsed, maxWall, `${mins(elapsed)} / ${mins(maxWall)}`, 'green')}
       </div>
     </div>
   );
@@ -2214,7 +2260,7 @@ function TaskDetail({ taskId, onClose, onCancelled }) {
               <div style={{ fontSize: 13, color: 'var(--err)' }}>{task.error}</div>
             </div>
           )}
-          <BudgetGauge task={task} agent={agent} />
+          <BudgetGauge task={task} agent={agent} transcript={transcript} />
           <ThinkingPane text={task.liveText} running={task.status === 'running'} />
           <PlanChecklist plan={task.plan} />
           {running && agent && agent.mode === 'autonomous' && <SteerBox taskId={taskId} />}

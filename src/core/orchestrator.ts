@@ -49,6 +49,76 @@ export function looksLikeFakeToolCall(text: string, allowedTools: ReadonlySet<st
   return false;
 }
 
+// Parses raw text to extract JSON/XML-based tool calls. Used to support models
+// (like Qwen3.5 or Gemma4) that hallucinate structured tool calls as text
+// instead of using the native tool-calling API.
+export function extractTextToolCalls(text: string, allowedTools: ReadonlySet<string>): ToolCall[] {
+  const t = text.trim();
+  if (!t) return [];
+  const extracted: ToolCall[] = [];
+  let match;
+
+  // Format 1: Antigravity/Gemini style `<|tool_call>call:tool_name{"args": "..."}<tool_call|>`
+  const agRegex = /<\|tool_call>call:([a-zA-Z0-9_]+)(\{.*?\})<tool_call\|>/gs;
+  while ((match = agRegex.exec(t)) !== null) {
+    const name = match[1]!;
+    if (allowedTools.has(name)) {
+      try {
+        const args = JSON.parse(match[2]!);
+        extracted.push({ id: `ext_${Date.now()}_${extracted.length}`, name, arguments: args });
+      } catch {
+        // Skip invalid JSON
+      }
+    }
+  }
+
+  // Format 2: Standard XML `<tool_call>{"name": "tool_name", "arguments": {...}}</tool_call>`
+  const xmlRegex = /<tool_call>\s*(\{.*?\})\s*<\/tool_call>/gs;
+  while ((match = xmlRegex.exec(t)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]!);
+      const name = parsed.name || parsed.type;
+      if (typeof name === 'string' && allowedTools.has(name)) {
+        const args = parsed.arguments || {};
+        extracted.push({ id: `ext_${Date.now()}_${extracted.length}`, name, arguments: args });
+      }
+    } catch {
+      // Skip invalid JSON
+    }
+  }
+
+  // Format 3: Markdown JSON block ```json {"name": "tool_name", "arguments": {...}} ```
+  const jsonRegex = /```(?:json)?\s*\n?\s*(\{[\s\S]{0,1000}?"(?:type|name)"\s*:\s*"[a-z_][a-z0-9_]*"[\s\S]*?\})\s*```/ig;
+  while ((match = jsonRegex.exec(t)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]!);
+      const name = parsed.name || parsed.type;
+      if (typeof name === 'string' && allowedTools.has(name)) {
+        const args = parsed.arguments || {};
+        extracted.push({ id: `ext_${Date.now()}_${extracted.length}`, name, arguments: args });
+      }
+    } catch {
+      // Skip invalid JSON
+    }
+  }
+
+  // Format 4: Raw JSON object payload
+  if (extracted.length === 0 && t.startsWith('{') && t.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(t);
+      const name = parsed.name || parsed.type;
+      if (typeof name === 'string' && allowedTools.has(name)) {
+        const args = parsed.arguments || {};
+        extracted.push({ id: `ext_${Date.now()}_${extracted.length}`, name, arguments: args });
+      }
+    } catch {
+      // Skip invalid JSON
+    }
+  }
+
+  return extracted;
+}
+
 // Ollama returns HTTP 500 with an XML/JSON parse error message when the model
 // emits a malformed tool-call payload that its parser can't decode. This is
 // not a backend outage — it's a model misfire, so we recover the same way we
@@ -724,17 +794,23 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
         lastChunk = await drain(initial);
 
         // Fake-tool-call sanitizer (initial round). If the model wrote
-        // tool-call-shaped text instead of emitting a real tool call, clear
-        // the accumulated reply so the empty-text safety net kicks in and
-        // retries with tools off. Keeps the user from seeing replies like
-        // `[tasks_list]` or ```json {"type":"briefing_tomorrow"}```.
+        // tool-call-shaped text instead of emitting a real tool call, attempt
+        // to parse it. If it can be parsed (e.g. from Gemma4/Qwen3.5 JSON
+        // blocks), convert it into an actual tool call. Otherwise, clear the
+        // reply and let the safety net retry with tools off.
         if (
           assistantText &&
           !(lastChunk?.toolCalls && lastChunk.toolCalls.length > 0) &&
           toolSchemas.length > 0
         ) {
           const allowed = new Set(toolSchemas.map((s) => s.function.name));
-          if (looksLikeFakeToolCall(assistantText, allowed)) {
+          const extracted = extractTextToolCalls(assistantText, allowed);
+          
+          if (extracted.length > 0) {
+            cl.info('extracted tool calls from plain text', { count: extracted.length });
+            lastChunk = { ...lastChunk!, toolCalls: extracted };
+            assistantText = ''; // Clear text to avoid persisting raw JSON as chat history
+          } else if (looksLikeFakeToolCall(assistantText, allowed)) {
             cl.warn('model emitted fake tool-call as plain text — retrying with tools off', {
               sample: assistantText.slice(0, 120),
             });
