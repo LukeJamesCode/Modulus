@@ -133,7 +133,21 @@ export async function startSetupServer(
     onStop: () => opts.onStop(),
   };
 
-  const handle = await createPanel(deps);
+  let handle: PanelHandle;
+  try {
+    handle = await createPanel(deps);
+  } catch (err) {
+    // createPanel can throw (e.g. EADDRINUSE on the configured port). Both the
+    // pairing long-poll interval and the open DB would otherwise outlive this
+    // function and keep the event loop alive, hanging the CLI / test process.
+    pairing.stop();
+    try {
+      db.close();
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
 
   return {
     handle,

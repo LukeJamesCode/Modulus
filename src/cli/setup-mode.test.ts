@@ -57,6 +57,18 @@ before(async () => {
   const a = ollama.address();
   ollamaUrl = `http://127.0.0.1:${typeof a === 'object' && a ? a.port : 0}`;
 
+  // Bind the panel to an OS-chosen port so the suite survives a real Modulus
+  // daemon already holding the default 7777 on this dev box.
+  saveConfig(
+    {
+      telegram: { token: '', allowedIds: [] },
+      ollama: { url: ollamaUrl },
+      models: { chat: 'qwen2.5:0.5b' },
+      panel: { enabled: true, port: 0, bind: '127.0.0.1' },
+    },
+    home,
+  );
+
   server = await startSetupServer(home, { onStop: () => {} });
   const u = new URL(server.handle.url);
   base = `${u.protocol}//${u.host}`;
