@@ -1,8 +1,8 @@
 // Root app. Holds the shared agent/health state (polled from /api/state),
 // decides between the first-run wizard and the main hub, and owns the agent
 // start/stop/restart actions (which POST to /api/agent/* — the server shells
-// out to `modulus start --detach` / `modulus stop`). Theme is a simple
-// localStorage-backed light/dark toggle; dark is the default.
+// out to `modulus start --detach` / `modulus stop`). The panel is dark-only
+// ("Helix" theme): no theme or density toggles.
 const { useState, useEffect, useCallback, useRef } = React;
 
 // Chat and Voice Hub are folded into the Dashboard (a Chat/Voice toggle there),
@@ -15,47 +15,7 @@ const NAV = [
   { id: 'system', label: 'System', icon: 'pulse' },
 ];
 
-function useTheme() {
-  const [theme, setTheme] = useState(() => {
-    try {
-      return localStorage.getItem('modulus_theme') || 'dark';
-    } catch {
-      return 'dark';
-    }
-  });
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    try {
-      localStorage.setItem('modulus_theme', theme);
-    } catch {
-      /* ignore */
-    }
-  }, [theme]);
-  return [theme, setTheme];
-}
-
-function useDensity() {
-  const [density, setDensity] = useState(() => {
-    try {
-      return localStorage.getItem('modulus_density') || 'balanced';
-    } catch {
-      return 'balanced';
-    }
-  });
-  useEffect(() => {
-    document.documentElement.setAttribute('data-density', density);
-    try {
-      localStorage.setItem('modulus_density', density);
-    } catch {
-      /* ignore */
-    }
-  }, [density]);
-  return [density, setDensity];
-}
-
 function App() {
-  const [theme, setTheme] = useTheme();
-  const [density, setDensity] = useDensity();
   const [state, setState] = useState(null);
   const [offline, setOffline] = useState(false);
   const [loadError, setLoadError] = useState(null); // reachable but rejected (e.g. 401)
@@ -234,10 +194,6 @@ function App() {
         enabledModules={enabledModules}
         needsSetup={needsSetup}
         onOpenModules={() => setRoute('modules')}
-        theme={theme}
-        setTheme={setTheme}
-        density={density}
-        setDensity={setDensity}
       />
 
       <main className="main-panel">
@@ -534,26 +490,57 @@ function ConfigErrorBar({ message }) {
   );
 }
 
+// Brand mark: a DNA double helix, pink strand crossing a purple strand.
+function HelixMark({ size = 34 }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 64 64"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      style={{ flex: 'none', filter: 'drop-shadow(0 0 10px rgba(233, 85, 159, 0.35))' }}
+    >
+      <defs>
+        <linearGradient id="helix-a" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#ff7ab8" />
+          <stop offset="1" stopColor="#e9559f" />
+        </linearGradient>
+        <linearGradient id="helix-b" x1="64" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#b78aff" />
+          <stop offset="1" stopColor="#9d6bff" />
+        </linearGradient>
+      </defs>
+      {/* base-pair rungs */}
+      <g stroke="#c77be0" strokeWidth="2.6" strokeLinecap="round" opacity="0.55">
+        <path d="M24.5 11 H39.5" />
+        <path d="M21 18 H43" />
+        <path d="M24.5 25 H39.5" />
+        <path d="M24.5 39 H39.5" />
+        <path d="M21 46 H43" />
+        <path d="M24.5 53 H39.5" />
+      </g>
+      {/* the two strands */}
+      <path
+        d="M32 4 Q60 18 32 32 Q4 46 32 60"
+        stroke="url(#helix-a)"
+        strokeWidth="6.5"
+        strokeLinecap="round"
+      />
+      <path
+        d="M32 4 Q4 18 32 32 Q60 46 32 60"
+        stroke="url(#helix-b)"
+        strokeWidth="6.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function Wordmark() {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-      <svg
-        width="34"
-        height="34"
-        viewBox="0 0 100 100"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-        style={{ flex: 'none', filter: 'drop-shadow(0 0 8px rgba(0, 229, 91, 0.45))' }}
-      >
-        <path d="M 6.7 25 L 6.7 75 L 50 100 L 50 75 L 28.3 62.5 L 28.3 37.5 Z" fill="#22c55e" />
-        <path d="M 28.3 37.5 L 28.3 62.5 L 50 75 L 50 50 Z" fill="#14532d" />
-        <path d="M 50 0 L 50 25 L 28.3 37.5 L 6.7 25 Z" fill="#4ade80" />
-        <path d="M 93.3 50 L 93.3 75 L 50 100 L 50 75 L 71.7 62.5 L 71.7 50 Z" fill="#16a34a" />
-        <path d="M 71.7 50 L 71.7 62.5 L 50 50 L 50 37.5 Z" fill="#22c55e" />
-        <path d="M 93.3 50 L 71.7 50 L 50 37.5 L 71.7 37.5 Z" fill="#4ade80" />
-        <path d="M 28.3 62.5 L 50 75 L 71.7 62.5 L 50 50 Z" fill="#34d399" />
-        <path d="M 50 25 L 71.7 37.5 L 71.7 50 L 50 37.5 Z" fill="#14532d" />
-      </svg>
+      <HelixMark />
       <div style={{ lineHeight: 1.05, marginTop: 2 }}>
         <div
           className="display"
@@ -561,7 +548,17 @@ function Wordmark() {
         >
           MODULUS
         </div>
-        <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, letterSpacing: 0.5 }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: 0.5,
+            background: 'var(--brand-gradient)',
+            WebkitBackgroundClip: 'text',
+            backgroundClip: 'text',
+            color: 'transparent',
+          }}
+        >
           CONTROL CENTER
         </div>
       </div>
@@ -569,17 +566,10 @@ function Wordmark() {
   );
 }
 
+Object.assign(window, { HelixMark });
+
 /* ---------------- sidebar ---------------- */
-function Sidebar({
-  route,
-  setRoute,
-  moduleCount,
-  enabledModules,
-  needsSetup,
-  onOpenModules,
-  theme,
-  setTheme,
-}) {
+function Sidebar({ route, setRoute, moduleCount, enabledModules, needsSetup, onOpenModules }) {
   const items = NAV.filter(
     (n) => !n.requiresModule || (enabledModules || []).indexOf(n.requiresModule) !== -1,
   );
@@ -623,20 +613,8 @@ function Sidebar({
       }}
       className="sidebar"
     >
-      <div
-        style={{
-          padding: '2px 6px 14px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}
-      >
+      <div style={{ padding: '2px 6px 14px', display: 'flex', alignItems: 'center' }}>
         <Wordmark />
-        <window.IconButton
-          name={theme === 'dark' ? 'sun' : 'moon'}
-          label={theme === 'dark' ? 'Light theme' : 'Dark theme'}
-          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-        />
       </div>
       <nav style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         {items.map((n) => {

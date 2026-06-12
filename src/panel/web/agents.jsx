@@ -928,7 +928,7 @@ function LaunchComposer({ agents, workflows, onDispatchAgent, onRunWorkflow }) {
 }
 
 function AgentsTab({ state }) {
-  const [view, setView] = useState('run'); // run | agents | workflows
+  const [view, setView] = useState('chats'); // chats | run | agents | workflows
   const [agents, setAgents] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [workflows, setWorkflows] = useState([]); // authored workflow definitions
@@ -1118,12 +1118,21 @@ function AgentsTab({ state }) {
   };
 
   return (
-    <div style={{ maxWidth: 1320, margin: '0 auto', width: '100%' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+    <div
+      style={{
+        maxWidth: 1320,
+        margin: '0 auto',
+        width: '100%',
+        // The Chats view is a full-height chat app; the other views scroll.
+        ...(view === 'chats' ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } : {}),
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18, flex: 'none' }}>
         <window.Segmented
           value={view}
           onChange={setView}
           options={[
+            { value: 'chats', label: 'Chats' },
             { value: 'run', label: 'Run' },
             { value: 'agents', label: 'Agents' },
             { value: 'workflows', label: 'Workflows' },
@@ -1135,6 +1144,19 @@ function AgentsTab({ state }) {
         <div style={{ marginBottom: 14 }}>
           <window.Badge tone="err">{error}</window.Badge>
         </div>
+      )}
+
+      {view === 'chats' && (
+        <window.AgentChatsView
+          agents={agents}
+          tasks={tasks}
+          approvals={approvals}
+          onNewAgent={() => setEditing({ ...EMPTY_AGENT })}
+          onEditAgent={(a) => setEditing(a)}
+          onOpenTask={(id) => setOpenTask(id)}
+          onDispatch={(a) => setDispatchFor(a)}
+          refresh={load}
+        />
       )}
 
       {view === 'run' && (

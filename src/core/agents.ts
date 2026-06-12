@@ -33,6 +33,24 @@ export function isAgentChatId(chatId: number): boolean {
   return chatId >= AGENT_CHAT_ID_BASE;
 }
 
+// Per-agent direct-message ("DM") virtual ids live in their own band above the
+// task band: dm_chat_id = AGENT_DM_CHAT_ID_BASE + agent.id. A DM is ONE
+// persistent conversation per agent (the panel's Slack-style chat), unlike
+// task ids which get a fresh conversation per run. The band still satisfies
+// isAgentChatId so DM transcripts stay out of user chat surfaces, but the
+// confirm router must branch on isAgentDmChatId FIRST: a DM turn is attended
+// (a human is watching the panel stream), so confirms render inline there
+// instead of parking in the unattended approval queue.
+export const AGENT_DM_CHAT_ID_BASE = 8_000_000_000_000;
+
+export function agentDmChatId(agentId: number): number {
+  return AGENT_DM_CHAT_ID_BASE + agentId;
+}
+
+export function isAgentDmChatId(chatId: number): boolean {
+  return chatId >= AGENT_DM_CHAT_ID_BASE;
+}
+
 // Name of the built-in delegation tool. Exposed only to agents whose
 // definition has canDelegate; the main (Telegram/panel) orchestrator filters
 // it out entirely. Registered by setupAgentDelegation (agent-delegation.ts).
@@ -1052,6 +1070,19 @@ export type AgentRunEvent =
     }
   | { type: 'done'; ok: boolean };
 
+// Streaming hooks + result for a direct-chat (DM) turn with an agent persona.
+export interface AgentChatOptions {
+  thinkMode?: ThinkMode | null;
+  onDelta?: (delta: string) => void;
+  onThinking?: (thinking: string) => void;
+}
+
+export interface AgentChatResult {
+  ok: boolean;
+  text: string;
+  error?: string;
+}
+
 export interface AgentRuntime {
   // Run a queued task to completion. Marks it running, drives the orchestrator,
   // persists result/error + the conversation link, returns the outcome.
@@ -1061,6 +1092,16 @@ export interface AgentRuntime {
   cancelTask(taskId: number): boolean;
   // Subscribe to a task's live events (panel SSE). Returns an unsubscribe fn.
   subscribe(taskId: number, fn: (e: AgentRunEvent) => void): () => void;
+  // Direct chat with an agent persona on its persistent DM conversation
+  // (agentDmChatId). Interactive like the main panel chat — it does NOT go
+  // through the task queue; the loop/planning/delegation tools are excluded.
+  // One turn per agent at a time: a second send while busy is rejected.
+  chat(agentId: number, text: string, opts?: AgentChatOptions): Promise<AgentChatResult>;
+  // Abort the in-flight DM turn for an agent, if any.
+  stopChat(agentId: number): boolean;
+  // Wipe the agent's DM history (conversations + messages for its DM chat id).
+  clearChat(agentId: number): void;
+  chatBusy(agentId: number): boolean;
   shutdown(): Promise<void>;
 }
 
@@ -1092,11 +1133,36 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
     };
   }
 
-  function buildOrchestrator(agent: AgentDefinition, override: string[] | null): Orchestrator {
-    const tools = filterToolRegistry(opts.tools, agentPredicate(agent, override));
+  // Tool view for a DM turn: the agent's own allowlist, minus every task-run
+  // affordance. Delegation/approval/planning tools all resolve their task via
+  // ctx.chatId - AGENT_CHAT_ID_BASE, which is meaningless on a DM conversation,
+  // so they must never be visible there.
+  function dmPredicate(agent: AgentDefinition): (h: ToolHandler) => boolean {
+    const own = agentToolPredicate(agent.toolAllowlist);
+    return (h) =>
+      h.name !== SPAWN_AGENT_TOOL_NAME &&
+      h.name !== SPAWN_AGENTS_TOOL_NAME &&
+      h.name !== REQUEST_APPROVAL_TOOL_NAME &&
+      !isPlanningTool(h.name) &&
+      own(h);
+  }
+
+  function buildOrchestrator(
+    agent: AgentDefinition,
+    override: string[] | null,
+    dm = false,
+  ): Orchestrator {
+    const tools = filterToolRegistry(
+      opts.tools,
+      dm ? dmPredicate(agent) : agentPredicate(agent, override),
+    );
     let systemPrompt = agent.systemPrompt;
-    if (agent.canDelegate) systemPrompt = `${systemPrompt}\n\n${delegateRosterPrompt(agent)}`;
-    if (agent.mode === 'autonomous') systemPrompt = `${systemPrompt}\n\n${AUTONOMOUS_PREAMBLE}`;
+    // DM turns are conversational: no delegate roster (spawn_agent is hidden)
+    // and no autonomous loop contract (its planning tools are hidden too).
+    if (!dm && agent.canDelegate)
+      systemPrompt = `${systemPrompt}\n\n${delegateRosterPrompt(agent)}`;
+    if (!dm && agent.mode === 'autonomous')
+      systemPrompt = `${systemPrompt}\n\n${AUTONOMOUS_PREAMBLE}`;
     return createOrchestrator({
       db: opts.db,
       llm: opts.llm,
@@ -1174,6 +1240,20 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
     if (hit) void hit.orch.shutdown();
     const orch = buildOrchestrator(agent, null);
     cache.set(agent.id, { cacheKey, orch });
+    return orch;
+  }
+
+  // DM orchestrators are cached separately: same persona, different tool view
+  // and prompt (no roster/preamble), keyed by updatedAt alone since the
+  // delegate roster never appears in a DM prompt.
+  const dmCache = new Map<number, { cacheKey: string; orch: Orchestrator }>();
+  function dmOrchestratorFor(agent: AgentDefinition): Orchestrator {
+    const hit = dmCache.get(agent.id);
+    const cacheKey = String(agent.updatedAt);
+    if (hit && hit.cacheKey === cacheKey) return hit.orch;
+    if (hit) void hit.orch.shutdown();
+    const orch = buildOrchestrator(agent, null, true);
+    dmCache.set(agent.id, { cacheKey, orch });
     return orch;
   }
 
@@ -1631,12 +1711,84 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
     return task.status === 'queued' || task.status === 'running' || task.status === 'cancelled';
   }
 
+  // -- direct chat (panel DMs) -----------------------------------------------
+  const dmActive = new Set<number>();
+
+  async function chat(
+    agentId: number,
+    text: string,
+    chatOpts: AgentChatOptions = {},
+  ): Promise<AgentChatResult> {
+    const agent = opts.registry.get(agentId);
+    if (!agent) return { ok: false, text: '', error: `agent ${agentId} not found` };
+    if (dmActive.has(agentId)) {
+      return { ok: false, text: '', error: 'agent is already replying' };
+    }
+    dmActive.add(agentId);
+    const chatId = agentDmChatId(agentId);
+    const orch = dmOrchestratorFor(agent);
+    let buffer = '';
+    let finalText: string | undefined;
+    try {
+      await orch.handleUserMessage({
+        chatId,
+        userId: opts.ownerUserId,
+        text,
+        ...(chatOpts.thinkMode && chatOpts.thinkMode !== 'auto'
+          ? { thinkMode: chatOpts.thinkMode }
+          : {}),
+        send: (chunk: ReplyChunk) => {
+          if (chunk.thinking) chatOpts.onThinking?.(chunk.thinking);
+          if (chunk.delta) {
+            buffer += chunk.delta;
+            chatOpts.onDelta?.(chunk.delta);
+          }
+          if (chunk.done) {
+            if (chunk.meta?.afterTurn) finalText = chunk.meta.afterTurn.assistantText;
+            else if (typeof chunk.replace === 'string') finalText = chunk.replace;
+          }
+        },
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log.warn('agent DM turn threw', { agent: agent.name, error: msg });
+      return { ok: false, text: buffer, error: msg };
+    } finally {
+      dmActive.delete(agentId);
+    }
+    const errored = orch.lastError(chatId);
+    const out = finalText ?? buffer;
+    return errored ? { ok: false, text: out, error: errored } : { ok: true, text: out };
+  }
+
+  function stopChat(agentId: number): boolean {
+    const agent = opts.registry.get(agentId);
+    if (!agent) return false;
+    return dmOrchestratorFor(agent).stop(agentDmChatId(agentId));
+  }
+
+  function clearChat(agentId: number): void {
+    stopChat(agentId);
+    const chatId = agentDmChatId(agentId);
+    // Messages cascade with their conversations (foreign_keys is ON); dropping
+    // the telegram_chats pointer makes the next turn start a fresh conversation.
+    opts.db.prepare(`DELETE FROM conversations WHERE telegram_chat_id = ?`).run(chatId);
+    opts.db.prepare(`DELETE FROM telegram_chats WHERE chat_id = ?`).run(chatId);
+  }
+
+  function chatBusy(agentId: number): boolean {
+    return dmActive.has(agentId);
+  }
+
   async function shutdown(): Promise<void> {
     for (const [taskId] of active) cancelTask(taskId);
-    await Promise.all([...cache.values()].map((c) => c.orch.shutdown()));
+    await Promise.all(
+      [...cache.values(), ...dmCache.values()].map((c) => c.orch.shutdown()),
+    );
     cache.clear();
+    dmCache.clear();
     active.clear();
   }
 
-  return { runTask, cancelTask, subscribe, shutdown };
+  return { runTask, cancelTask, subscribe, chat, stopChat, clearChat, chatBusy, shutdown };
 }

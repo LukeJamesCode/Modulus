@@ -1168,8 +1168,8 @@ function Bubble({ m, streaming, devmode }) {
             fontSize: 14.5,
             lineHeight: 1.55,
             whiteSpace: 'pre-wrap',
-            // Neon Ghost bubbles: user = translucent glass with a knife-edge
-            // white border; agent = dark surface with a subtle green rim.
+            // Helix bubbles: user = translucent surface with a hairline
+            // border; agent = dark surface with a subtle accent rim.
             background: isUser
               ? 'var(--glass-bg)'
               : m.error

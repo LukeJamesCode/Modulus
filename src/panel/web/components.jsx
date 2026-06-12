@@ -135,8 +135,7 @@ function Button({ variant = 'default', size = 'md', icon, children, style, dange
     lg: { padding: '13px 20px', fontSize: 15.5 },
   };
   const variants = {
-    // Primary = solid neon fill, always paired with a subtle outer bloom to
-    // simulate light emission (per the Neon Ghost spec).
+    // Primary = solid accent fill with a soft outer bloom (Helix theme).
     primary: {
       background: 'var(--accent)',
       color: 'var(--on-accent)',
@@ -222,9 +221,7 @@ function IconButton({ name, size = 18, label, active, style, ...rest }) {
 }
 
 /* ---------------------------------------------------------------- Card
-   Glass panel: translucent surface lifted by a backdrop blur and a knife-edge
-   border (Neon Ghost). On light theme the glass tokens resolve to solid
-   surfaces, so the blur is a harmless no-op. */
+   Quiet panel: a flat translucent surface with a hairline border (Helix). */
 function Card({ children, pad = 18, style, hover, ...rest }) {
   return (
     <div

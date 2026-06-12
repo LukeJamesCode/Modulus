@@ -7,15 +7,18 @@
 // contended. The live run-view SSE (/api/agents/tasks/:id/stream) subscribes
 // to the runtime's event bus instead of polling checkpointed DB state.
 
+import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, join, normalize } from 'node:path';
 import { ensurePrivateDir } from '../../cli/config-store.js';
 import {
   AGENT_TASK_CANCELLED_MESSAGE,
+  agentDmChatId,
   type AgentExecutionMode,
   type CreateAgentInput,
 } from '../../core/agents.js';
+import type { ToolContext, ToolHandler } from '../../core/tools.js';
 import { createAgentApprovalStore } from '../../core/agent-approvals.js';
 import { ingestStagedDir } from '../../core/agent-attachments.js';
 import { createAgentScheduleStore } from '../../core/agent-schedules.js';
@@ -116,9 +119,128 @@ function normalizeAgentScheduleInput(body: Record<string, unknown>): {
   };
 }
 
+// Matches the Telegram adapter / panel chat confirm timeout: an unanswered
+// confirm-tier prompt in an agent DM fails closed after this long.
+const DM_CONFIRM_TIMEOUT_MS = 2 * 60_000;
+
 export function createAgentRoutes(deps: PanelDeps): RouteModule {
   const reg = deps.agentRegistry;
   const attachmentsDir = join(deps.home, 'agent-attachments');
+
+  // Confirm prompts parked by in-flight DM turns, keyed by id; resolved by
+  // POST /api/agents/chat/confirm or failed closed on timeout/disconnect.
+  const pendingDmConfirms = new Map<string, (ok: boolean) => void>();
+
+  // Stream one DM turn with an agent over SSE. Mirrors the main panel chat
+  // (routes/chat.ts) minus intercepts/instant responses — a DM speaks to one
+  // persona, not the shared assistant pipeline.
+  async function streamAgentChat(
+    req: IncomingMessage,
+    res: ServerResponse,
+    agentId: number,
+  ): Promise<void> {
+    const agent = reg.get(agentId);
+    if (!agent) {
+      sendJson(res, 404, { error: 'agent not found' });
+      return;
+    }
+    const body = await readJson<{ text?: string; thinkMode?: string }>(req);
+    const text = String(body.text ?? '').trim();
+    if (!text) {
+      sendJson(res, 400, { error: 'empty message' });
+      return;
+    }
+    if (deps.agentRuntime.chatBusy(agentId)) {
+      sendJson(res, 409, { error: 'agent is already replying' });
+      return;
+    }
+    const thinkMode = THINK_MODES.includes(body.thinkMode as ThinkMode)
+      ? (body.thinkMode as ThinkMode)
+      : 'auto';
+    const dmChatId = agentDmChatId(agentId);
+
+    writeSseHead(res);
+    const send = (event: string, data: unknown): void => sse(res, event, data);
+    let closed = false;
+
+    // Inline confirm renderer for this DM turn — the attended path the daemon's
+    // confirm router consults for the DM chat-id band (fail-closed otherwise).
+    const confirmFn = (
+      handler: ToolHandler,
+      args: Record<string, unknown>,
+      ctx: ToolContext,
+    ): Promise<boolean> => {
+      if (closed) return Promise.resolve(false);
+      const id = randomUUID();
+      let preview: string;
+      try {
+        preview = handler.confirmPrompt ? handler.confirmPrompt(args) : `Run ${handler.name}?`;
+      } catch {
+        preview = `Run ${handler.name}?`;
+      }
+      send('confirm', { id, prompt: preview, tool: handler.name });
+      return new Promise<boolean>((resolve) => {
+        let settled = false;
+        const finish = (ok: boolean): void => {
+          if (settled) return;
+          settled = true;
+          pendingDmConfirms.delete(id);
+          clearTimeout(timer);
+          ctx.signal?.removeEventListener('abort', onAbort);
+          resolve(ok);
+        };
+        const onAbort = (): void => finish(false);
+        const timer = setTimeout(() => finish(false), DM_CONFIRM_TIMEOUT_MS);
+        timer.unref?.();
+        ctx.signal?.addEventListener('abort', onAbort, { once: true });
+        pendingDmConfirms.set(id, finish);
+      });
+    };
+    deps.confirmBus.register(dmChatId, confirmFn);
+
+    req.on('close', () => {
+      closed = true;
+      deps.agentRuntime.stopChat(agentId);
+      // Fail closed: never leave a confirm-tier tool waiting on a dead stream.
+      for (const finish of [...pendingDmConfirms.values()]) finish(false);
+    });
+
+    try {
+      const result = await deps.agentRuntime.chat(agentId, text, {
+        thinkMode,
+        onDelta: (delta) => {
+          if (!closed) send('delta', { delta });
+        },
+        onThinking: (thinking) => {
+          if (!closed) send('thinking', { thinking });
+        },
+      });
+      if (result.ok) send('done', { text: result.text });
+      else send('error', { message: result.error ?? 'turn failed', text: result.text });
+    } catch (e) {
+      send('error', { message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      deps.confirmBus.unregister(dmChatId, confirmFn);
+      for (const finish of [...pendingDmConfirms.values()]) finish(false);
+      res.end();
+    }
+  }
+
+  // The rendered DM history: user/assistant rows across every conversation on
+  // the agent's DM chat id, oldest first (capped to the most recent 200).
+  function dmHistory(agentId: number): Array<{ role: string; content: string; createdAt: number }> {
+    return (
+      deps.db
+        .prepare(
+          `SELECT m.role AS role, m.content AS content, m.created_at AS createdAt
+             FROM messages m
+             JOIN conversations c ON m.conversation_id = c.id
+            WHERE c.telegram_chat_id = ? AND m.role IN ('user', 'assistant')
+            ORDER BY m.id DESC LIMIT 200`,
+        )
+        .all(agentDmChatId(agentId)) as Array<{ role: string; content: string; createdAt: number }>
+    ).reverse();
+  }
 
   // Everything the run view renders for one task: the row, its conversation
   // transcript, sub-agent children, and saved artifacts.
@@ -357,6 +479,94 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
       // Poke the queue so the daemon picks the task up now, not on the next poll.
       deps.agentQueue.notify();
       sendJson(res, 200, { task, ...(rejected.length ? { rejected } : {}) });
+      return true;
+    }
+
+    // ---- Direct chat (per-agent DMs) ---------------------------------------
+    const chatMatch = /^\/api\/agents\/(\d+)\/chat$/.exec(path);
+    if (chatMatch && method === 'GET') {
+      const id = Number(chatMatch[1]);
+      if (!reg.get(id)) {
+        sendJson(res, 404, { error: 'agent not found' });
+        return true;
+      }
+      sendJson(res, 200, { messages: dmHistory(id), busy: deps.agentRuntime.chatBusy(id) });
+      return true;
+    }
+    if (chatMatch && method === 'POST') {
+      await streamAgentChat(req, res, Number(chatMatch[1]));
+      return true;
+    }
+    const chatStopMatch = /^\/api\/agents\/(\d+)\/chat\/stop$/.exec(path);
+    if (chatStopMatch && method === 'POST') {
+      const stopped = deps.agentRuntime.stopChat(Number(chatStopMatch[1]));
+      sendJson(res, 200, { ok: true, stopped });
+      return true;
+    }
+    const chatClearMatch = /^\/api\/agents\/(\d+)\/chat\/clear$/.exec(path);
+    if (chatClearMatch && method === 'POST') {
+      const id = Number(chatClearMatch[1]);
+      if (!reg.get(id)) {
+        sendJson(res, 404, { error: 'agent not found' });
+        return true;
+      }
+      deps.agentRuntime.clearChat(id);
+      sendJson(res, 200, { ok: true });
+      return true;
+    }
+    if (path === '/api/agents/chat/confirm' && method === 'POST') {
+      const { id, ok } = await readJson<{ id?: string; ok?: boolean }>(req);
+      const finish = id ? pendingDmConfirms.get(id) : undefined;
+      if (!finish) {
+        sendJson(res, 409, { ok: false, error: 'no confirmation is waiting' });
+        return true;
+      }
+      finish(!!ok);
+      sendJson(res, 200, { ok: true });
+      return true;
+    }
+
+    // Per-agent bulk task controls — the chat header's Pause / Stop acting on
+    // just the selected agent's work (the global *_all routes stay untouched).
+    const agentTasksMatch = /^\/api\/agents\/(\d+)\/tasks\/(pause_all|resume_all|cancel_all)$/.exec(
+      path,
+    );
+    if (agentTasksMatch && method === 'POST') {
+      const agentId = Number(agentTasksMatch[1]);
+      const action = agentTasksMatch[2];
+      if (!reg.get(agentId)) {
+        sendJson(res, 404, { error: 'agent not found' });
+        return true;
+      }
+      let count = 0;
+      if (action === 'pause_all') {
+        for (const t of reg.listTasks({ agentId, status: ['queued', 'running'] })) {
+          reg.updateTask(t.id, { status: 'paused', pausedUntil: null });
+          count++;
+        }
+      } else if (action === 'resume_all') {
+        for (const t of reg.listTasks({ agentId, status: 'paused' })) {
+          reg.updateTask(t.id, { status: 'queued', pausedUntil: null });
+          count++;
+        }
+        deps.agentQueue.notify();
+      } else {
+        for (const t of reg.listTasks({ agentId, status: ['queued', 'running', 'paused'] })) {
+          // cancelTask also aborts a running task's orchestrator turn, but
+          // refuses paused rows — mark those terminal directly.
+          if (t.status === 'paused') {
+            reg.updateTask(t.id, {
+              status: 'cancelled',
+              error: AGENT_TASK_CANCELLED_MESSAGE,
+              finishedAt: Date.now(),
+            });
+          } else {
+            deps.agentRuntime.cancelTask(t.id);
+          }
+          count++;
+        }
+      }
+      sendJson(res, 200, { ok: true, count });
       return true;
     }
 

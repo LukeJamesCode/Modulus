@@ -1,9 +1,9 @@
 /* ===========================================================================
    Modulus Frontend — design tokens
-   "Neon Ghost" — high-contrast glassmorphism command center for AI
-   orchestration. Deep technical charcoal backdrop, neon-green light emission,
-   translucent glass panels with knife-edge borders. Dark is the hero theme;
-   a calm warm-neutral light theme remains for the toggle.
+   "Helix" — clean, minimal, dark-only. Near-black backdrop with a violet
+   cast, quiet flat surfaces, hairline borders, and a pink→purple accent
+   pair (the DNA-helix brand). Calm chrome, generous radii, no glass noise:
+   the chat is the hero, everything else recedes.
    =========================================================================== */
 
 /* Fonts are vendored as variable woff2 under fonts/ (latin subset) — the panel
@@ -37,108 +37,54 @@
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
   --gap: 0.88;
-  /* Squircle-adjacent: generous radii against sharp technical type. */
+  /* Soft, Codex-like geometry: roomy radii, quiet chrome. */
   --radius: 12px;
   --radius-sm: 8px;
   --radius-lg: 16px;
 
-  --accent: oklch(0.6 0.1 156);
-  --accent-strong: oklch(0.52 0.11 156);
-  --accent-soft: oklch(0.6 0.1 156 / 0.14);
-  --accent-ring: oklch(0.6 0.1 156 / 0.4);
-  --on-accent: #ffffff;
+  /* Near-black with a violet cast; flat surface tiers, hairline borders. */
+  --bg: #0e0b14;
+  --bg-2: #0a0810;
+  --surface: #171221;
+  --surface-2: #1f1930;
+  --raised: #2a2240;
+  --border: rgba(220, 200, 255, 0.09);
+  --border-2: rgba(220, 200, 255, 0.17);
+  --text: #ece7f6;
+  --text-2: #b9b0cc;
+  --text-3: #7e7494;
+  --shadow: 0 4px 16px rgba(5, 2, 12, 0.5), 0 20px 48px rgba(5, 2, 12, 0.4);
+  --shadow-sm: 0 1px 3px rgba(5, 2, 12, 0.55);
+  --shadow-pop: 0 24px 70px rgba(5, 2, 12, 0.7);
+  --code-bg: #0a0712;
 
-  --ok: oklch(0.6 0.1 156);
-  --warn: oklch(0.74 0.13 75);
-  --err: oklch(0.6 0.17 25);
-  --info: oklch(0.62 0.1 240);
+  /* The helix pair: pink (--accent) flowing into purple (--accent-2). Solid
+     fills use --accent; icons/active text use the brighter --accent-strong;
+     the brand gradient spans both strands. */
+  --accent: #e9559f;
+  --accent-2: #9d6bff;
+  --accent-strong: #ff8ac4;
+  --accent-soft: rgba(233, 85, 159, 0.14);
+  --accent-ring: rgba(233, 85, 159, 0.42);
+  --on-accent: #fff;
+  --brand-gradient: linear-gradient(135deg, #ff7ab8 0%, #e9559f 45%, #9d6bff 100%);
 
-  /* Glass & elevation — overridden per theme. Light defaults stay near-opaque
-     so the blur is a no-op where there's nothing luminous behind it. */
-  --glass-bg: var(--surface);
-  --glass-bg-strong: var(--surface);
-  --glass-border: var(--border);
-  --glass-blur: 16px;
-  --bloom: none;
-  --bloom-strong: none;
-  --aurora-1: transparent;
-  --aurora-2: transparent;
-}
-
-/* ---- LIGHT theme (warm neutrals) — default ---- */
-:root,
-:root[data-theme='light'] {
-  --bg: oklch(0.965 0.006 85);
-  --bg-2: oklch(0.945 0.008 85);
-  --surface: oklch(0.995 0.004 85);
-  --surface-2: oklch(0.975 0.006 85);
-  --raised: oklch(1 0 0);
-  --border: oklch(0.88 0.008 85);
-  --border-2: oklch(0.82 0.01 85);
-  --text: oklch(0.26 0.012 75);
-  --text-2: oklch(0.46 0.012 75);
-  --text-3: oklch(0.62 0.01 75);
-  --shadow: 0 1px 2px oklch(0.4 0.02 75 / 0.06), 0 8px 24px oklch(0.4 0.02 75 / 0.06);
-  --shadow-sm: 0 1px 2px oklch(0.4 0.02 75 / 0.07);
-  --shadow-pop: 0 12px 40px oklch(0.3 0.02 75 / 0.16);
-  --code-bg: oklch(0.955 0.008 85);
-  color-scheme: light;
-}
-
-/* ---- DARK theme — "Neon Ghost" (hero) ---- */
-:root[data-theme='dark'] {
-  /* Deep technical charcoal. Surfaces step up through translucent tiers. */
-  --bg: #0e141a;
-  --bg-2: #0b1117;
-  --surface: #1b2027;
-  --surface-2: #252a32;
-  --raised: #30353d;
-  --border: rgba(255, 255, 255, 0.09);
-  --border-2: rgba(255, 255, 255, 0.16);
-  --text: #dee3ec;
-  --text-2: #b9c2cb;
-  --text-3: #7c8a91;
-  --shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 20px 48px rgba(0, 0, 0, 0.4);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.55);
-  --shadow-pop: 0 24px 70px rgba(0, 0, 0, 0.7);
-  --code-bg: #090f15;
-
-  /* Neon green emission. --accent is the solid fill (black text on top);
-     --accent-strong is the brighter glow used for icons/active text. */
-  --accent: #00e55b;
-  --accent-strong: #6bff83;
-  --accent-soft: rgba(0, 229, 91, 0.14);
-  --accent-ring: rgba(0, 229, 91, 0.4);
-  --on-accent: #002107;
-  --ok: #00e55b;
+  --ok: #3ddc97;
   --warn: #ffd54f;
   --err: #ff6b66;
   --info: #5aa9ff;
 
-  /* Glass: translucent surface-container + knife-edge white border, lifted by
-     backdrop blur and an inner aurora rather than drop shadows. */
-  --glass-bg: rgba(27, 32, 39, 0.72);
-  --glass-bg-strong: rgba(27, 32, 39, 0.94);
-  --glass-border: rgba(255, 255, 255, 0.1);
-  --glass-blur: 20px;
-  --bloom: 0 0 20px rgba(0, 229, 91, 0.28);
-  --bloom-strong: 0 0 28px rgba(0, 229, 91, 0.4);
-  --aurora-1: rgba(0, 229, 91, 0.06);
-  --aurora-2: rgba(74, 75, 79, 0.12);
+  /* Legacy glass tokens — kept as quiet flat aliases so existing component
+     rules keep working; the blur is effectively decorative now. */
+  --glass-bg: rgba(23, 18, 33, 0.78);
+  --glass-bg-strong: rgba(23, 18, 33, 0.96);
+  --glass-border: var(--border);
+  --glass-blur: 18px;
+  --bloom: 0 0 20px rgba(233, 85, 159, 0.22);
+  --bloom-strong: 0 0 28px rgba(157, 107, 255, 0.32);
+  --aurora-1: rgba(157, 107, 255, 0.05);
+  --aurora-2: rgba(233, 85, 159, 0.05);
   color-scheme: dark;
-}
-
-:root[data-density='roomy'] {
-  --gap: 1.05;
-  --radius: 16px;
-}
-:root[data-density='balanced'] {
-  --gap: 0.88;
-  --radius: 12px;
-}
-:root[data-density='compact'] {
-  --gap: 0.72;
-  --radius: 10px;
 }
 
 * {
@@ -339,7 +285,7 @@ a {
   width: 46px;
   height: 46px;
   border-radius: 14px;
-  background: var(--accent);
+  background: var(--brand-gradient);
   color: var(--on-accent);
   display: grid;
   place-items: center;
@@ -491,6 +437,13 @@ a {
 @media (max-width: 900px) {
   .chat-grid {
     flex-direction: column !important;
+  }
+  .dm-grid {
+    flex-direction: column !important;
+  }
+  .dm-grid > div:first-child {
+    width: 100% !important;
+    max-height: 240px;
   }
   .history-grid {
     flex-direction: column !important;

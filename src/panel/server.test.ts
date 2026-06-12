@@ -140,6 +140,23 @@ before(async () => {
         set.add(fn);
         return () => set.delete(fn);
       },
+      // DM chat stub: echoes the message through onDelta, like a turn would.
+      chatBusy: () => false,
+      chat: async (
+        _agentId: number,
+        text: string,
+        opts?: { onDelta?: (d: string) => void },
+      ): Promise<{ ok: boolean; text: string }> => {
+        opts?.onDelta?.('echo: ');
+        opts?.onDelta?.(text);
+        return { ok: true, text: `echo: ${text}` };
+      },
+      stopChat: () => false,
+      clearChat: () => {},
+      cancelTask: (taskId: number): boolean => {
+        createAgentRegistry(db).updateTask(taskId, { status: 'cancelled', finishedAt: Date.now() });
+        return true;
+      },
     } as unknown as PanelDeps['agentRuntime'],
     llm: {
       resolveModel: () => 'test-model',
@@ -625,6 +642,103 @@ test('chat/confirm with an unknown id is 409 (fail-closed)', async () => {
 test('chat/clear resets the conversation', async () => {
   const res = await authed('/api/chat/clear', { method: 'POST' });
   assert.equal(res.status, 200);
+});
+
+test('agent DM: history 404s for an unknown agent, returns messages + busy for a real one', async () => {
+  assert.equal((await authed('/api/agents/999999/chat')).status, 404);
+  const created = await authed('/api/agents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'dm-buddy', systemPrompt: 'You are a buddy.' }),
+  });
+  assert.equal(created.status, 200);
+  const { agent } = (await created.json()) as { agent: { id: number } };
+  const res = await authed(`/api/agents/${agent.id}/chat`);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { messages: unknown[]; busy: boolean };
+  assert.deepEqual(body.messages, []);
+  assert.equal(body.busy, false);
+});
+
+test('agent DM: a send streams deltas then done over SSE; empty message is 400', async () => {
+  const created = await authed('/api/agents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'dm-stream', systemPrompt: 'You stream.' }),
+  });
+  const { agent } = (await created.json()) as { agent: { id: number } };
+
+  const empty = await authed(`/api/agents/${agent.id}/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: '  ' }),
+  });
+  assert.equal(empty.status, 400);
+
+  const res = await authed(`/api/agents/${agent.id}/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 'hello agent' }),
+  });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') ?? '', /text\/event-stream/);
+  const text = await res.text();
+  assert.match(text, /event: delta/);
+  assert.match(text, /"delta":"echo: "/);
+  assert.match(text, /event: done/);
+  assert.match(text, /"text":"echo: hello agent"/);
+});
+
+test('agent DM: stop and clear respond; confirm with no waiter is 409 (fail-closed)', async () => {
+  const created = await authed('/api/agents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'dm-ctl', systemPrompt: 'You obey.' }),
+  });
+  const { agent } = (await created.json()) as { agent: { id: number } };
+  assert.equal((await authed(`/api/agents/${agent.id}/chat/stop`, { method: 'POST' })).status, 200);
+  assert.equal(
+    (await authed(`/api/agents/${agent.id}/chat/clear`, { method: 'POST' })).status,
+    200,
+  );
+  assert.equal((await authed('/api/agents/999999/chat/clear', { method: 'POST' })).status, 404);
+  const confirm = await authed('/api/agents/chat/confirm', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: 'nope', ok: true }),
+  });
+  assert.equal(confirm.status, 409);
+});
+
+test('agent DM: per-agent bulk task controls pause, resume, and cancel only that agent', async () => {
+  const mk = async (name: string): Promise<number> => {
+    const r = await authed('/api/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, systemPrompt: 'work' }),
+    });
+    return ((await r.json()) as { agent: { id: number } }).agent.id;
+  };
+  const a = await mk('bulk-a');
+  const b = await mk('bulk-b');
+  const reg = createAgentRegistry(db);
+  const ta = reg.enqueue({ agentId: a, prompt: 'task a' });
+  const tb = reg.enqueue({ agentId: b, prompt: 'task b' });
+
+  const paused = await authed(`/api/agents/${a}/tasks/pause_all`, { method: 'POST' });
+  assert.equal(paused.status, 200);
+  assert.equal(((await paused.json()) as { count: number }).count, 1);
+  assert.equal(reg.getTask(ta.id)!.status, 'paused');
+  assert.equal(reg.getTask(tb.id)!.status, 'queued'); // untouched
+
+  const resumed = await authed(`/api/agents/${a}/tasks/resume_all`, { method: 'POST' });
+  assert.equal(((await resumed.json()) as { count: number }).count, 1);
+  assert.equal(reg.getTask(ta.id)!.status, 'queued');
+
+  const cancelled = await authed(`/api/agents/${a}/tasks/cancel_all`, { method: 'POST' });
+  assert.equal(((await cancelled.json()) as { count: number }).count, 1);
+  assert.equal(reg.getTask(ta.id)!.status, 'cancelled');
+  assert.equal(reg.getTask(tb.id)!.status, 'queued'); // still untouched
 });
 
 test('stop and restart hand off to the host hooks', async () => {

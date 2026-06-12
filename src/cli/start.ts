@@ -34,6 +34,7 @@ import {
   createAgentRuntime,
   filterToolRegistry,
   isAgentChatId,
+  isAgentDmChatId,
   seedStarterAgents,
   AGENT_CHAT_ID_BASE,
   SPAWN_AGENT_TOOL_NAME,
@@ -501,7 +502,12 @@ async function bootDaemon(
       tools,
       log,
       resolveRoot: (ctx: ToolContext) => {
-        if (ctx.chatId !== undefined && isAgentChatId(ctx.chatId)) {
+        // DM chats have no task, so no pinned attachment root — global only.
+        if (
+          ctx.chatId !== undefined &&
+          isAgentChatId(ctx.chatId) &&
+          !isAgentDmChatId(ctx.chatId)
+        ) {
           const pinned = pinnedFilesRoot(attachmentsDir, ctx.chatId - AGENT_CHAT_ID_BASE);
           if (pinned) return pinned;
         }
@@ -643,6 +649,14 @@ async function bootDaemon(
       // (Yes/No) and in the panel, and wait for a human to decide. This is the
       // guardrail against silent autonomy in a delegated swarm — nothing risky
       // runs until someone approves it.
+      // An agent DM turn is ATTENDED — the owner is watching the panel stream
+      // that drives it — so the confirm renders inline there. No live panel
+      // renderer means the stream just closed: fail closed, never park a DM
+      // confirm in the unattended approval queue (its taskId would be bogus).
+      if (ctx.chatId !== undefined && isAgentDmChatId(ctx.chatId)) {
+        const viaPanel = panelConfirmBus.tryConfirm(handler, args, ctx);
+        return viaPanel ?? false;
+      }
       if (ctx.chatId !== undefined && isAgentChatId(ctx.chatId)) {
         let preview: string;
         try {
