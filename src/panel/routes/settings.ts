@@ -13,7 +13,7 @@ import {
   type ModulusConfig,
 } from '../../cli/config-store.js';
 import { availableModelTags } from '../../cli/model-options.js';
-import { probeOllama } from '../../cli/ollama-probe.js';
+import { classifyProbeError, probeOllama } from '../../cli/ollama-probe.js';
 import { readJson, sendJson } from '../http.js';
 import type { RouteModule } from '../router.js';
 import type { PanelDeps } from '../types.js';
@@ -151,7 +151,8 @@ export function createSettingsRoutes(deps: PanelDeps): RouteModule {
         sendJson(res, 400, { ok: false, error: (e as Error).message });
         return true;
       }
-      sendJson(res, 200, await probeOllama(target));
+      const probe = await probeOllama(target);
+      sendJson(res, 200, { ...probe, errorKind: classifyProbeError(probe.error) });
       return true;
     }
 

@@ -20,6 +20,14 @@ export default [
       // Not our source; linting them is pure noise.
       'src/panel/web/vendor/**',
       '.claude/**',
+      // Desktop shell build artifacts: the C# project plus the staged/published
+      // daemon payload (compiled JS, not lintable source). desktop/scripts stays
+      // linted below.
+      'desktop/ModulusDesktop/**',
+      'desktop/.cache/**',
+      'desktop/staging/**',
+      'desktop/publish/**',
+      'desktop/Releases/**',
     ],
   },
   js.configs.recommended,
@@ -93,7 +101,7 @@ export default [
     },
   },
   {
-    files: ['scripts/**/*.mjs'],
+    files: ['scripts/**/*.mjs', 'desktop/scripts/**/*.mjs'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',

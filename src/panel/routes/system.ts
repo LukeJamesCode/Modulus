@@ -374,7 +374,19 @@ export function createSystemRoutes(deps: PanelDeps, runtime: PanelRuntime): Rout
 
     // Pull + rebuild via the same `modulus update` the CLI runs. Safe while
     // live: the rebuild lands on disk and takes effect on the next restart.
+    // Under the desktop shell the install is a packaged payload, not a git
+    // checkout — the shell's own updater owns updates there.
     if (path === '/api/maintenance/update' && method === 'POST') {
+      if (process.env.MODULUS_DESKTOP === '1') {
+        sendJson(res, 409, {
+          ok: false,
+          command: 'modulus update',
+          output:
+            'This Modulus runs inside the desktop app, which updates itself.\n' +
+            'Updates install automatically; quit and reopen the app to apply one.',
+        });
+        return true;
+      }
       const r = await runModulus(deps, ['update'], 1_800_000);
       sendJson(res, r.code === 0 ? 200 : 500, {
         ok: r.code === 0,

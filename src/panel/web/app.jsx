@@ -5,10 +5,10 @@
 // ("Helix" theme): no theme or density toggles.
 const { useState, useEffect, useCallback, useRef } = React;
 
-// Chat and Voice Hub are folded into the Dashboard (a Chat/Voice toggle there),
-// so they have no standalone nav entries.
+// Agents is the landing tab; its pinned "Modulus Agent" chat is the one
+// conversational home (chat + voice + fleet control). Daemon health/controls
+// live under System › Status.
 const NAV = [
-  { id: 'dashboard', label: 'Dashboard', icon: 'home' },
   { id: 'agents', label: 'Agents', icon: 'spark' },
   { id: 'modules', label: 'Modules', icon: 'plug' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
@@ -19,7 +19,7 @@ function App() {
   const [state, setState] = useState(null);
   const [offline, setOffline] = useState(false);
   const [loadError, setLoadError] = useState(null); // reachable but rejected (e.g. 401)
-  const [route, setRoute] = useState('dashboard');
+  const [route, setRoute] = useState('agents');
   const [busy, setBusy] = useState(null); // agent action in flight: start|stop|restart|null
   const [forcedView, setForcedView] = useState(null); // override configured-based view
   const pollRef = useRef(null);
@@ -166,7 +166,7 @@ function App() {
         onExit={setupMode ? null : () => setForcedView('hub')}
         onFinish={async () => {
           setForcedView('hub');
-          setRoute('dashboard');
+          setRoute('agents');
           await refresh();
           agentAction('start');
         }}
@@ -180,6 +180,16 @@ function App() {
   const needsSetup = (state.modules && state.modules.needsSetup) || [];
   const visibleModuleCount = (state.modules && state.modules.enabled) || 0;
   const voiceEnabled = enabledModules.indexOf('modulus-voice') !== -1;
+  // One "model · tools · reason" label for the chat/voice surfaces.
+  const activeModel =
+    [
+      models.chat,
+      models.tools ? `tools ${models.tools}` : null,
+      models.reason ? `reason ${models.reason}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ') || null;
+  const healthFlags = { telegram: !!health.telegram, ollama: !!health.ollama };
 
   return (
     <div className="app-shell">
@@ -201,34 +211,33 @@ function App() {
         {offline && <OfflineBar onRetry={refresh} />}
         {state.cfgError && <ConfigErrorBar message={state.cfgError} />}
         <div className="content-shell">
-          {route === 'dashboard' && (
-            <window.DashboardTab
+          {route === 'agents' && (
+            <window.AgentsTab
               state={state}
-              agent={agentStatus}
+              agentStatus={agentStatus}
+              onStart={() => agentAction('start')}
+              onStop={() => agentAction('stop')}
+              voiceEnabled={voiceEnabled}
+              health={healthFlags}
+              activeModel={activeModel}
+            />
+          )}
+          {route === 'modules' && <window.ModulesTab />}
+          {route === 'settings' && (
+            <window.SettingsTab onReRunWizard={() => setForcedView('wizard')} onSaved={refresh} />
+          )}
+          {route === 'system' && (
+            <window.SystemTab
+              state={state}
+              onReset={() => setForcedView('wizard')}
+              agentStatus={agentStatus}
               busy={busy}
               onStart={() => agentAction('start')}
               onStop={() => agentAction('stop')}
               onRestart={() => agentAction('restart')}
               proactive={state.proactive}
               onProactive={setProactive}
-              health={{ telegram: !!health.telegram, ollama: !!health.ollama }}
-              models={models}
-              lastError={state.lastError || null}
-              scheduler={state.scheduler}
-              activity={state.activity}
-              modules={state.modules}
-              tier={state.tier}
-              allowlistCount={state.allowlistCount}
-              voiceEnabled={voiceEnabled}
             />
-          )}
-          {route === 'agents' && <window.AgentsTab state={state} />}
-          {route === 'modules' && <window.ModulesTab />}
-          {route === 'settings' && (
-            <window.SettingsTab onReRunWizard={() => setForcedView('wizard')} onSaved={refresh} />
-          )}
-          {route === 'system' && (
-            <window.SystemTab state={state} onReset={() => setForcedView('wizard')} />
           )}
           {route === 'docs' && <window.DocsTab />}
         </div>

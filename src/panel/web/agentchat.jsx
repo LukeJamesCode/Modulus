@@ -136,7 +136,8 @@ function ActivityBar({ agents, tasks, approvals }) {
 }
 
 /* ---- roster (left column) ---- */
-function AgentRoster({ agents, tasks, typingId, selectedId, onSelect, onNewAgent }) {
+function AgentRoster({ agents, tasks, typingId, selectedId, onSelect, onNewAgent, daemonRunning }) {
+  const mainOn = selectedId === 'main';
   return (
     <div
       style={{
@@ -162,12 +163,98 @@ function AgentRoster({ agents, tasks, typingId, selectedId, onSelect, onNewAgent
           borderBottom: '1px solid var(--border)',
         }}
       >
-        Agent chats
+        Chats
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
-        {agents.length === 0 && (
-          <div style={{ padding: 16, fontSize: 13, color: 'var(--text-3)' }}>
-            No agents yet — create your first teammate.
+        {/* Pinned main agent — the one that controls the whole fleet. */}
+        <button
+          onClick={() => onSelect('main')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            width: '100%',
+            textAlign: 'left',
+            padding: '9px 10px',
+            borderRadius: 'var(--radius)',
+            border: '1px solid',
+            borderColor: mainOn ? 'var(--accent-ring)' : 'transparent',
+            background: mainOn ? 'var(--accent-soft)' : 'transparent',
+            cursor: 'pointer',
+            color: 'inherit',
+            font: 'inherit',
+          }}
+          onMouseEnter={(e) => {
+            if (!mainOn) e.currentTarget.style.background = 'var(--surface-2)';
+          }}
+          onMouseLeave={(e) => {
+            if (!mainOn) e.currentTarget.style.background = 'transparent';
+          }}
+        >
+          <span
+            style={{
+              width: 34,
+              height: 34,
+              flex: 'none',
+              borderRadius: '32%',
+              display: 'grid',
+              placeItems: 'center',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--border)',
+            }}
+          >
+            <window.HelixMark size={22} />
+          </span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span
+              style={{
+                display: 'block',
+                fontSize: 14,
+                fontWeight: 700,
+                color: 'var(--text)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              Modulus Agent
+            </span>
+            <span
+              style={{
+                display: 'block',
+                fontSize: 12,
+                color: 'var(--text-3)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              main agent · controls the fleet
+            </span>
+          </span>
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              flex: 'none',
+              borderRadius: 99,
+              background: daemonRunning ? 'var(--ok)' : 'var(--text-3)',
+              boxShadow: daemonRunning ? '0 0 6px var(--ok)' : 'none',
+            }}
+          />
+        </button>
+        {agents.length > 0 && (
+          <div
+            style={{
+              margin: '8px 8px 4px',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+              textTransform: 'uppercase',
+              color: 'var(--text-3)',
+            }}
+          >
+            Agents
           </div>
         )}
         {agents.map((a) => {
@@ -951,33 +1038,47 @@ function AgentChatsView({
   onOpenTask,
   onDispatch,
   refresh,
+  // Main "Modulus Agent" chat wiring, threaded from the Agents tab.
+  agentStatus,
+  onStart,
+  onStop,
+  voiceEnabled,
+  health,
+  activeModel,
 }) {
+  // 'main' (the pinned Modulus Agent) is the default; otherwise an agent id.
   const [selectedId, setSelectedId] = useStateAC(() => {
     try {
-      const v = Number(localStorage.getItem('modulus_dm_selected'));
-      return Number.isFinite(v) && v > 0 ? v : null;
+      const v = localStorage.getItem('modulus_dm_selected');
+      if (v === 'main') return 'main';
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0 ? n : 'main';
     } catch {
-      return null;
+      return 'main';
     }
   });
   const [typingId, setTypingId] = useStateAC(null); // agent currently streaming a DM reply
 
-  const selected = useMemoAC(
-    () => agents.find((a) => a.id === selectedId) || agents[0] || null,
-    [agents, selectedId],
+  const isMain = selectedId === 'main';
+  const selectedAgent = useMemoAC(
+    () => (isMain ? null : agents.find((a) => a.id === selectedId) || null),
+    [agents, selectedId, isMain],
   );
 
   useEffectAC(() => {
-    if (selected && selected.id !== selectedId) setSelectedId(selected.id);
-    if (selected) {
-      try {
-        localStorage.setItem('modulus_dm_selected', String(selected.id));
-      } catch {
-        /* ignore */
-      }
+    try {
+      localStorage.setItem('modulus_dm_selected', String(selectedId));
+    } catch {
+      /* ignore */
     }
-     
-  }, [selected && selected.id]);
+  }, [selectedId]);
+
+  // A deleted (or never-loaded) agent selection falls back to the main chat.
+  useEffectAC(() => {
+    if (!isMain && agents.length > 0 && !agents.some((a) => a.id === selectedId)) {
+      setSelectedId('main');
+    }
+  }, [agents, selectedId, isMain]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -987,16 +1088,29 @@ function AgentChatsView({
           agents={agents}
           tasks={tasks}
           typingId={typingId}
-          selectedId={selected ? selected.id : null}
+          selectedId={selectedId}
           onSelect={setSelectedId}
           onNewAgent={onNewAgent}
+          daemonRunning={agentStatus === 'running'}
         />
-        {selected ? (
-          <AgentChatPane
-            key={selected.id}
-            agent={selected}
+        {isMain ? (
+          <window.MainChatPane
+            key="main"
+            agentStatus={agentStatus}
+            onStart={onStart}
+            onStop={onStop}
+            voiceEnabled={voiceEnabled}
+            health={health}
+            activeModel={activeModel}
             tasks={tasks}
-            typing={typingId === selected.id}
+            refresh={refresh}
+          />
+        ) : selectedAgent ? (
+          <AgentChatPane
+            key={selectedAgent.id}
+            agent={selectedAgent}
+            tasks={tasks}
+            typing={typingId === selectedAgent.id}
             onTyping={setTypingId}
             onOpenTask={onOpenTask}
             onEditAgent={onEditAgent}

@@ -1,6 +1,9 @@
-// Chat Hub — the home screen. A hero control bar (start/stop/restart/new-chat/
-// proactive/devmode) over a live direct-chat column and a right-hand activity
-// strip.
+// Modulus Agent chat (MainChatPane) — the pinned "controls them all" chat in
+// Agents › Chats. The main orchestrator surface: full module tools, slash
+// commands, confirm-tier approvals, and voice — plus a fleet-wide Pause/Resume/
+// Stop header so the one agent can steer the whole queue. Rendered in the DM
+// pane slot when the roster's pinned "Modulus Agent" entry is selected; a Voice
+// button swaps the pane to the existing VoiceHub and back.
 //
 // The chat talks to POST /api/chat, which streams through Modulus's orchestrator:
 // same profile routing, tools, history, and guardrails as Telegram. It has full
@@ -66,24 +69,17 @@ function loadThinkMode() {
   }
 }
 
-function ChatHub({
-  agent,
+function MainChatPane({
+  agentStatus,
   onStart,
   onStop,
-  onRestart,
-  proactive,
-  onProactive,
+  voiceEnabled,
   health,
   activeModel,
-  lastError,
-  busy,
-  scheduler,
-  activity,
-  modules,
-  tier,
-  allowlistCount,
+  tasks,
+  refresh,
 }) {
-  const running = agent === 'running';
+  const running = agentStatus === 'running';
   const [messages, setMessages] = useStateCH(loadStoredMessages);
   const [draft, setDraft] = useStateCH('');
   const [phase, setPhase] = useStateCH('idle'); // idle | streaming | command
@@ -93,9 +89,12 @@ function ChatHub({
   const [confirmReq, setConfirmReq] = useStateCH(null); // { id, prompt, tool }
   const [thinkMode, setThinkMode] = useStateCH(loadThinkMode); // 'auto' | 'on' | 'off'
   const [devmode, setDevmode] = useDevmode();
+  const [voiceMode, setVoiceMode] = useStateCH(false); // swap pane to VoiceHub
+  const [menuOpen, setMenuOpen] = useStateCH(false);
   const scrollRef = useRefCH(null);
   const streamRef = useRefCH(null); // active postStream handle (for abort)
   const inputRef = useRefCH(null);
+  const menuRef = useRefCH(null);
   // File/image/PDF uploads for the next turn. null = don't block visual drops
   // up front; the server gates images on the chat model and reports any skips.
   const att = window.useAttachments(null);
@@ -106,6 +105,16 @@ function ChatHub({
     },
     [],
   );
+
+  // Close the kebab menu on an outside click.
+  useEffectCH(() => {
+    if (!menuOpen) return undefined;
+    const close = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [menuOpen]);
 
   useEffectCH(() => {
     const el = scrollRef.current;
@@ -125,8 +134,7 @@ function ChatHub({
   }, [thinkMode]);
 
   // Pull the live command reference (core + enabled module commands) so the
-  // command bar can surface buttons. Refreshes whenever the agent comes up or
-  // the installed-module count changes.
+  // command bar can surface buttons. Refreshes whenever the agent comes up.
   useEffectCH(() => {
     if (!running) return;
     let cancelled = false;
@@ -138,7 +146,7 @@ function ChatHub({
     return () => {
       cancelled = true;
     };
-  }, [running, modules && modules.enabled]);
+  }, [running]);
 
   // Append a synthesized voice clip to the most recent assistant bubble.
   const attachVoice = (id) => {
@@ -384,71 +392,209 @@ function ChatHub({
 
   const streaming = phase === 'streaming' || phase === 'command';
 
+  // Fleet-wide controls — the "controls them all" header. Counts come from the
+  // whole task table (passed down from the Agents tab), and the buttons hit the
+  // existing bulk routes so this one chat can steer the entire queue.
+  const fleetPaused = (tasks || []).filter((t) => t.status === 'paused').length;
+  const fleetActive = (tasks || []).filter(
+    (t) => t.status === 'running' || t.status === 'queued',
+  ).length;
+  const pauseFleet = async () => {
+    await window.api.post('/api/agents/tasks/pause_all');
+    refresh && refresh();
+  };
+  const resumeFleet = async () => {
+    await window.api.post('/api/agents/tasks/resume_all');
+    refresh && refresh();
+  };
+  // Stop kills the in-flight main-chat reply AND cancels every queued/running
+  // agent task — a single panic button for the whole fleet.
+  const stopFleet = async () => {
+    abort();
+    await window.api.post('/api/agents/tasks/cancel_all');
+    refresh && refresh();
+  };
+
+  const statusLabel =
+    agentStatus === 'running'
+      ? 'running'
+      : agentStatus === 'starting'
+        ? 'starting…'
+        : agentStatus === 'stopping'
+          ? 'stopping…'
+          : 'stopped';
+
+  // Voice button swaps the whole pane to the existing VoiceHub; its onLeave
+  // returns here. Rendered without the bordered pane chrome so VoiceHub's own
+  // cards aren't double-framed (matches how the old Dashboard hosted it).
+  if (voiceMode && voiceEnabled) {
+    return (
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <window.VoiceHub
+          agent={agentStatus}
+          onStart={onStart}
+          onStop={onStop}
+          health={health}
+          activeModel={activeModel}
+          onLeave={() => setVoiceMode(false)}
+        />
+      </div>
+    );
+  }
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <AgentControlBar
-        agent={agent}
-        busy={busy}
-        onStart={onStart}
-        onStop={onStop}
-        proactive={proactive}
-        onProactive={onProactive}
-        devmode={devmode}
-        onDevmode={setDevmode}
-        onRestart={() => {
-          newChat();
-          onRestart();
-        }}
-        onNewChat={newChat}
-        onAbort={abort}
-        streaming={streaming}
-      />
-
-      <OverviewGrid
-        agent={agent}
-        health={health}
-        activeModel={activeModel}
-        scheduler={scheduler}
-        modules={modules}
-        tier={tier}
-        allowlistCount={allowlistCount}
-      />
-
+    <div
+      style={{
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-lg)',
+        background: 'var(--surface)',
+        overflow: 'hidden',
+      }}
+    >
+      {/* header — the Modulus Agent identity + fleet controls */}
       <div
-        style={{ display: 'flex', gap: calc(12), flex: 1, minHeight: 0, marginTop: calc(12) }}
-        className="chat-grid"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '10px 14px',
+          borderBottom: '1px solid var(--border)',
+          flex: 'none',
+        }}
       >
-        <div
-          style={{
-            flex: 1,
-            minWidth: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius)',
-            overflow: 'hidden',
-            boxShadow: 'var(--shadow-sm)',
-          }}
-        >
-          <div
+        <window.HelixMark size={36} />
+        <div style={{ flex: 1, minWidth: 0, lineHeight: 1.25 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 15.5, fontWeight: 700 }}>Modulus Agent</span>
+            <window.Badge tone={running ? 'ok' : 'neutral'}>{statusLabel}</window.Badge>
+          </div>
+          <span
             style={{
-              padding: '10px 14px',
-              borderBottom: '1px solid var(--border)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              flex: 'none',
+              fontSize: 12.5,
+              color: 'var(--text-3)',
+              display: 'block',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
             }}
           >
-            <window.Icon name="chat" size={17} style={{ color: 'var(--text-3)' }} />
-            <span style={{ fontWeight: 600, fontSize: 14.5 }}>Direct chat</span>
-            <span style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
-              — full tool use, commands &amp; voice{activeModel ? ` · ${activeModel}` : ''}
-            </span>
-          </div>
+            Main agent — full tools, commands &amp; voice{activeModel ? ` · ${activeModel}` : ''}
+          </span>
+        </div>
+        {fleetPaused > 0 ? (
+          <window.Button
+            size="sm"
+            icon="play"
+            onClick={resumeFleet}
+            title="Resume every paused agent task"
+          >
+            Resume
+          </window.Button>
+        ) : (
+          <window.Button
+            size="sm"
+            icon="pause"
+            onClick={pauseFleet}
+            disabled={fleetActive === 0}
+            style={
+              fleetActive > 0
+                ? {
+                    background: 'color-mix(in oklab, var(--warn) 16%, transparent)',
+                    borderColor: 'color-mix(in oklab, var(--warn) 35%, transparent)',
+                    color: 'var(--warn)',
+                  }
+                : undefined
+            }
+            title="Pause every queued and running agent task"
+          >
+            Pause
+          </window.Button>
+        )}
+        <window.Button
+          size="sm"
+          icon="stop"
+          onClick={stopFleet}
+          style={{
+            background: 'color-mix(in oklab, var(--err) 16%, transparent)',
+            borderColor: 'color-mix(in oklab, var(--err) 35%, transparent)',
+            color: 'var(--err)',
+          }}
+          title="Stop the current reply and cancel every agent task"
+        >
+          Stop
+        </window.Button>
+        {voiceEnabled && (
+          <window.Button
+            size="sm"
+            icon="mic"
+            onClick={() => setVoiceMode(true)}
+            title="Switch to voice"
+          >
+            Voice
+          </window.Button>
+        )}
+        <div ref={menuRef} style={{ position: 'relative' }}>
+          <window.IconButton name="menu" label="Chat options" onClick={() => setMenuOpen(!menuOpen)} />
+          {menuOpen && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 34,
+                right: 0,
+                width: 190,
+                background: 'var(--raised)',
+                border: '1px solid var(--border-2)',
+                borderRadius: 'var(--radius)',
+                boxShadow: 'var(--shadow-pop)',
+                zIndex: 60,
+                overflow: 'hidden',
+              }}
+            >
+              {[
+                { icon: 'plus', label: 'New chat', fn: newChat },
+                {
+                  icon: 'terminal',
+                  label: devmode ? 'Dev mode: on' : 'Dev mode: off',
+                  fn: () => setDevmode(!devmode),
+                },
+              ].map((item) => (
+                <button
+                  key={item.label}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    item.fn();
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 9,
+                    width: '100%',
+                    padding: '9px 12px',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-2)',
+                    cursor: 'pointer',
+                    font: 'inherit',
+                    fontSize: 13.5,
+                    textAlign: 'left',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--surface-2)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                >
+                  <window.Icon name={item.icon} size={14} /> {item.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
-          <div
+      <div
             ref={scrollRef}
             style={{
               flex: 1,
@@ -612,26 +758,12 @@ function ChatHub({
             </div>
           </div>
         </div>
-
-        <ActivityStrip
-          agent={agent}
-          health={health}
-          activeModel={activeModel}
-          phase={phase}
-          lastError={lastError}
-          activity={activity}
-        />
-      </div>
-    </div>
   );
 }
 
 function now() {
   const d = new Date();
   return d.toTimeString().slice(0, 5);
-}
-function calc(px) {
-  return `calc(${px}px * var(--gap))`;
 }
 
 // Heuristic: does a command take arguments? "<task>" or an "on|off" style hint
@@ -813,281 +945,6 @@ function MicButton({ running, disabled, onTranscript }) {
     >
       {recording ? 'Stop' : ''}
     </window.Button>
-  );
-}
-
-function OverviewGrid({ agent, health, activeModel, scheduler, modules, tier, allowlistCount }) {
-  const running = agent === 'running';
-  const tiles = [
-    {
-      icon: 'power',
-      label: 'Agent',
-      value: running
-        ? 'Running'
-        : agent === 'stopping'
-          ? 'Stopping'
-          : agent === 'starting'
-            ? 'Starting'
-            : 'Stopped',
-      detail: `${allowlistCount ?? 0} allowed user${allowlistCount === 1 ? '' : 's'}`,
-      dot: running
-        ? 'running'
-        : agent === 'starting' || agent === 'stopping'
-          ? 'starting'
-          : 'stopped',
-    },
-    {
-      icon: 'terminal',
-      label: 'Model',
-      value: activeModel || 'Not selected',
-      detail: tier ? `${tier} tier` : 'hardware tier pending',
-      mono: true,
-      dot: health.ollama ? 'ok' : 'err',
-    },
-    {
-      icon: 'plug',
-      label: 'Modules',
-      value: `${modules?.enabled ?? 0} enabled`,
-      detail: `${modules?.installed ?? 0} installed`,
-      dot: (modules?.enabled ?? 0) > 0 ? 'ok' : 'stopped',
-    },
-    {
-      icon: 'pulse',
-      label: 'Scheduler',
-      value: scheduler ? `${scheduler.jobs ?? 0} jobs` : 'Idle',
-      detail: scheduler ? `${scheduler.nudgesSent ?? 0} nudges sent` : 'no metrics yet',
-      dot: scheduler && scheduler.jobs > 0 ? 'ok' : 'stopped',
-    },
-  ];
-  return (
-    <div className="overview-grid">
-      {tiles.map((t) => (
-        <div key={t.label} className="overview-tile">
-          <span
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--surface-2)',
-              border: '1px solid var(--border)',
-              display: 'grid',
-              placeItems: 'center',
-              color: 'var(--text-3)',
-              flex: 'none',
-            }}
-          >
-            <window.Icon name={t.icon} size={16} />
-          </span>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 7,
-                fontSize: 12,
-                color: 'var(--text-3)',
-                fontWeight: 600,
-              }}
-            >
-              <window.StatusDot state={t.dot} size={7} pulse={t.dot === 'running'} />
-              {t.label}
-            </div>
-            <div
-              style={{
-                marginTop: 4,
-                fontWeight: 700,
-                fontSize: 14,
-                fontFamily: t.mono ? 'var(--font-mono)' : 'var(--font-ui)',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-              title={t.value}
-            >
-              {t.value}
-            </div>
-            <div
-              style={{
-                marginTop: 2,
-                fontSize: 12,
-                color: 'var(--text-3)',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {t.detail}
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/* ---- Agent control bar (hero) ---- */
-function AgentControlBar({
-  agent,
-  busy,
-  onStart,
-  onStop,
-  proactive,
-  onProactive,
-  devmode,
-  onDevmode,
-  onRestart,
-  onNewChat,
-}) {
-  const running = agent === 'running';
-  const stopping = agent === 'stopping';
-  const starting = agent === 'starting' || (!!busy && !stopping);
-  const transitioning = starting || stopping;
-  const label =
-    {
-      running: 'Running',
-      stopped: 'Stopped',
-      starting: 'Starting…',
-      stopping: 'Stopping…',
-      error: 'Error',
-    }[agent] || 'Stopped';
-  const sub =
-    {
-      running: 'Modulus is live and answering messages on Telegram.',
-      stopped: 'The agent is not running. Start it to begin answering messages.',
-      starting: 'Bringing the agent online…',
-      stopping: 'Taking the agent offline…',
-      error: 'Something went wrong starting the agent. Check Diagnostics.',
-    }[agent] || 'The agent is not running.';
-
-  return (
-    <div
-      style={{
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)',
-        padding: calc(13),
-        boxShadow: 'var(--shadow-sm)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 14,
-        flexWrap: 'wrap',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: 1, minWidth: 240 }}>
-        <span
-          style={{
-            width: 46,
-            height: 46,
-            borderRadius: 12,
-            flex: 'none',
-            display: 'grid',
-            placeItems: 'center',
-            background: running
-              ? 'var(--accent-soft)'
-              : transitioning
-                ? 'color-mix(in oklab, var(--warn) 16%, transparent)'
-                : agent === 'error'
-                  ? 'color-mix(in oklab, var(--err) 13%, transparent)'
-                  : 'var(--surface-2)',
-            color: running
-              ? 'var(--accent-strong)'
-              : transitioning
-                ? 'var(--warn)'
-                : agent === 'error'
-                  ? 'var(--err)'
-                  : 'var(--text-3)',
-            border: '1px solid var(--border)',
-          }}
-        >
-          {transitioning ? (
-            <window.Icon name="refresh" size={22} className="spin" />
-          ) : (
-            <window.Icon name="power" size={22} />
-          )}
-        </span>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <window.StatusDot
-              state={transitioning ? 'starting' : agent}
-              size={10}
-              pulse={running}
-            />
-            <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: 0 }}>
-              {stopping ? 'Stopping…' : starting ? 'Starting…' : label}
-            </span>
-          </div>
-          <p style={{ color: 'var(--text-3)', fontSize: 13, marginTop: 3, maxWidth: 380 }}>{sub}</p>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '6px 12px 6px 6px',
-            borderRadius: 99,
-            border: '1px solid var(--border)',
-            background: 'var(--surface-2)',
-          }}
-          title="Let Modulus message you first with nudges and briefings."
-        >
-          <window.Toggle checked={proactive} onChange={onProactive} label="Proactive nudges" />
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)' }}>Proactive</span>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '6px 12px 6px 6px',
-            borderRadius: 99,
-            border: '1px solid var(--border)',
-            background: 'var(--surface-2)',
-          }}
-          title="Append model, timing, and tool activity under each reply."
-        >
-          <window.Toggle checked={devmode} onChange={onDevmode} label="Dev mode diagnostics" />
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)' }}>Dev mode</span>
-        </div>
-        <window.Button
-          variant="ghost"
-          size="sm"
-          icon="plus"
-          onClick={onNewChat}
-          title="Clear the conversation and start fresh"
-        >
-          New chat
-        </window.Button>
-        <window.Button
-          variant="subtle"
-          size="sm"
-          icon="refresh"
-          onClick={onRestart}
-          disabled={!running || transitioning}
-          style={{ opacity: running && !transitioning ? 1 : 0.5 }}
-        >
-          Restart
-        </window.Button>
-        <window.Button
-          variant={running || stopping ? 'default' : 'primary'}
-          icon={running || stopping ? 'stop' : 'power'}
-          onClick={running ? onStop : onStart}
-          disabled={transitioning}
-          style={
-            running || stopping
-              ? {
-                  borderColor: 'color-mix(in oklab, var(--err) 40%, transparent)',
-                  color: 'var(--err)',
-                }
-              : {}
-          }
-        >
-          {stopping ? 'Stopping…' : running ? 'Stop' : starting ? 'Starting…' : 'Start agent'}
-        </window.Button>
-      </div>
-    </div>
   );
 }
 
@@ -1366,234 +1223,4 @@ function EmptyChat({ running, onPrompt }) {
   );
 }
 
-/* ---- activity strip ---- */
-// Human "Xd Xh" / "Xm" from a millisecond span.
-function formatUptime(ms) {
-  if (!ms || ms < 0) return '—';
-  const s = Math.floor(ms / 1000);
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m`;
-  return `${s}s`;
-}
-// Human "Xs ago" / "Xm ago" from an epoch-ms timestamp.
-function formatAgo(ts) {
-  if (!ts) return 'never';
-  const ms = Date.now() - ts;
-  if (ms < 5000) return 'just now';
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  return `${h}h ago`;
-}
-
-function ActivityStrip({ agent, health, activeModel, phase, lastError, activity }) {
-  const running = agent === 'running';
-  // Everything below comes from the daemon's metrics snapshot (state.activity).
-  // It persists after the daemon stops, so gate "live" numbers on `running` and
-  // on how recently the file was written (the daemon rewrites it every ~60s).
-  const act = activity || {};
-  const hasMetrics = !!activity;
-  const metricsAt = act.metricsAt || 0;
-  const stale = !metricsAt || Date.now() - metricsAt > 150_000;
-  const live = running && hasMetrics && !stale;
-
-  const uptimeMs = act.startedAt ? Date.now() - act.startedAt : 0;
-  const tickAgoMs = act.lastTickAt ? Date.now() - act.lastTickAt : Infinity;
-  const heartbeatDot = running ? (tickAgoMs < 150_000 ? 'ok' : 'warn') : 'stopped';
-
-  const cacheTotal = (act.cacheHits || 0) + (act.cacheMisses || 0);
-  const hitRate = cacheTotal > 0 ? Math.round((act.cacheHits / cacheTotal) * 100) : null;
-
-  const rows = [
-    {
-      label: 'Model in use',
-      value: activeModel || '—',
-      mono: true,
-      dot: running ? 'ok' : 'stopped',
-    },
-    {
-      label: 'Queue depth',
-      value: phase !== 'idle' ? '1 message' : '0',
-      dot: phase !== 'idle' ? 'warn' : 'ok',
-    },
-    {
-      label: 'Uptime',
-      value: running && act.startedAt ? formatUptime(uptimeMs) : '—',
-      mono: true,
-      dot: running ? 'ok' : 'stopped',
-    },
-    {
-      label: 'Background loop',
-      value: running && act.lastTickAt ? formatAgo(act.lastTickAt) : '—',
-      dot: heartbeatDot,
-      title: running ? `${act.ticks || 0} scheduler ticks` : 'agent stopped',
-    },
-    {
-      label: 'Nudges sent',
-      value: hasMetrics ? String(act.nudgesSent || 0) : '—',
-      dot: hasMetrics ? 'ok' : 'stopped',
-      title: act.nudgesDropped ? `${act.nudgesDropped} dropped (quiet hours / rate limit)` : '',
-    },
-    {
-      label: 'Cache hit-rate',
-      value: hitRate == null ? '—' : `${hitRate}%`,
-      mono: true,
-      dot: hitRate == null ? 'stopped' : hitRate >= 50 ? 'ok' : 'warn',
-      title: `${cacheTotal} fast-cache lookups since start`,
-    },
-    {
-      label: 'Telegram',
-      value: health.telegram ? 'Connected' : 'Offline',
-      dot: health.telegram && running ? 'ok' : 'stopped',
-    },
-    {
-      label: 'Ollama',
-      value: health.ollama ? 'Reachable' : 'Unreachable',
-      dot: health.ollama ? 'ok' : 'err',
-    },
-  ];
-  return (
-    <div
-      className="activity-strip"
-      style={{ width: 264, flex: 'none', display: 'flex', flexDirection: 'column', gap: calc(12) }}
-    >
-      <div
-        style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)',
-          boxShadow: 'var(--shadow-sm)',
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            padding: '12px 16px',
-            borderBottom: '1px solid var(--border)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-          }}
-        >
-          <window.Icon name="pulse" size={16} style={{ color: 'var(--text-3)' }} />
-          <span style={{ fontWeight: 600, fontSize: 14, flex: 1 }}>Live activity</span>
-          <span
-            title={
-              metricsAt
-                ? `metrics updated ${formatAgo(metricsAt)}`
-                : 'no metrics from the daemon yet'
-            }
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 5,
-              fontSize: 11.5,
-              fontWeight: 600,
-              color: live ? 'var(--ok)' : 'var(--text-3)',
-            }}
-          >
-            <window.StatusDot state={live ? 'ok' : 'stopped'} size={6} pulse={live} />
-            {live ? 'live' : running ? 'stale' : 'paused'}
-          </span>
-        </div>
-        <div>
-          {rows.map((r, i) => (
-            <div
-              key={r.label}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 10,
-                padding: '11px 16px',
-                borderTop: i ? '1px solid var(--border)' : 'none',
-              }}
-            >
-              <span style={{ fontSize: 13, color: 'var(--text-2)', flex: 'none' }}>{r.label}</span>
-              <span
-                title={r.title || undefined}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 7,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  fontFamily: r.mono ? 'var(--font-mono)' : 'var(--font-ui)',
-                  color: 'var(--text)',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  maxWidth: 160,
-                }}
-              >
-                <window.StatusDot state={r.dot} size={7} /> {r.value}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div
-        style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)',
-          boxShadow: 'var(--shadow-sm)',
-          padding: 16,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <window.Icon
-            name={lastError ? 'alert' : 'check'}
-            size={16}
-            style={{ color: lastError ? 'var(--warn)' : 'var(--ok)' }}
-          />
-          <span style={{ fontWeight: 600, fontSize: 14 }}>Last error</span>
-        </div>
-        {lastError ? (
-          <p
-            style={{
-              fontSize: 12.5,
-              color: 'var(--text-2)',
-              lineHeight: 1.5,
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            {lastError}
-          </p>
-        ) : (
-          <p style={{ fontSize: 13, color: 'var(--text-3)' }}>None reported. All clear.</p>
-        )}
-      </div>
-
-      <div
-        style={{
-          borderRadius: 'var(--radius)',
-          padding: 16,
-          border: '1px dashed var(--border-2)',
-          background: 'color-mix(in oklab, var(--accent) 5%, var(--surface))',
-          display: 'flex',
-          gap: 11,
-        }}
-      >
-        <window.Icon
-          name="shield"
-          size={17}
-          style={{ color: 'var(--accent-strong)', marginTop: 1 }}
-        />
-        <p style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5 }}>
-          Everything here runs on <b style={{ color: 'var(--text)' }}>this machine</b>. Your
-          messages and data stay local unless an module says otherwise.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-Object.assign(window, { ChatHub });
+Object.assign(window, { MainChatPane });

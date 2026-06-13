@@ -13,7 +13,19 @@ const SYSTEM_COMMAND_LABELS = {
   commands: 'modulus --help',
 };
 
-function SystemTab({ state, onReset }) {
+function SystemTab({
+  state,
+  onReset,
+  // Daemon controls, threaded from App — the Status sub-view hosts them now
+  // that the Dashboard tab is gone.
+  agentStatus,
+  busy,
+  onStart,
+  onStop,
+  onRestart,
+  proactive,
+  onProactive,
+}) {
   const [sub, setSub] = useStateSys('status');
   const [cmd, setCmd] = useStateSys({
     running: true,
@@ -104,7 +116,18 @@ function SystemTab({ state, onReset }) {
       <div style={{ marginBottom: 20 }}>
         <window.Segmented value={sub} onChange={changeSub} options={subs} />
       </div>
-      {sub === 'status' && <StatusDashboard state={state} />}
+      {sub === 'status' && (
+        <StatusDashboard
+          state={state}
+          agentStatus={agentStatus}
+          busy={busy}
+          onStart={onStart}
+          onStop={onStop}
+          onRestart={onRestart}
+          proactive={proactive}
+          onProactive={onProactive}
+        />
+      )}
       {sub === 'metrics' && <MetricsView />}
       {sub === 'schedule' && <ScheduleView />}
       {sub === 'doctor' && <Doctor onRunCommand={() => runSystemTabCommand('doctor')} />}
@@ -219,14 +242,185 @@ function CommandOutput({ result, running, onRun, empty = 'No output yet.' }) {
   );
 }
 
+// One health pill. `pct` (0-100) draws a mini bar; omit it for plain-value
+// stats like queue depth and error count. (Moved here from the old Dashboard.)
+function HealthPill({ icon, label, value, pct, danger }) {
+  return (
+    <div className="health-pill">
+      <span className="hp-ic">
+        <window.Icon name={icon} size={15} />
+      </span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+        <span className="hp-label">{label}</span>
+        <span className={`hp-val${danger ? ' red-text' : ''}`}>{value}</span>
+      </div>
+      {typeof pct === 'number' && (
+        <div className="mini-bar" style={{ width: 46 }}>
+          <div className="fill green" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// CPU / RAM / queue / errors strip from the `system` block on /api/state.
+function SystemHealthBar({ state }) {
+  const sys = state && state.system ? state.system : null;
+  const cpu = sys && typeof sys.cpuPercent === 'number' ? sys.cpuPercent : null;
+  const ram =
+    sys && typeof sys.ramPercent === 'number'
+      ? sys.ramPercent
+      : state && state.ramGb
+        ? Math.round((1 - state.freeRamGb / state.ramGb) * 100)
+        : null;
+  const queue = sys ? sys.queueDepth : 0;
+  const errors = sys ? sys.errors24h : 0;
+  return (
+    <div className="health-bar" style={{ marginBottom: 'calc(14px * var(--gap))' }}>
+      <HealthPill icon="cpu" label="CPU" value={cpu == null ? '—' : `${cpu}%`} pct={cpu ?? 0} />
+      <HealthPill icon="database" label="RAM" value={ram == null ? '—' : `${ram}%`} pct={ram ?? 0} />
+      <HealthPill icon="layers" label="Queue" value={String(queue)} />
+      <HealthPill
+        icon="alert-triangle"
+        label="Errors (24h)"
+        value={String(errors)}
+        danger={errors > 0}
+      />
+    </div>
+  );
+}
+
+// Daemon Start/Stop/Restart + proactive toggle — the controls that used to live
+// in the Dashboard's hero bar, now the top card of System › Status.
+function DaemonControls({ agentStatus, busy, onStart, onStop, onRestart, proactive, onProactive }) {
+  const running = agentStatus === 'running';
+  const stopping = agentStatus === 'stopping';
+  const starting = agentStatus === 'starting' || (!!busy && !stopping);
+  const transitioning = starting || stopping;
+  const label =
+    { running: 'Running', stopped: 'Stopped', starting: 'Starting…', stopping: 'Stopping…' }[
+      agentStatus
+    ] || 'Stopped';
+  return (
+    <window.Card
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+        flexWrap: 'wrap',
+        marginBottom: 'calc(14px * var(--gap))',
+      }}
+    >
+      <span
+        style={{
+          width: 42,
+          height: 42,
+          borderRadius: 12,
+          flex: 'none',
+          display: 'grid',
+          placeItems: 'center',
+          background: running ? 'var(--accent-soft)' : 'var(--surface-2)',
+          color: running ? 'var(--accent-strong)' : 'var(--text-3)',
+          border: '1px solid var(--border)',
+        }}
+      >
+        <window.Icon name={transitioning ? 'refresh' : 'power'} size={20} className={transitioning ? 'spin' : undefined} />
+      </span>
+      <div style={{ flex: 1, minWidth: 180 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <window.StatusDot
+            state={transitioning ? 'starting' : running ? 'running' : 'stopped'}
+            size={9}
+            pulse={running}
+          />
+          <span style={{ fontSize: 16, fontWeight: 700 }}>{label}</span>
+        </div>
+        <p style={{ color: 'var(--text-3)', fontSize: 13, marginTop: 3 }}>
+          {running
+            ? 'Modulus is live and answering messages on Telegram.'
+            : 'The agent is not running. Start it to begin answering messages.'}
+        </p>
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '6px 12px 6px 6px',
+          borderRadius: 99,
+          border: '1px solid var(--border)',
+          background: 'var(--surface-2)',
+        }}
+        title="Let Modulus message you first with nudges and briefings."
+      >
+        <window.Toggle checked={!!proactive} onChange={onProactive} label="Proactive nudges" />
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)' }}>Proactive</span>
+      </div>
+      <window.Button
+        variant="subtle"
+        size="sm"
+        icon="refresh"
+        onClick={onRestart}
+        disabled={!running || transitioning}
+        style={{ opacity: running && !transitioning ? 1 : 0.5 }}
+      >
+        Restart
+      </window.Button>
+      <window.Button
+        variant={running || stopping ? 'default' : 'primary'}
+        icon={running || stopping ? 'stop' : 'power'}
+        onClick={running ? onStop : onStart}
+        disabled={transitioning}
+        style={
+          running || stopping
+            ? {
+                borderColor: 'color-mix(in oklab, var(--err) 40%, transparent)',
+                color: 'var(--err)',
+              }
+            : {}
+        }
+      >
+        {stopping ? 'Stopping…' : running ? 'Stop' : starting ? 'Starting…' : 'Start agent'}
+      </window.Button>
+    </window.Card>
+  );
+}
+
 /* ---- status dashboard ---- */
-function StatusDashboard({ state }) {
+function StatusDashboard({
+  state,
+  agentStatus,
+  busy,
+  onStart,
+  onStop,
+  onRestart,
+  proactive,
+  onProactive,
+}) {
   const s = state || {};
   const agent = s.agent || {};
   const health = s.health || {};
   const models = s.models || {};
   const mods = s.modules || {};
   const agentState = agent.running ? 'running' : 'stopped';
+  // "refused" vs "unreachable" point at different fixes (Ollama not listening
+  // vs the machine itself being off) — crucial when Ollama lives on another box.
+  const ollamaDownLabel = (kind) =>
+    kind === 'refused'
+      ? 'Not listening'
+      : kind === 'dns'
+        ? 'Bad hostname'
+        : kind === 'unreachable' || kind === 'timeout'
+          ? 'Machine unreachable'
+          : 'Unreachable';
+  const ollamaDownSub = (kind, url) => {
+    const u = url || '';
+    if (kind === 'refused') return `${u} — is Ollama running? On another machine, set OLLAMA_HOST=0.0.0.0`;
+    if (kind === 'unreachable' || kind === 'timeout')
+      return `${u} — is the machine on and the address right?`;
+    if (kind === 'dns') return `${u} — hostname doesn’t resolve; try the IP address`;
+    return u;
+  };
   const cards = [
     {
       label: 'Agent',
@@ -236,9 +430,11 @@ function StatusDashboard({ state }) {
     },
     {
       label: 'Ollama',
-      value: health.ollama ? 'Reachable' : 'Unreachable',
+      value: health.ollama ? 'Reachable' : ollamaDownLabel(health.ollamaErrorKind),
       dot: health.ollama ? 'ok' : 'err',
-      sub: health.ollamaUrl || '',
+      sub: health.ollama
+        ? health.ollamaUrl || ''
+        : ollamaDownSub(health.ollamaErrorKind, health.ollamaUrl),
     },
     { label: 'Models loaded', value: models.loaded ?? 0, sub: models.chat || '—' },
     { label: 'Allowlist', value: s.allowlistCount ?? 0, sub: 'users allowed' },
@@ -247,11 +443,20 @@ function StatusDashboard({ state }) {
       value: mods.enabled ?? 0,
       sub: `${mods.installed ?? 0} installed`,
     },
-    { label: 'Queue depth', value: s.queueDepth ?? 0, sub: 'messages waiting', dot: 'ok' },
   ];
 
   return (
     <div>
+      <DaemonControls
+        agentStatus={agentStatus}
+        busy={busy}
+        onStart={onStart}
+        onStop={onStop}
+        onRestart={onRestart}
+        proactive={proactive}
+        onProactive={onProactive}
+      />
+      <SystemHealthBar state={state} />
       <div
         style={{
           display: 'grid',
@@ -723,26 +928,42 @@ function Maintenance({ state, onUpdate, onFresh }) {
         gap: 'calc(16px * var(--gap))',
       }}
     >
-      <window.Card style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-        <window.Icon name="download" size={22} style={{ color: 'var(--text-3)' }} />
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ fontWeight: 600, fontSize: 15.5 }}>Update Modulus</div>
-          <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 2 }}>
-            Pulls the latest code, reinstalls dependencies, and rebuilds (
-            <span className="mono">modulus update</span>). Restart the agent afterwards.
-            {version ? ` Currently v${version}.` : ''}
-          </p>
-        </div>
-        <window.Button variant="primary" onClick={doUpdate} disabled={updating || freshing}>
-          {updating ? (
-            <>
-              <window.Icon name="refresh" size={16} className="spin" /> Updating…
-            </>
-          ) : (
-            'Check & update'
-          )}
-        </window.Button>
-      </window.Card>
+      {state && state.desktop ? (
+        // Desktop-app install: a packaged payload, not a git checkout. The
+        // shell updates itself from releases; `modulus update` doesn't apply.
+        <window.Card style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <window.Icon name="download" size={22} style={{ color: 'var(--text-3)' }} />
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontWeight: 600, fontSize: 15.5 }}>Updates</div>
+            <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 2 }}>
+              The Modulus desktop app keeps itself up to date automatically. When an update is
+              ready, quit and reopen the app to apply it.
+              {version ? ` Currently v${version}.` : ''}
+            </p>
+          </div>
+        </window.Card>
+      ) : (
+        <window.Card style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <window.Icon name="download" size={22} style={{ color: 'var(--text-3)' }} />
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontWeight: 600, fontSize: 15.5 }}>Update Modulus</div>
+            <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 2 }}>
+              Pulls the latest code, reinstalls dependencies, and rebuilds (
+              <span className="mono">modulus update</span>). Restart the agent afterwards.
+              {version ? ` Currently v${version}.` : ''}
+            </p>
+          </div>
+          <window.Button variant="primary" onClick={doUpdate} disabled={updating || freshing}>
+            {updating ? (
+              <>
+                <window.Icon name="refresh" size={16} className="spin" /> Updating…
+              </>
+            ) : (
+              'Check & update'
+            )}
+          </window.Button>
+        </window.Card>
+      )}
 
       <div
         style={{

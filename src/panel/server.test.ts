@@ -552,6 +552,21 @@ test('maintenance: update reports failure when the CLI run fails', async () => {
   assert.equal(body.command, 'modulus update');
 });
 
+test('maintenance: update refuses under the desktop shell', async () => {
+  // Installed desktop payloads are not git checkouts; the shell's own updater
+  // owns updates, so the git-based route must refuse instead of attempting it.
+  process.env.MODULUS_DESKTOP = '1';
+  try {
+    const r = await authed('/api/maintenance/update', { method: 'POST' });
+    assert.equal(r.status, 409);
+    const body = (await r.json()) as { ok: boolean; output: string };
+    assert.equal(body.ok, false);
+    assert.match(body.output, /desktop app/);
+  } finally {
+    delete process.env.MODULUS_DESKTOP;
+  }
+});
+
 test('memory browser lists, finds, and deletes', async () => {
   await authed('/api/agents'); // touch nothing; just ensure server up
   // Seed a fact directly via the store the panel shares.

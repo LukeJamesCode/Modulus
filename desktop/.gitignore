@@ -1,0 +1,7 @@
+bin/
+obj/
+.cache/
+staging/
+publish/
+Releases/
+*.user

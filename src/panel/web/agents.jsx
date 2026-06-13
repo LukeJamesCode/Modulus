@@ -927,7 +927,16 @@ function LaunchComposer({ agents, workflows, onDispatchAgent, onRunWorkflow }) {
   );
 }
 
-function AgentsTab({ state }) {
+function AgentsTab({
+  state,
+  // Daemon + voice wiring for the pinned "Modulus Agent" chat, from App.
+  agentStatus,
+  onStart,
+  onStop,
+  voiceEnabled,
+  health,
+  activeModel,
+}) {
   const [view, setView] = useState('chats'); // chats | run | agents | workflows
   const [agents, setAgents] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -1156,6 +1165,12 @@ function AgentsTab({ state }) {
           onOpenTask={(id) => setOpenTask(id)}
           onDispatch={(a) => setDispatchFor(a)}
           refresh={load}
+          agentStatus={agentStatus}
+          onStart={onStart}
+          onStop={onStop}
+          voiceEnabled={voiceEnabled}
+          health={health}
+          activeModel={activeModel}
         />
       )}
 

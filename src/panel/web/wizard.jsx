@@ -39,6 +39,7 @@ function Wizard({
     ollamaUrl: 'http://localhost:11434',
     ollamaState: 'idle',
     ollamaErr: '',
+    ollamaErrKind: '',
     tier: suggestedTier || 'standard',
     chatModel: '',
     reasoningModel: '',
@@ -660,6 +661,31 @@ function OllamaInstallCard({ onRecheck, checking }) {
   );
 }
 
+// Turn a classified probe failure into a sentence a non-technical user can act
+// on — the raw ECONNREFUSED/ETIMEDOUT codes mean nothing to them. Especially
+// matters for remote Ollama (e.g. a mini PC on the LAN), where "refused" vs
+// "unreachable" points at completely different fixes.
+function ollamaErrHint(kind, url) {
+  let host = '';
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    /* leave blank */
+  }
+  const at = host ? ` at ${host}` : '';
+  switch (kind) {
+    case 'refused':
+      return `The machine${at} answered, but Ollama isn’t listening there. Make sure Ollama is running — and if it’s another computer, that it was started with OLLAMA_HOST=0.0.0.0.`;
+    case 'unreachable':
+    case 'timeout':
+      return `Couldn’t reach the machine${at}. Check that it’s powered on, on the same network, and that the address is right.`;
+    case 'dns':
+      return `That hostname doesn’t resolve. Try the machine’s IP address instead.`;
+    default:
+      return '';
+  }
+}
+
 function StepOllama({ data, set, models, setModels, suggestedTier, ramGb, modelRecommendations }) {
   const [showAdvanced, setShowAdvanced] = useStateWiz(false);
   const [changeTier, setChangeTier] = useStateWiz(false);
@@ -668,13 +694,17 @@ function StepOllama({ data, set, models, setModels, suggestedTier, ramGb, modelR
   const dlRef = useRefWiz(null);
 
   const probe = async () => {
-    set({ ollamaState: 'testing', ollamaErr: '' });
+    set({ ollamaState: 'testing', ollamaErr: '', ollamaErrKind: '' });
     const r = await window.api.post('/api/ollama/test', { url: data.ollamaUrl });
     if (r.ok && r.data && r.data.ok) {
       set({ ollamaState: 'ok' });
       setModels(r.data.models || []);
     } else {
-      set({ ollamaState: 'err', ollamaErr: (r.data && r.data.error) || r.error || '' });
+      set({
+        ollamaState: 'err',
+        ollamaErr: (r.data && r.data.error) || r.error || '',
+        ollamaErrKind: (r.data && r.data.errorKind) || '',
+      });
     }
   };
   // Auto-probe on mount.
@@ -784,9 +814,10 @@ function StepOllama({ data, set, models, setModels, suggestedTier, ramGb, modelR
           </>
         }
         err={
-          data.ollamaErr
+          ollamaErrHint(data.ollamaErrKind, data.ollamaUrl) ||
+          (data.ollamaErr
             ? `Couldn’t reach Ollama: ${data.ollamaErr}`
-            : 'Couldn’t reach Ollama there.'
+            : 'Couldn’t reach Ollama there.')
         }
       />
 

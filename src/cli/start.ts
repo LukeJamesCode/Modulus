@@ -45,6 +45,7 @@ import { createAgentQueue } from '../core/agent-queue.js';
 import { setupAgentApprovals } from '../core/agent-approvals.js';
 import { setupAgentDelegation } from '../core/agent-delegation.js';
 import { setupAgentEscalation, ESCALATE_TOOL_NAME } from '../core/agent-escalation.js';
+import { setupAgentFleetTools, FLEET_TOOL_NAMES } from '../core/agent-fleet-tools.js';
 import { setupAgentPlanning } from '../core/agent-planning.js';
 import { setupFilesystemTools } from '../core/fs-tools.js';
 import { pinnedFilesRoot } from '../core/agent-attachments.js';
@@ -422,12 +423,16 @@ async function bootDaemon(
     const agentInferenceTimeoutMs = envInt('MODULUS_AGENT_INFERENCE_TIMEOUT_MS') ?? 20 * 60_000;
     // Per-task input attachments (dropped files/folders/images/PDFs) live here.
     const attachmentsDir = join(home, 'agent-attachments');
-    // Agents see every tool except escalate_to_agent: escalation is the main
-    // chat's way to hand long work to the operator, and an agent re-escalating to
-    // a sibling operator would just spawn redundant work (agents delegate with
-    // spawn_agent instead). The mirror of chatTools, which hides the agent-only
+    // Agents see every tool except the chat-side control plane: escalation is
+    // the main chat's way to hand long work to the operator, and the fleet
+    // tools (dispatch/status/manage) are the main chat steering the queue —
+    // an agent doing either would bypass spawn_agent's depth cap and grant
+    // intersection. The mirror of chatTools, which hides the agent-only
     // delegation tools from the chat.
-    const agentTools = filterToolRegistry(tools, (h) => h.name !== ESCALATE_TOOL_NAME);
+    const agentTools = filterToolRegistry(
+      tools,
+      (h) => h.name !== ESCALATE_TOOL_NAME && !FLEET_TOOL_NAMES.includes(h.name),
+    );
     const agentRuntime = createAgentRuntime({
       db,
       llm,
@@ -469,6 +474,15 @@ async function bootDaemon(
       tools,
       registry: agentRegistry,
       queue: agentQueue,
+      log,
+    });
+    // The Modulus Agent's fleet controls (dispatch_agent / agent_fleet_status /
+    // manage_agent_tasks). Chat-only: agentTools above hides them from agents.
+    setupAgentFleetTools({
+      tools,
+      registry: agentRegistry,
+      queue: agentQueue,
+      runtime: agentRuntime,
       log,
     });
     // The spawn_agent / spawn_agents delegation tools (visible only to agents

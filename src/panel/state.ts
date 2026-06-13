@@ -10,7 +10,7 @@ import { cpus, freemem, networkInterfaces, totalmem } from 'node:os';
 import type { DB } from '../storage/db.js';
 import { effectiveConfig, type ModulusConfig } from '../cli/config-store.js';
 import { metricsFilePath } from '../cli/daemon.js';
-import { probeOllama } from '../cli/ollama-probe.js';
+import { classifyProbeError, probeOllama } from '../cli/ollama-probe.js';
 import { collectModuleReadiness } from '../core/module-readiness.js';
 import { readMetrics } from '../core/metrics.js';
 import { RECOMMENDED_MODELS } from '../cli/profiles.js';
@@ -130,6 +130,8 @@ export async function buildState(deps: BuildStateDeps): Promise<unknown> {
     health: {
       ollama: probe.ok,
       ollamaUrl: cfg?.ollama.url ?? null,
+      ollamaError: probe.error ?? null,
+      ollamaErrorKind: classifyProbeError(probe.error),
       telegram: true,
       modelCount: probe.models.length,
     },
@@ -165,6 +167,9 @@ export async function buildState(deps: BuildStateDeps): Promise<unknown> {
     activity,
     version: HOST_VERSION,
     lan: lanAddress(),
+    // Running under the desktop shell: updates come from the shell's own
+    // updater, not the git checkout, so the panel hides `modulus update`.
+    desktop: process.env.MODULUS_DESKTOP === '1',
     // Setup-mode flags + the per-tier model recommendations the wizard renders.
     // modelRecommendations is sent for every tier so flipping the tier control
     // re-renders the recommendation card without a round-trip.
