@@ -391,13 +391,36 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
     const agentIdMatch = /^\/api\/agents\/(\d+)$/.exec(path);
     if (agentIdMatch && method === 'PUT') {
       const id = Number(agentIdMatch[1]);
+      const existing = reg.get(id);
+      if (!existing) {
+        sendJson(res, 404, { error: 'not found' });
+        return true;
+      }
+      // Module-owned agents are managed by their module's manifest; the loader
+      // overwrites any panel edit on the next reload, so refuse rather than lose it.
+      if (existing.origin) {
+        sendJson(res, 409, { error: 'agent is provided by a module and cannot be edited here' });
+        return true;
+      }
       const body = await readJson<Record<string, unknown>>(req);
-      const updated = reg.get(id) ? (reg.update(id, normalizeAgentInput(body)) ?? null) : null;
+      const updated = reg.update(id, normalizeAgentInput(body)) ?? null;
       sendJson(res, updated ? 200 : 404, updated ? { agent: updated } : { error: 'not found' });
       return true;
     }
     if (agentIdMatch && method === 'DELETE') {
-      const ok = reg.remove(Number(agentIdMatch[1]));
+      const id = Number(agentIdMatch[1]);
+      const existing = reg.get(id);
+      if (!existing) {
+        sendJson(res, 404, { error: 'not found' });
+        return true;
+      }
+      // The loader resurrects a module agent on reload, so a panel delete is
+      // lossy theatre — refuse it. Removing the module is the way to remove them.
+      if (existing.origin) {
+        sendJson(res, 409, { error: 'agent is provided by a module and cannot be deleted here' });
+        return true;
+      }
+      const ok = reg.remove(id);
       sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'not found' });
       return true;
     }
@@ -637,7 +660,12 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
       const id = Number(resumeMatch[1]);
       const t = reg.getTask(id);
       const ok = !!t && t.status === 'paused';
-      if (ok) reg.updateTask(id, { status: 'queued', pausedUntil: null });
+      if (ok) {
+        reg.updateTask(id, { status: 'queued', pausedUntil: null });
+        // Wake the queue: a resumed task must not sit idle until some other run
+        // finishes (resume_all notifies too — keep the single-task path in sync).
+        deps.agentQueue.notify();
+      }
       sendJson(res, ok ? 200 : 409, ok ? { ok: true } : { error: 'task is not paused' });
       return true;
     }

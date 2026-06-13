@@ -36,6 +36,9 @@ let base: string;
 let token: string;
 let stopCalls = 0;
 let restartCalls = 0;
+// Counts agentQueue.notify() calls so route tests can assert a resumed task wakes
+// the queue rather than sitting idle until something else finishes.
+let queueNotifyCalls = 0;
 // Drives deps.instantResponder. Default null → the responder stays out of the
 // way of every other chat test; an instant test sets it for one request and
 // resets after. Mirrors the stopCalls/restartCalls mutable-state pattern above.
@@ -128,8 +131,12 @@ before(async () => {
     moduleRoots: [],
     scheduler,
     agentRegistry: createAgentRegistry(db),
-    // The exercised routes don't touch the queue or llm; stub them.
-    agentQueue: { notify() {} } as unknown as PanelDeps['agentQueue'],
+    // Most routes don't touch the queue; the resume routes do — count notify().
+    agentQueue: {
+      notify() {
+        queueNotifyCalls += 1;
+      },
+    } as unknown as PanelDeps['agentQueue'],
     agentRuntime: {
       subscribe(taskId: number, fn: (e: AgentRunEvent) => void): () => void {
         let set = runEventSubs.get(taskId);
@@ -316,6 +323,56 @@ test('agents validation: create without name is 400', async () => {
     body: JSON.stringify({ systemPrompt: 'x' }),
   });
   assert.equal(res.status, 400);
+});
+
+test('resuming a single paused task wakes the queue', async () => {
+  const reg = createAgentRegistry(db);
+  const agent = reg.create({ name: 'resumer', systemPrompt: 'x' });
+  const task = reg.enqueue({ agentId: agent.id, prompt: 'go' });
+  reg.updateTask(task.id, { status: 'paused' });
+
+  const before = queueNotifyCalls;
+  const res = await authed(`/api/agents/tasks/${task.id}/resume`, { method: 'POST' });
+  assert.equal(res.status, 200);
+  assert.equal(reg.getTask(task.id)!.status, 'queued');
+  // The single-task resume must notify the queue (like resume_all), or the task
+  // sits idle until some other run finishes and ticks the loop.
+  assert.equal(queueNotifyCalls, before + 1);
+});
+
+test('module-owned agents cannot be edited or deleted via the panel', async () => {
+  const reg = createAgentRegistry(db);
+  const owned = reg.create({
+    name: 'module-bot',
+    systemPrompt: 'provided by a module',
+    origin: 'module:demo',
+  });
+
+  const put = await authed(`/api/agents/${owned.id}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'module-bot', systemPrompt: 'hijacked' }),
+  });
+  assert.equal(put.status, 409);
+
+  const del = await authed(`/api/agents/${owned.id}`, { method: 'DELETE' });
+  assert.equal(del.status, 409);
+
+  // Untouched: the module still owns it with its original prompt.
+  const after = reg.get(owned.id)!;
+  assert.equal(after.systemPrompt, 'provided by a module');
+  assert.equal(after.origin, 'module:demo');
+
+  // A user-created agent is still freely editable and deletable.
+  const mine = reg.create({ name: 'my-bot', systemPrompt: 'mine' });
+  const okPut = await authed(`/api/agents/${mine.id}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'my-bot', systemPrompt: 'edited' }),
+  });
+  assert.equal(okPut.status, 200);
+  const okDel = await authed(`/api/agents/${mine.id}`, { method: 'DELETE' });
+  assert.equal(okDel.status, 200);
 });
 
 test('run-view stream snapshots on connect, on live events, and closes on done', async () => {

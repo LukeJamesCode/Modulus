@@ -119,6 +119,7 @@ export function setupAgentDelegation(deps: AgentDelegationDeps): void {
       const parentEffectiveGrant = intersectGrants(
         parentAgent.toolAllowlist,
         parentTask.toolAllowlistOverride,
+        deps.tools.list(),
       );
 
       const mode = args['mode'] === 'async' ? 'async' : 'await';
@@ -243,6 +244,7 @@ export function setupAgentDelegation(deps: AgentDelegationDeps): void {
       const parentEffectiveGrant = intersectGrants(
         parentAgent.toolAllowlist,
         parentTask.toolAllowlistOverride,
+        deps.tools.list(),
       );
 
       // Bounded inline fan-out. Children run inline via runTask (NOT enqueued on

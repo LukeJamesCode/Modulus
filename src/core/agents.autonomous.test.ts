@@ -208,6 +208,42 @@ test('autonomous: re-wording the plan without completing a step trips the stall 
   }
 });
 
+test('autonomous: a long single step that records findings does not trip the stall guard', async () => {
+  // Regression (bug): the stall guard only counted completed plan steps, so a
+  // legitimately long step — many tool turns producing findings before its
+  // complete_step — was finalised mid-step once it passed AUTONOMOUS_STALL_LIMIT
+  // (5) no-completion turns. Recorded findings now count as progress, so the run
+  // keeps working: here six finding turns (well past the limit) then finish.
+  const scripts: Array<() => AsyncIterable<ChatChunk>> = [];
+  // Turn 0: author a one-step plan (non-self-replying -> a follow-up text turn).
+  scripts.push(toolCall('update_plan', { steps: [{ title: 'one big step' }] }));
+  scripts.push(textStream('planned'));
+  // Turns 1..6: record a finding each turn, never completing the step.
+  for (let i = 0; i < 6; i++) {
+    scripts.push(toolCall('record_finding', { note: `fact ${i}` }));
+    scripts.push(textStream(`noted ${i}`));
+  }
+  // Then the model finishes for real (self-replying).
+  scripts.push(toolCall('finish', { summary: 'Done after a long step.' }));
+  const h = harness(scripts);
+  try {
+    const agent = makeAutonomous(h.registry); // default 30-round budget
+    const task = h.registry.enqueue({ agentId: agent.id, prompt: 'Do the long thing' });
+
+    const res = await h.runtime.runTask(task.id);
+
+    assert.equal(res.ok, true);
+    assert.equal(res.text, 'Done after a long step.');
+    const after = h.registry.getTask(task.id)!;
+    assert.equal(after.status, 'done');
+    // 1 plan + 6 finding turns + 1 finish = 8 rounds. Impossible if the guard had
+    // tripped at the 5-stall limit (it would have broken out around round 7).
+    assert.equal(after.roundsUsed, 8);
+  } finally {
+    h.cleanup();
+  }
+});
+
 test('autonomous: a round budget stops the loop and finalises', async () => {
   // maxTotalRounds=1: exactly one work turn is allowed; the loop must then
   // finalise (one extra finish turn) rather than keep working forever.

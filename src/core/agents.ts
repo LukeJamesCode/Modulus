@@ -127,15 +127,26 @@ export const AUTONOMOUS_PREAMBLE = [
 ].join('\n');
 
 // Intersect two tool grants. null means "all tools". The result never grants
-// more than either input (fail-safe): the AND of two ceilings. For two
-// explicit lists it's a string-set intersection — conservative if a module
-// name and one of its tool names are split across the two, which only ever
-// over-restricts.
-export function intersectGrants(a: string[] | null, b: string[] | null): string[] | null {
+// more than either input (fail-safe): the AND of two ceilings. A grant entry is
+// either a tool name or a module name (see agentToolPredicate), so a raw
+// string-set intersection silently yields zero tools when one side names a
+// module and the other names one of that module's tools (e.g. ['fs'] ∩
+// ['fs.read'] -> []). To intersect honestly we resolve both grants against the
+// live tool set and keep the concrete tool names admitted by BOTH — those match
+// downstream regardless of how the originals were expressed. `tools` is the
+// universe of registered handlers; pass the registry's current list.
+export function intersectGrants(
+  a: string[] | null,
+  b: string[] | null,
+  tools: ReadonlyArray<{ name: string; module?: string }>,
+): string[] | null {
   if (a === null) return b === null ? null : [...b];
   if (b === null) return [...a];
+  const admits = (grant: Set<string>, t: { name: string; module?: string }): boolean =>
+    grant.has(t.name) || (t.module !== undefined && grant.has(t.module));
+  const aset = new Set(a);
   const bset = new Set(b);
-  return a.filter((x) => bset.has(x));
+  return tools.filter((t) => admits(aset, t) && admits(bset, t)).map((t) => t.name);
 }
 
 export type AgentExecutionMode = 'sequential' | 'parallel';
@@ -1459,11 +1470,19 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
     const startWall = opts.registry.getTask(taskId)?.startedAt ?? Date.now();
     const doneCount = (t: AgentTask | undefined): number =>
       t?.plan ? t.plan.steps.filter((s) => s.status === 'done').length : 0;
+    // Progress within a run = completed plan steps PLUS recorded findings/saved
+    // artifacts (both land as agent_artifacts rows). Counting artifacts too means
+    // a single legitimately long step — many tool turns producing findings before
+    // its complete_step — keeps resetting the stall guard instead of being
+    // finalised mid-step. A model that only re-words its plan produces neither,
+    // so it still trips the guard (the abuse this guard exists to catch).
+    const progressCount = (t: AgentTask | undefined): number =>
+      doneCount(t) + opts.registry.listArtifacts(taskId).length;
 
     let lastText = '';
     let conversationId = opts.registry.getTask(taskId)?.conversationId ?? 0;
     let roundsUsed = opts.registry.getTask(taskId)?.roundsUsed ?? 0;
-    let prevDone = -1;
+    let prevProgress = -1;
     let stall = 0;
 
     const finalizeDone = (text: string): RunResult => {
@@ -1558,16 +1577,15 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
       const after = opts.registry.getTask(taskId);
       const dc = doneCount(after);
       const finished = after?.result != null;
-      // Progress is a completed step or an explicit finish — NOT a re-authored
-      // plan. Measuring against the done-count (rather than the plan JSON, which
-      // a model can perturb every turn by re-wording its steps) stops a run that
-      // keeps re-planning without ever completing anything from defeating the
-      // stall guard and grinding to the round/wall-clock budget. The trade-off:
-      // a single step that legitimately spans more than AUTONOMOUS_STALL_LIMIT
-      // tool turns without a complete_step will trip the guard — acceptable, and
-      // in line with the loop contract ("complete a step each turn").
-      stall = finished || dc > prevDone ? 0 : stall + 1;
-      prevDone = dc;
+      // Progress is a completed step, a recorded finding/saved artifact, or an
+      // explicit finish — NOT a re-authored plan. Measuring real work (rather than
+      // the plan JSON, which a model can perturb every turn by re-wording its
+      // steps) stops a run that keeps re-planning without ever doing anything from
+      // grinding to the round/wall-clock budget, while letting a single long step
+      // that produces findings as it goes keep working past AUTONOMOUS_STALL_LIMIT.
+      const progress = progressCount(after);
+      stall = finished || progress > prevProgress ? 0 : stall + 1;
+      prevProgress = progress;
 
       // Checkpoint: everything needed to resume from here after a restart.
       opts.registry.updateTask(taskId, {

@@ -13,6 +13,7 @@ import {
   createAgentRuntime,
   filterToolRegistry,
   agentToolPredicate,
+  intersectGrants,
   seedStarterAgents,
   AGENT_CHAT_ID_BASE,
   AGENT_TASK_CANCELLED_MESSAGE,
@@ -284,6 +285,30 @@ test('filterToolRegistry: scopes by tool name or module and fails closed on exec
 
   // null allowlist = everything.
   assert.equal(filterToolRegistry(base, agentToolPredicate(null)).list().length, 2);
+});
+
+test('intersectGrants: null is "all", and module/tool names intersect by resolved tools', () => {
+  // Tool universe: two tools in module fs, one in module net.
+  const tools = [
+    { name: 'fs.read', module: 'fs' },
+    { name: 'fs.write', module: 'fs' },
+    { name: 'net.get', module: 'net' },
+  ];
+
+  // null means "all": the other side passes through untouched.
+  assert.equal(intersectGrants(null, null, tools), null);
+  assert.deepEqual(intersectGrants(null, ['fs'], tools), ['fs']);
+  assert.deepEqual(intersectGrants(['fs.read'], null, tools), ['fs.read']);
+
+  // Regression (bug): a module name on one side and one of its tool names on the
+  // other used to yield [] (raw string intersection). Now it resolves to the
+  // concrete tools admitted by BOTH.
+  assert.deepEqual(intersectGrants(['fs'], ['fs.read'], tools), ['fs.read']);
+  assert.deepEqual(intersectGrants(['fs.read'], ['fs'], tools), ['fs.read']);
+
+  // Two module grants intersect to all the module's tools; disjoint grants to none.
+  assert.deepEqual(intersectGrants(['fs'], ['fs'], tools), ['fs.read', 'fs.write']);
+  assert.deepEqual(intersectGrants(['fs'], ['net'], tools), []);
 });
 
 test('AgentRuntime: runs a task headlessly, honors the persona prompt + profile, persists the result', async () => {
