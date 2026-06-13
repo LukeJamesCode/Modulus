@@ -46,7 +46,7 @@ graphify-out/
 .claude/worktrees/
 
 # Personal agent-onboarding docs
-CLAUDE.md
+
 AGENTS.md
 trader-plan.md
 # Local scratch / notes
