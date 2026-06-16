@@ -9,8 +9,6 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-export type ProfileKey = 'chat' | 'reason' | 'tools';
-
 export interface ModulusConfig {
   telegram: {
     token: string;
@@ -257,7 +255,7 @@ export function parseAllowedIds(raw: string): number[] {
 }
 
 function cloneDefaults(): ModulusConfig {
-  return JSON.parse(JSON.stringify(DEFAULTS)) as ModulusConfig;
+  return structuredClone(DEFAULTS);
 }
 
 function mergeWithDefaults(input: Partial<ConfigOnDisk>): ModulusConfig {

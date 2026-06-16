@@ -73,7 +73,7 @@ function saveCoreConfig(
   home: string,
   body: Record<string, unknown>,
 ): { ok: boolean; error?: string } {
-  const next = JSON.parse(JSON.stringify(loadConfig(home))) as ModulusConfig;
+  const next = structuredClone(loadConfig(home));
 
   if (typeof body['token'] === 'string' && body['token'] && !body['token'].includes('•')) {
     next.telegram.token = body['token'];

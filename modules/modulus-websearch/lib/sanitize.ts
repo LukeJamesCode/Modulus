@@ -104,7 +104,7 @@ export function htmlToText(html: string): string {
   )
     .replace(/[ \t\f\v]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
-    .replace(/^\s+|\s+$/g, '');
+    .trim();
 }
 
 export function truncate(text: string, max: number): string {

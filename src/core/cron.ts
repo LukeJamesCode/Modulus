@@ -78,7 +78,7 @@ function parseField(field: string, lo: number, hi: number): Set<number> {
   return set;
 }
 
-export interface CronDateParts {
+interface CronDateParts {
   minute: number;
   hour: number;
   dayOfMonth: number;
@@ -95,7 +95,7 @@ export function matchesCron(parsed: ParsedCron, date: Date, timeZone?: string): 
   return matchesCronParts(parsed, parts);
 }
 
-export function matchesCronParts(parsed: ParsedCron, parts: CronDateParts): boolean {
+function matchesCronParts(parsed: ParsedCron, parts: CronDateParts): boolean {
   return (
     parsed.minute.has(parts.minute) &&
     parsed.hour.has(parts.hour) &&
@@ -115,7 +115,7 @@ function localDateParts(date: Date): CronDateParts {
   };
 }
 
-export function datePartsInTimeZone(date: Date, timeZone: string): CronDateParts {
+function datePartsInTimeZone(date: Date, timeZone: string): CronDateParts {
   const parts = new Intl.DateTimeFormat('en-US-u-ca-gregory', {
     timeZone,
     hourCycle: 'h23',
@@ -136,25 +136,12 @@ export function datePartsInTimeZone(date: Date, timeZone: string): CronDateParts
   };
 }
 
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
 function weekdayIndex(shortWeekday: string): number {
-  switch (shortWeekday) {
-    case 'Sun':
-      return 0;
-    case 'Mon':
-      return 1;
-    case 'Tue':
-      return 2;
-    case 'Wed':
-      return 3;
-    case 'Thu':
-      return 4;
-    case 'Fri':
-      return 5;
-    case 'Sat':
-      return 6;
-    default:
-      throw new Error(`unexpected weekday from Intl: ${shortWeekday}`);
-  }
+  const i = WEEKDAYS.indexOf(shortWeekday);
+  if (i === -1) throw new Error(`unexpected weekday from Intl: ${shortWeekday}`);
+  return i;
 }
 
 // Compute the next minute >= `from` (rounded up to next whole minute) that

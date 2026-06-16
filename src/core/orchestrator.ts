@@ -55,7 +55,7 @@ export function looksLikeFakeToolCall(text: string, allowedTools: ReadonlySet<st
 // Parses raw text to extract JSON/XML-based tool calls. Used to support models
 // (like Qwen3.5 or Gemma4) that hallucinate structured tool calls as text
 // instead of using the native tool-calling API.
-export function extractTextToolCalls(text: string, allowedTools: ReadonlySet<string>): ToolCall[] {
+function extractTextToolCalls(text: string, allowedTools: ReadonlySet<string>): ToolCall[] {
   const t = text.trim();
   if (!t) return [];
   const extracted: ToolCall[] = [];

@@ -5,10 +5,10 @@ import { open as openDb, type DB } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import { homeDir } from './config-store.js';
 
-export const CODEX_MODEL_ALIAS = 'codex';
+const CODEX_MODEL_ALIAS = 'codex';
 const CODEX_MODULE = 'modulus-codex';
 
-export function isCodexModelRef(model: string | undefined): boolean {
+function isCodexModelRef(model: string | undefined): boolean {
   return model === CODEX_MODEL_ALIAS || !!model?.startsWith(`${CODEX_MODEL_ALIAS}:`);
 }
 
@@ -55,7 +55,7 @@ function withDb<T>(home: string, fn: (db: DB) => T): T | undefined {
   }
 }
 
-export function codexModuleEnabled(home: string = homeDir()): boolean {
+function codexModuleEnabled(home: string = homeDir()): boolean {
   if (!codexModuleInstalled(home)) return false;
   return (
     withDb(home, (db) => {

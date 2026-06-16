@@ -54,39 +54,3 @@ export function runModulus(
     });
   });
 }
-
-// Like runModulus, but hands output chunks to the caller as they arrive — the
-// enable-stream SSE relays them so a big model download shows progress lines
-// instead of a frozen spinner. Generous timeout for exactly that case.
-export function runModulusStreaming(
-  deps: PanelDeps,
-  args: string[],
-  onChunk: (text: string) => void,
-  timeoutMs = 1_800_000,
-): Promise<{ code: number }> {
-  return new Promise((resolveRun) => {
-    const child = spawn(process.execPath, [...(deps.execArgv ?? []), cliEntryPath(deps), ...args], {
-      cwd: REPO_ROOT,
-      env: process.env,
-    });
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* ignore */
-      }
-    }, timeoutMs);
-    timer.unref();
-    child.stdout.on('data', (d: Buffer) => onChunk(d.toString('utf8')));
-    child.stderr.on('data', (d: Buffer) => onChunk(d.toString('utf8')));
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolveRun({ code: code ?? -1 });
-    });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      onChunk(String(e));
-      resolveRun({ code: -1 });
-    });
-  });
-}
