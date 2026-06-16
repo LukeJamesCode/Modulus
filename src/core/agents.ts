@@ -249,6 +249,9 @@ export interface AgentTask {
   // Throttled snapshot of the current turn's streaming reasoning/output, for the
   // separate-process panel's run view. Transient; null when not running.
   liveText: string | null;
+  // Chat to notify when this task reaches a terminal state (Telegram /dispatch
+  // records its chat here). null = no notification — delegated/spawned tasks.
+  notifyChatId: number | null;
 }
 
 export interface CreateAgentInput {
@@ -284,6 +287,9 @@ export interface EnqueueTaskInput {
   toolAllowlistOverride?: string[] | null;
   // Per-run thinking override (auto|on|off). Omit/null to inherit the agent's.
   thinkMode?: ThinkMode | null;
+  // Chat to notify when the task finishes. Set by chat-surface dispatches
+  // (Telegram /dispatch); omit for delegated/spawned tasks and fleet tools.
+  notifyChatId?: number | null;
 }
 
 export interface AgentTaskFilter {
@@ -401,6 +407,7 @@ interface TaskRow {
   finished_at: number | null;
   paused_until: number | null;
   live_text: string | null;
+  notify_chat_id: number | null;
 }
 
 function rowToTask(r: TaskRow): AgentTask {
@@ -430,6 +437,7 @@ function rowToTask(r: TaskRow): AgentTask {
     finishedAt: r.finished_at,
     pausedUntil: r.paused_until ?? null,
     liveText: r.live_text ?? null,
+    notifyChatId: r.notify_chat_id ?? null,
   };
 }
 
@@ -514,9 +522,9 @@ export function createAgentRegistry(db: DB): AgentRegistry {
   const insertTask = db.prepare(
     `INSERT INTO agent_tasks
        (agent_id, parent_id, prompt, status, execution_mode, priority, depth,
-        tool_allowlist_override, think_mode, created_at)
+        tool_allowlist_override, think_mode, notify_chat_id, created_at)
      VALUES (@agent_id, @parent_id, @prompt, 'queued', @execution_mode, @priority, @depth,
-             @tool_allowlist_override, @think_mode, @created_at)`,
+             @tool_allowlist_override, @think_mode, @notify_chat_id, @created_at)`,
   );
   const selectTaskById = db.prepare(`SELECT * FROM agent_tasks WHERE id = ?`);
 
@@ -640,6 +648,7 @@ export function createAgentRegistry(db: DB): AgentRegistry {
       tool_allowlist_override:
         override === undefined || override === null ? null : JSON.stringify(override),
       think_mode: input.thinkMode ?? null,
+      notify_chat_id: input.notifyChatId ?? null,
       created_at: Date.now(),
     });
     return getTask(Number(info.lastInsertRowid))!;
@@ -1041,10 +1050,12 @@ export interface AgentRuntimeOptions {
   attachmentsDir?: string;
   // Hive-mind hooks. memoryProvider fills the prompt's memory slot on every
   // agent turn from the same store the main chat uses — that's what makes the
-  // fleet share one memory. onTaskDone fires after a task reaches 'done';
-  // start.ts wires it to promote the task's recorded findings into that store.
-  // Both are best-effort: a throwing hook is logged, never fatal to the run.
-  memoryProvider?: (message: string) => string | undefined;
+  // fleet share one memory. buildOrchestrator passes the running agent's id so
+  // recall is namespace-scoped (global ∪ that agent's private rows). onTaskDone
+  // fires after a task reaches 'done'; start.ts wires it to promote the task's
+  // recorded findings into that agent's namespace. Both are best-effort: a
+  // throwing hook is logged, never fatal to the run.
+  memoryProvider?: (message: string, agentId?: number) => string | undefined;
   onTaskDone?: (task: AgentTask, agent: AgentDefinition) => void;
 }
 
@@ -1190,7 +1201,11 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
           : {}),
       ...(opts.toolResultMaxChars ? { toolResultMaxChars: opts.toolResultMaxChars } : {}),
       ...(opts.inferenceTimeoutMs ? { inferenceTimeoutMs: opts.inferenceTimeoutMs } : {}),
-      ...(opts.memoryProvider ? { memoryProvider: opts.memoryProvider } : {}),
+      // Bind this agent's id so recall is scoped to global ∪ its namespace; the
+      // orchestrator's own provider type stays (message) => … unchanged.
+      ...(opts.memoryProvider
+        ? { memoryProvider: (m: string) => opts.memoryProvider!(m, agent.id) }
+        : {}),
     });
   }
 

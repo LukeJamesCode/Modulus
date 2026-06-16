@@ -1,8 +1,10 @@
 // Settings routes: core config read/write, Ollama connectivity test, model
 // list, Telegram token validation, and the hive-mind memory browser.
 //
-// Config writes persist to ~/.modulus/config.json; model/tier changes take
-// effect on the next restart (they're read at boot), the same as the CLI.
+// Config writes persist to ~/.modulus/config.json. A model change is also
+// pushed to the live LLM (deps.llm.updateModels) so it applies on the next
+// turn; tier windows, the Ollama URL, and Telegram are read at boot and still
+// take effect on the next restart, the same as the CLI.
 
 import { totalmem } from 'node:os';
 import {
@@ -111,6 +113,17 @@ function saveCoreConfig(
   if (typeof body['instantResponses'] === 'boolean') {
     next.instantResponses = { enabled: body['instantResponses'] };
   }
+  if (typeof body['memoryExtraction'] === 'boolean' || typeof body['memoryDreaming'] === 'boolean') {
+    next.memory = {
+      ...(next.memory ?? {}),
+      ...(typeof body['memoryExtraction'] === 'boolean'
+        ? { extraction: { enabled: body['memoryExtraction'] } }
+        : {}),
+      ...(typeof body['memoryDreaming'] === 'boolean'
+        ? { dreaming: { enabled: body['memoryDreaming'] } }
+        : {}),
+    };
+  }
 
   saveConfig(next, home);
   return { ok: true };
@@ -131,6 +144,10 @@ export function createSettingsRoutes(deps: PanelDeps): RouteModule {
         tier: cfg.tier ?? suggestedTier(),
         logLevel: cfg.logLevel ?? 'info',
         instantResponses: cfg.instantResponses?.enabled !== false,
+        // Effective state, mirroring start.ts: extraction defaults on unless the
+        // tier is small; dreaming defaults on. Both take effect on next restart.
+        memoryExtraction: cfg.memory?.extraction?.enabled ?? cfg.tier !== 'small',
+        memoryDreaming: cfg.memory?.dreaming?.enabled ?? true,
         envLocks: envLocks(),
       });
       return true;
@@ -138,6 +155,20 @@ export function createSettingsRoutes(deps: PanelDeps): RouteModule {
 
     if (path === '/api/config' && method === 'POST') {
       const result = saveCoreConfig(deps.home, await readJson<Record<string, unknown>>(req));
+      if (result.ok) {
+        // Apply the saved model selection to the live LLM so a model change
+        // takes effect on the next turn instead of waiting for a restart — the
+        // config file alone was never re-read by the running daemon. Reads the
+        // post-save effectiveConfig so an env-pinned model still wins, matching
+        // boot. Other knobs (tier windows, Ollama URL, Telegram) are wired at
+        // boot and still need a restart.
+        const { models } = effectiveConfig(deps.home);
+        deps.llm.updateModels({
+          chat: models.chat,
+          ...(models.reason ? { reason: models.reason } : {}),
+          ...(models.tools ? { tools: models.tools } : {}),
+        });
+      }
       sendJson(res, result.ok ? 200 : 400, result.ok ? { ok: true } : { error: result.error });
       return true;
     }
@@ -178,7 +209,19 @@ export function createSettingsRoutes(deps: PanelDeps): RouteModule {
       const q = (url.searchParams.get('q') ?? url.searchParams.get('query') ?? '').trim();
       const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 100));
       const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
-      const memories = q ? deps.memory.recall(q, limit) : deps.memory.list(limit, offset);
+      // Optional scope filter: a numeric agentId shows just that agent's private
+      // namespace. Each row already carries agentId, so the client resolves names.
+      const agentIdRaw = url.searchParams.get('agentId');
+      const agentId = agentIdRaw && /^\d+$/.test(agentIdRaw) ? Number(agentIdRaw) : undefined;
+      // An agent-scoped search recalls global ∪ that agent's private rows in
+      // SQL (recallScoped) — so high-ranked private rows past the limit aren't
+      // dropped and global rows still surface. Unscoped search scans every
+      // namespace; no query falls back to a plain listing.
+      const memories = q
+        ? agentId !== undefined
+          ? deps.memory.recallScoped(q, agentId, limit)
+          : deps.memory.recall(q, limit)
+        : deps.memory.list(limit, offset, agentId);
       sendJson(res, 200, { memories, total: deps.memory.count() });
       return true;
     }

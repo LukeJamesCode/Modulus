@@ -728,11 +728,11 @@ function SectionTitle({ children, sub, right }) {
 }
 
 /* ----------------------------------------------------------- Attachments
-   Shared file-upload staging used by Chat, Agents, and Workflows. Each picked
-   file's bytes are staged to the server under one batch token; the caller hands
-   `stageToken` to its chat/dispatch/run endpoint, which ingests then deletes the
-   batch. `multimodal === false` blocks image/PDF drops up front; null/true lets
-   them through and the server reports anything it had to skip. */
+   Shared file-upload staging used by Chat and Agents. Each picked file's bytes
+   are staged to the server under one batch token; the caller hands `stageToken`
+   to its chat/dispatch endpoint, which ingests then deletes the batch.
+   `multimodal === false` blocks image/PDF drops up front; null/true lets them
+   through and the server reports anything it had to skip. */
 const ATTACH_IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
 function classifyAttachment(name, type) {
   const lower = (name || '').toLowerCase();

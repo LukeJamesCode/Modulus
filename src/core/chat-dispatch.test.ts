@@ -247,6 +247,52 @@ test('isCoreCommand leaves core commands for the surface to handle', async () =>
   assert.deepEqual(replies, []);
 });
 
+test('the memory extractor runs detached, after the reply has shipped', async () => {
+  const { orchestrator } = orchestratorEmitting('final', { userText: 'remember milk' });
+  const replies: string[] = [];
+  const seen: AfterTurnContext[] = [];
+  let replyShippedFirst = false;
+  const memoryExtractor = async (turn: AfterTurnContext): Promise<void> => {
+    // Observed at call time: the reply must already be out (it's awaited before
+    // the detached afterTurn block runs), proving extraction never blocks it.
+    replyShippedFirst = replies.length > 0;
+    seen.push(turn);
+  };
+  const d = createChatDispatcher(deps({ orchestrator, memoryExtractor }));
+  await d.dispatchInbound({
+    chatId: 1,
+    userId: 2,
+    text: 'remember milk',
+    reply: async (t) => void replies.push(t),
+  });
+  await flush();
+  await flush();
+  assert.deepEqual(replies, ['final']);
+  assert.equal(seen.length, 1, 'extractor must be invoked with the turn');
+  assert.equal(seen[0]!.assistantText, 'final');
+  assert.ok(replyShippedFirst, 'the reply must be sent before the extractor runs');
+});
+
+test('a throwing memory extractor is isolated and never breaks the turn', async () => {
+  const { orchestrator } = orchestratorEmitting('final', { userText: 'remember milk' });
+  const replies: string[] = [];
+  const memoryExtractor = async (): Promise<void> => {
+    throw new Error('extractor blew up');
+  };
+  const d = createChatDispatcher(deps({ orchestrator, memoryExtractor }));
+  await assert.doesNotReject(() =>
+    d.dispatchInbound({
+      chatId: 1,
+      userId: 2,
+      text: 'remember milk',
+      reply: async (t) => void replies.push(t),
+    }),
+  );
+  await flush();
+  await flush();
+  assert.deepEqual(replies, ['final'], 'the reply still ships despite the extractor throwing');
+});
+
 test('afterReply and afterTurn hooks fire after a completed orchestrator turn', async () => {
   const { orchestrator } = orchestratorEmitting('final', { conversationId: 7 });
   const afterReplyText: string[] = [];

@@ -66,3 +66,23 @@ NEVER delete `node_modules` or reinstall from scratch: better-sqlite3 has no pre
 for this Node (20.x/win32) and the machine has no C++ toolchain — `node_modules` was copied
 from GurneyAgent. If it breaks, restore `node_modules/better-sqlite3` from
 `../GurneyAgent/node_modules/`.
+
+## Keep the desktop build in sync
+
+After any `src/` change that should reach the desktop app, republish the daemon so the
+WinUI shell (`desktop/publish/`) actually runs the new code — the shell launches
+`desktop/publish/daemon/app/dist/cli/index.js`, and a stale `dist/` is the default trap.
+Once the gate is green:
+
+1. `rm -rf dist && npm run build` — clean, because `tsc` does NOT prune orphan `.js` for
+   deleted sources (it leaves e.g. `dist/core/workflow-runner.js` behind).
+2. `cpSync` the fresh `dist/` over both `desktop/staging/daemon/app/dist` and
+   `desktop/publish/daemon/app/dist` (one Node `cpSync` per dest; `rm -rf` the dest first).
+
+That is the every-time step (no C#/dep change ⇒ no shell rebuild). Only when a distributable
+`Setup.exe` is needed, run the full pipeline: `MODULUS_DESKTOP_VERSION=<next>
+node desktop/scripts/build-installer.mjs` (re-stages with `npm ci` in `staging/` — never the
+repo `node_modules` — then `dotnet publish` + `vpk pack`). Bump the version past the latest in
+`desktop/Releases` or vpk aborts ("release ≥ current version"). The build also wipes/regenerates
+`desktop/publish/`, so it fails with `EBUSY` unless ModulusDesktop is closed first — fully quit
+it and free port 7787 before building or relaunching, else the new launch adopts the stale daemon.

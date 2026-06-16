@@ -387,8 +387,8 @@ test('AgentRuntime: an inference timeout fails the task loudly, not a silent emp
 });
 
 test('AgentRuntime: per-run thinkMode overrides the agent default; null inherits it', async () => {
-  // Why this matters: a dispatch (or workflow node) can flip reasoning on/off
-  // for a single run without editing the agent. The override has to win over
+  // Why this matters: a dispatch can flip reasoning on/off for a single run
+  // without editing the agent. The override has to win over
   // the persona's saved think mode AND actually reach the model call — that's
   // the whole point of the toggle. A stored null must leave the agent default
   // in force.

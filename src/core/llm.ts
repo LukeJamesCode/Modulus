@@ -183,15 +183,23 @@ export interface LLM {
   // Stop the idle-eviction timer. Test/teardown hook.
   stopIdleEviction(): void;
   // Immediately unload the resident heavy model (Ollama keep_alive=0) if one is
-  // loaded and no heavy inference is in flight. Lets background executors (agent
-  // queue, workflow runner) free the big model the moment their work drains,
-  // instead of waiting out keep_alive or the 10-minute idle sweep — the whole
+  // loaded and no heavy inference is in flight. Lets the agent queue free the
+  // big model the moment its work drains, instead of waiting out keep_alive or
+  // the 10-minute idle sweep — the whole
   // point on a RAM-constrained Pi. Optional so fakes/providers need no change;
   // a no-op when nothing heavy is resident.
   releaseHeavy?(): Promise<void>;
   // Optional module hook. Routed LLMs expose this so an enabled module can
   // contribute a model alias without core importing module code.
   registerProvider?: (provider: LLMProvider) => () => void;
+  // Re-point already-configured profiles at different Ollama tags without a
+  // restart, so a Settings model change takes effect on the very next turn
+  // instead of waiting for the next boot. Only the `model` of an existing
+  // profile is swapped — context/keep_alive/num_predict (which the orchestrator
+  // budget is matched to) are untouched, and a slot the host didn't configure
+  // at boot is left absent (adding/removing a slot still needs a restart).
+  // Optional so fakes/providers need no change.
+  updateModels?(models: { chat?: string; reason?: string; tools?: string }): void;
 }
 
 export class CircuitOpenError extends Error {
@@ -290,6 +298,11 @@ export function createOllama(opts: OllamaOptions): LLM {
   const idleEvictionTickMs = opts.idleEvictionTickMs ?? 60_000;
   const log = opts.log.child({ mod: 'llm' });
 
+  // Live-mutable profile map. Seeded from boot config; updateModels() swaps a
+  // profile's model in place so a Settings change applies without a restart.
+  // Everything below reads through this binding rather than opts.profiles.
+  const profiles: Partial<Record<ProfileName, ProfileConfig | null>> = { ...opts.profiles };
+
   const breaker: BreakerState = {
     failures: 0,
     consecutiveSuccesses: 0,
@@ -305,7 +318,7 @@ export function createOllama(opts: OllamaOptions): LLM {
   // Count of heavy inferences currently streaming. releaseHeavy() refuses to
   // unload while this is > 0: that call is deliberately keeping the model hot,
   // and the caller fires releaseHeavy again once it next goes idle. Guards the
-  // cross-component race where a workflow finishing unloads the model an
+  // cross-component race where one task finishing unloads the model another
   // agent-queue task (which bypasses the queue's heavy governor) is mid-using.
   let heavyInFlight = 0;
   // Last-used timestamps per profile name. The idle sweep reads this to
@@ -331,7 +344,7 @@ export function createOllama(opts: OllamaOptions): LLM {
     profileName: string;
   } {
     if (typeof p === 'object') return { model: p.model, cfg: null, profileName: p.model };
-    const cfg = opts.profiles[p];
+    const cfg = profiles[p];
     if (!cfg) {
       throw new Error(`profile '${p}' is not configured`);
     }
@@ -486,7 +499,7 @@ export function createOllama(opts: OllamaOptions): LLM {
 
   // Proactively unload the resident heavy model right now rather than on a
   // timer. Background executors call this the instant their work drains so a
-  // one-shot reasoning agent/workflow doesn't pin 6+ GB of RAM for the whole
+  // one-shot reasoning agent doesn't pin 6+ GB of RAM for the whole
   // keep_alive window on a Pi-class host. Skips the unload when a heavy call is
   // still streaming (heavyInFlight > 0). Serialized through the same lock as
   // evictIfNeeded so a release and a concurrent load can't race the
@@ -503,12 +516,12 @@ export function createOllama(opts: OllamaOptions): LLM {
     await evictionLock;
   }
 
-  // Ask Ollama whether a model advertises a thinking mode. Returns 'yes'/'no'
-  // from the authoritative /api/show `capabilities` list, or null when the
-  // probe can't answer (pre-capabilities Ollama, model not pulled, network/
-  // timeout). Never throws and never touches the circuit breaker — a failed
-  // capability lookup must not look like an inference outage.
-  async function probeThinking(model: string): Promise<'yes' | 'no' | null> {
+  // One /api/show probe shared by every capability lookup. Returns 'yes'/'no'
+  // from the authoritative `capabilities` list, or null when the probe can't
+  // answer (pre-capabilities Ollama, model not pulled, network/timeout). Never
+  // throws and never touches the circuit breaker — a failed capability lookup
+  // must not look like an inference outage.
+  async function probeCapability(model: string, capability: string): Promise<'yes' | 'no' | null> {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 5_000);
     try {
@@ -521,7 +534,7 @@ export function createOllama(opts: OllamaOptions): LLM {
       if (!res.ok) return null;
       const j = (await res.json()) as { capabilities?: unknown };
       if (!Array.isArray(j.capabilities)) return null;
-      return j.capabilities.includes('thinking') ? 'yes' : 'no';
+      return j.capabilities.includes(capability) ? 'yes' : 'no';
     } catch {
       return null;
     } finally {
@@ -529,62 +542,31 @@ export function createOllama(opts: OllamaOptions): LLM {
     }
   }
 
-  // Resolve a model's thinking support, preferring Ollama's capability probe
-  // and falling back to the tag heuristic when the probe is unavailable. The
-  // tri-state matters: a probe that authoritatively reports no thinking yields
-  // 'no' (never send think:false — Ollama errors), whereas a probe failure on
-  // an unknown model yields 'unknown' so an explicit thinkMode:'off' is still
-  // honoured.
-  async function resolveThinking(model: string): Promise<'yes' | 'no' | 'unknown'> {
-    const cached = thinkingCache.get(model);
+  // Resolve a model's support for `capability`, preferring Ollama's probe and
+  // falling back to the tag heuristic when the probe is unavailable. The
+  // tri-state matters: an authoritative 'no' (e.g. Gemma 2/3 thinking) is never
+  // coerced — sending think:false to a non-thinking model errors the turn —
+  // whereas a probe failure yields the family default ('unknown' for unknown
+  // models) so an explicit per-turn override is still honoured.
+  async function resolveCapability(
+    model: string,
+    capability: 'thinking' | 'vision',
+    cache: Map<string, 'yes' | 'no'>,
+  ): Promise<'yes' | 'no' | 'unknown'> {
+    const cached = cache.get(model);
     if (cached) return cached;
-    const probed = await probeThinking(model);
+    const probed = await probeCapability(model, capability);
     if (probed) {
-      thinkingCache.set(model, probed);
+      cache.set(model, probed);
       return probed;
     }
-    return modelFamily(model).thinking;
-  }
-
-  // Ask Ollama whether a model accepts image inputs. Mirrors probeThinking:
-  // authoritative /api/show `capabilities`, never throws, never touches the
-  // breaker. 'vision' is Ollama's capability flag for multimodal models.
-  async function probeVision(model: string): Promise<'yes' | 'no' | null> {
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 5_000);
-    try {
-      const res = await fetchImpl(`${opts.baseUrl}/api/show`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model }),
-        signal: ctl.signal,
-      });
-      if (!res.ok) return null;
-      const j = (await res.json()) as { capabilities?: unknown };
-      if (!Array.isArray(j.capabilities)) return null;
-      return j.capabilities.includes('vision') ? 'yes' : 'no';
-    } catch {
-      return null;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  async function resolveVision(model: string): Promise<'yes' | 'no' | 'unknown'> {
-    const cached = visionCache.get(model);
-    if (cached) return cached;
-    const probed = await probeVision(model);
-    if (probed) {
-      visionCache.set(model, probed);
-      return probed;
-    }
-    return modelFamily(model).vision;
+    return modelFamily(model)[capability];
   }
 
   // Public gate for attaching images to a turn. Only a definite 'yes' allows it;
   // 'unknown'/'no' fail closed (sending images to a text model errors the turn).
   async function supportsVision(model: string): Promise<boolean> {
-    return (await resolveVision(model)) === 'yes';
+    return (await resolveCapability(model, 'vision', visionCache)) === 'yes';
   }
 
   async function* chat(o: ChatOptions): AsyncIterable<ChatChunk> {
@@ -609,7 +591,7 @@ export function createOllama(opts: OllamaOptions): LLM {
     // thinks is resolved from Ollama's capability probe (Gemma 4 reasons,
     // Gemma 2/3 don't); non-thinking models skip this entirely.
     const thinkMode = o.thinkMode ?? target.cfg?.thinkMode ?? 'auto';
-    const thinking = await resolveThinking(target.model);
+    const thinking = await resolveCapability(target.model, 'thinking', thinkingCache);
     // A model we *know* can't think (Gemma 2/3) is never suppressed — sending
     // Ollama's `think` parameter to it errors the turn. 'unknown' families keep
     // the historical behaviour: honour an explicit 'off', stay quiet on 'auto'.
@@ -788,9 +770,9 @@ export function createOllama(opts: OllamaOptions): LLM {
 
   function listProfiles(): Record<ProfileName, ProfileConfig | null> {
     return {
-      chat: opts.profiles.chat ?? null,
-      reason: opts.profiles.reason ?? null,
-      tools: opts.profiles.tools ?? null,
+      chat: profiles.chat ?? null,
+      reason: profiles.reason ?? null,
+      tools: profiles.tools ?? null,
     };
   }
 
@@ -798,11 +780,30 @@ export function createOllama(opts: OllamaOptions): LLM {
     return resolveProfile(p).model;
   }
 
+  // Swap the model tag of each already-configured profile to match a new
+  // Settings selection. Only existing slots are re-pointed: the orchestrator
+  // resolves its tool/escalation profiles once at boot, so silently adding or
+  // removing a slot here could leave it pointing at an absent profile — those
+  // changes still want a restart. A stale resident heavy model (the old
+  // reason tag) is left to evictIfNeeded on the next heavy call / the idle
+  // sweep; we only touch the routing here.
+  function updateModels(models: { chat?: string; reason?: string; tools?: string }): void {
+    for (const name of ['chat', 'reason', 'tools'] as const) {
+      const cfg = profiles[name];
+      const next = models[name];
+      if (cfg && next && next !== cfg.model) {
+        profiles[name] = { ...cfg, model: next };
+        log.info('llm profile model updated', { profile: name, model: next });
+      }
+    }
+  }
+
   return {
     chat,
     health,
     listProfiles,
     resolveModel,
+    updateModels,
     supportsVision,
     breakerSnapshot,
     stopIdleEviction,

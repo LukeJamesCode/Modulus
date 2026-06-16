@@ -112,6 +112,10 @@ function ModulesTab() {
     );
   }
 
+  if (view === 'skills') {
+    return <SkillsView onBack={() => setView('installed')} />;
+  }
+
   const visibleMods = mods.filter((e) => !e.self);
   const enabled = visibleMods.filter((e) => e.enabled);
   const disabled = visibleMods.filter((e) => !e.enabled);
@@ -147,10 +151,18 @@ function ModulesTab() {
         />
         <window.Button
           size="sm"
+          variant="subtle"
+          icon="sparkles"
+          onClick={() => setView('skills')}
+          style={{ marginLeft: 'auto' }}
+        >
+          Skills
+        </window.Button>
+        <window.Button
+          size="sm"
           variant="default"
           icon="plus"
           onClick={() => setView('browse')}
-          style={{ marginLeft: 'auto' }}
         >
           Browse marketplace
         </window.Button>
@@ -1633,6 +1645,379 @@ function ConsentModal({ entry, busy, onCancel, onConfirm }) {
           ))}
         </ul>
       )}
+    </window.Modal>
+  );
+}
+
+// -- Skills: the SAFE tier of the Modules tab ------------------------------
+// A skill is pure prompt data — a summary + playbook + an allowlist of tools
+// you already have. So this view is intentionally lighter than the module one:
+// no settings, no setup, no "connect". You manage what's installed (enable /
+// disable / view playbook / remove) and browse the registry for more, where the
+// consent screen shows the exact tools each skill would use, in plain language.
+function SkillsView({ onBack }) {
+  const [view, setView] = useStateMod('installed'); // installed | browse
+  const [installed, setInstalled] = useStateMod(null);
+  const [browse, setBrowse] = useStateMod(null);
+  const [error, setError] = useStateMod(null);
+  const [busy, setBusy] = useStateMod(null); // skill name mutating
+  const [consent, setConsent] = useStateMod(null); // registry entry awaiting confirm
+  const [playbook, setPlaybook] = useStateMod(null); // installed record being viewed
+  const [actionError, setActionError] = useStateMod(null);
+
+  const loadInstalled = async () => {
+    setError(null);
+    const r = await window.api.get('/api/skills');
+    if (r.ok) setInstalled(r.data.skills || []);
+    else setError((r.data && r.data.error) || r.error || 'Could not load skills.');
+  };
+  const loadBrowse = async () => {
+    setError(null);
+    setBrowse(null);
+    const r = await window.api.get('/api/skills/registry');
+    if (r.ok) setBrowse(r.data.skills || []);
+    else setError((r.data && r.data.error) || r.error || 'Could not reach the registry.');
+  };
+  useEffectMod(() => {
+    loadInstalled();
+  }, []);
+
+  const act = async (name, action) => {
+    setBusy(name);
+    setActionError(null);
+    const r = await window.api.post(`/api/skills/${encodeURIComponent(name)}/${action}`);
+    setBusy(null);
+    if (r.ok) loadInstalled();
+    else setActionError((r.data && r.data.error) || r.error || `Could not ${action} ${name}.`);
+  };
+  const install = async (entry) => {
+    setBusy(entry.name);
+    setActionError(null);
+    const r = await window.api.post('/api/skills/registry/install', {
+      name: entry.name,
+      acceptAdded: true,
+    });
+    setBusy(null);
+    setConsent(null);
+    if (r.ok) {
+      loadBrowse();
+      loadInstalled();
+    } else setActionError((r.data && r.data.error) || r.error || `Could not install ${entry.name}.`);
+  };
+
+  return (
+    <div className="fade">
+      <button
+        onClick={onBack}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          background: 'none',
+          border: 'none',
+          color: 'var(--text-2)',
+          cursor: 'pointer',
+          fontSize: 13.5,
+          fontWeight: 600,
+          marginBottom: 16,
+          padding: 0,
+        }}
+      >
+        <window.Icon name="back" size={16} /> Modules
+      </button>
+
+      <window.SectionTitle sub="Skills are reference playbooks the assistant loads on its own when a request fits. They ship no code — a skill can only point at tools you've already allowed.">
+        Skills
+      </window.SectionTitle>
+
+      {actionError && <ErrorNote text={actionError} />}
+      {error && <ErrorNote text={error} onRetry={view === 'browse' ? loadBrowse : loadInstalled} />}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+        <window.Segmented
+          value={view}
+          onChange={(v) => {
+            setView(v);
+            if (v === 'browse' && browse === null) loadBrowse();
+          }}
+          options={[
+            { value: 'installed', label: 'Installed' },
+            { value: 'browse', label: 'Browse' },
+          ]}
+        />
+      </div>
+
+      {view === 'installed' && installed !== null && installed.length === 0 && (
+        <div
+          style={{
+            textAlign: 'center',
+            padding: '50px 20px',
+            border: '1px dashed var(--border-2)',
+            borderRadius: 'var(--radius)',
+            color: 'var(--text-3)',
+          }}
+        >
+          <window.Icon name="spark" size={28} style={{ margin: '0 auto 10px' }} />
+          <p style={{ fontSize: 14, color: 'var(--text-2)', fontWeight: 600 }}>No skills yet</p>
+          <p style={{ fontSize: 13, marginTop: 3 }}>Browse the registry to add one.</p>
+        </div>
+      )}
+
+      {view === 'installed' && installed && installed.length > 0 && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))',
+            gap: 'calc(16px * var(--gap))',
+          }}
+        >
+          {installed.map((s) => (
+            <SkillCard
+              key={s.name}
+              skill={s}
+              busy={busy === s.name}
+              onToggle={(v) => act(s.name, v ? 'enable' : 'disable')}
+              onView={() => setPlaybook(s)}
+              onRemove={() => act(s.name, 'uninstall')}
+            />
+          ))}
+        </div>
+      )}
+
+      {view === 'browse' && browse === null && !error && (
+        <p style={{ fontSize: 13.5, color: 'var(--text-3)' }}>Loading skills…</p>
+      )}
+      {view === 'browse' && browse && browse.length === 0 && !error && (
+        <div
+          style={{
+            textAlign: 'center',
+            padding: '50px 20px',
+            border: '1px dashed var(--border-2)',
+            borderRadius: 'var(--radius)',
+            color: 'var(--text-3)',
+          }}
+        >
+          <window.Icon name="spark" size={28} style={{ margin: '0 auto 10px' }} />
+          <p style={{ fontSize: 14, color: 'var(--text-2)', fontWeight: 600 }}>
+            No skills published yet
+          </p>
+        </div>
+      )}
+      {view === 'browse' && browse && browse.length > 0 && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))',
+            gap: 'calc(16px * var(--gap))',
+          }}
+        >
+          {browse.map((s) => (
+            <SkillMarketCard
+              key={s.name}
+              entry={s}
+              busy={busy === s.name}
+              onInstall={() => setConsent(s)}
+            />
+          ))}
+        </div>
+      )}
+
+      <SkillConsentModal
+        entry={consent}
+        busy={!!busy}
+        onCancel={() => setConsent(null)}
+        onConfirm={() => consent && install(consent)}
+      />
+      <SkillPlaybookModal skill={playbook} onClose={() => setPlaybook(null)} />
+    </div>
+  );
+}
+
+function SkillToolList({ tools, label }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div
+        style={{
+          fontSize: 11.5,
+          fontWeight: 700,
+          color: 'var(--text-3)',
+          textTransform: 'uppercase',
+          letterSpacing: '.05em',
+          marginBottom: 6,
+        }}
+      >
+        {label}
+      </div>
+      <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5 }}>
+        {(tools && tools.length ? tools : ['Guidance only — uses no tools']).map((t, i) => (
+          <li key={i}>{t}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function SkillCard({ skill, busy, onToggle, onView, onRemove }) {
+  return (
+    <div
+      style={{
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
+        boxShadow: 'var(--shadow-sm)',
+        display: 'flex',
+        flexDirection: 'column',
+        padding: 18,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <window.Icon name="spark" size={20} style={{ color: 'var(--accent)' }} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 15.5 }}>{skill.name}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+            v{skill.version}
+          </div>
+        </div>
+        <window.Badge tone={skill.error ? 'err' : skill.enabled ? 'ok' : 'neutral'}>
+          {skill.error ? 'Error' : skill.enabled ? 'On' : 'Off'}
+        </window.Badge>
+      </div>
+      <p style={{ fontSize: 13.5, color: 'var(--text-2)', lineHeight: 1.5, marginBottom: 12, minHeight: 38 }}>
+        {skill.error ? skill.error : skill.summary}
+      </p>
+      {!skill.error && <SkillToolList tools={skill.tools} label="Tools it can use" />}
+      <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+        {!skill.error && (
+          <window.Button size="sm" variant="subtle" onClick={() => onToggle(!skill.enabled)} disabled={busy}>
+            {skill.enabled ? 'Disable' : 'Enable'}
+          </window.Button>
+        )}
+        {!skill.error && skill.enabled && (
+          <window.Button size="sm" variant="ghost" icon="doc" onClick={onView} disabled={busy}>
+            Playbook
+          </window.Button>
+        )}
+        <window.Button
+          size="sm"
+          variant="ghost"
+          icon="trash"
+          onClick={onRemove}
+          disabled={busy}
+          style={{ marginLeft: 'auto', color: 'var(--err)' }}
+        >
+          Remove
+        </window.Button>
+      </div>
+    </div>
+  );
+}
+
+function SkillMarketCard({ entry, busy, onInstall }) {
+  const action = entry.updateAvailable ? 'Update' : entry.installed ? 'Installed' : 'Add';
+  return (
+    <div
+      style={{
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
+        boxShadow: 'var(--shadow-sm)',
+        display: 'flex',
+        flexDirection: 'column',
+        padding: 18,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <window.Icon name="spark" size={20} style={{ color: 'var(--accent)' }} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 15.5 }}>{entry.displayName || entry.name}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+            v{entry.version}
+            {entry.installed && entry.installedVersion ? ` · installed v${entry.installedVersion}` : ''}
+          </div>
+        </div>
+      </div>
+      <p style={{ fontSize: 13.5, color: 'var(--text-2)', lineHeight: 1.5, marginBottom: 14, minHeight: 40 }}>
+        {entry.description || 'No description provided.'}
+      </p>
+      <SkillToolList tools={entry.tools} label="Tools it would use" />
+      <div style={{ marginTop: 'auto', display: 'flex', justifyContent: 'flex-end' }}>
+        {entry.installed && !entry.updateAvailable ? (
+          <window.Badge tone="ok">
+            <window.Icon name="check" size={11} /> Added
+          </window.Badge>
+        ) : (
+          <window.Button
+            size="sm"
+            variant={entry.updateAvailable ? 'default' : 'primary'}
+            icon={busy ? undefined : 'plus'}
+            onClick={onInstall}
+            disabled={busy}
+          >
+            {busy ? (
+              <>
+                <window.Icon name="refresh" size={14} className="spin" /> Adding…
+              </>
+            ) : (
+              action
+            )}
+          </window.Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SkillConsentModal({ entry, busy, onCancel, onConfirm }) {
+  if (!entry) return null;
+  return (
+    <window.Modal
+      open={!!entry}
+      onClose={busy ? () => {} : onCancel}
+      width={520}
+      title={`Add ${entry.displayName || entry.name}?`}
+      footer={
+        <>
+          <window.Button variant="ghost" onClick={onCancel} disabled={busy}>
+            Cancel
+          </window.Button>
+          <window.Button variant="primary" icon={busy ? undefined : 'check'} onClick={onConfirm} disabled={busy}>
+            {busy ? 'Adding…' : 'Add skill'}
+          </window.Button>
+        </>
+      }
+    >
+      <p style={{ fontSize: 13.5, color: 'var(--text-2)', marginBottom: 12 }}>
+        This downloads <span className="mono">{entry.name}</span> v{entry.version}, verifies it, and
+        confirms it carries no code. It can use only these tools you already have:
+      </p>
+      <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13.5, color: 'var(--text)', lineHeight: 1.6 }}>
+        {(entry.tools && entry.tools.length ? entry.tools : ['Guidance only — uses no tools']).map((t, i) => (
+          <li key={i}>{t}</li>
+        ))}
+      </ul>
+    </window.Modal>
+  );
+}
+
+function SkillPlaybookModal({ skill, onClose }) {
+  if (!skill) return null;
+  return (
+    <window.Modal open={!!skill} onClose={onClose} width={640} title={`${skill.name} · playbook`}>
+      <pre
+        style={{
+          margin: 0,
+          maxHeight: '60vh',
+          overflow: 'auto',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          fontSize: 13,
+          lineHeight: 1.55,
+          color: 'var(--text)',
+          fontFamily: 'var(--font-mono)',
+        }}
+      >
+        {skill.playbook || 'No playbook text.'}
+      </pre>
     </window.Modal>
   );
 }

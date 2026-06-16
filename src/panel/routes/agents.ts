@@ -1,5 +1,4 @@
-// Agents + workflows routes: CRUD, dispatch/enqueue, task control, schedules,
-// approvals, and the authored-workflow DAG.
+// Agents routes: CRUD, dispatch/enqueue, task control, schedules, and approvals.
 //
 // In-process the panel uses the daemon's live agent registry and pokes the
 // queue after enqueue so work starts immediately (no poll wait) — but the
@@ -18,19 +17,23 @@ import {
   type AgentExecutionMode,
   type CreateAgentInput,
 } from '../../core/agents.js';
+import {
+  AGENT_TEMPLATES,
+  AGENT_TEMPLATE_NAME_RE,
+  getTemplate,
+  hireFromTemplate,
+} from '../../core/agent-templates.js';
+import { chooseAgentForTask } from '../../core/agent-router.js';
 import type { ToolContext, ToolHandler } from '../../core/tools.js';
 import { createAgentApprovalStore } from '../../core/agent-approvals.js';
 import { ingestStagedDir } from '../../core/agent-attachments.js';
 import { createAgentScheduleStore } from '../../core/agent-schedules.js';
-import {
-  createWorkflowRegistry,
-  type WorkflowGraph,
-  type WorkflowRunStatus,
-} from '../../core/workflows.js';
+import { parseSchedule, describeSpec, hostTimeZone } from '../../core/schedule-parse.js';
 import type { ProfileName, ThinkMode } from '../../core/llm.js';
 import { readJson, readRawBody, sendJson, sse, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
 import type { PanelDeps } from '../types.js';
+import { createConfirmRegistry } from './confirm-registry.js';
 
 const AGENT_PROFILES: readonly ProfileName[] = ['chat', 'reason', 'tools'];
 const THINK_MODES: readonly ThinkMode[] = ['auto', 'on', 'off'];
@@ -97,6 +100,8 @@ function normalizeAgentScheduleInput(body: Record<string, unknown>): {
   prompt: string;
   nextRunAt: number;
   recurrence: 'once' | 'daily' | 'weekly' | 'monthly' | 'yearly';
+  cron: string | null;
+  timeZone: string | null;
 } {
   const rawIds = Array.isArray(body['agentIds'])
     ? body['agentIds']
@@ -111,11 +116,16 @@ function normalizeAgentScheduleInput(body: Record<string, unknown>): {
     body['recurrence'] === 'yearly'
       ? (body['recurrence'] as 'daily' | 'weekly' | 'monthly' | 'yearly')
       : 'once';
+  const cron = typeof body['cron'] === 'string' && body['cron'].trim() ? body['cron'].trim() : null;
+  const timeZone =
+    typeof body['timeZone'] === 'string' && body['timeZone'].trim() ? body['timeZone'].trim() : null;
   return {
     agentIds,
     prompt: String(body['prompt'] ?? '').trim(),
     nextRunAt: Number(body['nextRunAt']),
     recurrence,
+    cron,
+    timeZone,
   };
 }
 
@@ -127,9 +137,10 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
   const reg = deps.agentRegistry;
   const attachmentsDir = join(deps.home, 'agent-attachments');
 
-  // Confirm prompts parked by in-flight DM turns, keyed by id; resolved by
-  // POST /api/agents/chat/confirm or failed closed on timeout/disconnect.
-  const pendingDmConfirms = new Map<string, (ok: boolean) => void>();
+  // Confirm prompts parked by in-flight DM turns; resolved by POST
+  // /api/agents/chat/confirm or failed closed on timeout/disconnect. Each DM
+  // stream takes its own scope() so ending one only fails-closed its confirms.
+  const confirms = createConfirmRegistry();
 
   // Stream one DM turn with an agent over SSE. Mirrors the main panel chat
   // (routes/chat.ts) minus intercepts/instant responses — a DM speaks to one
@@ -162,6 +173,9 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
     writeSseHead(res);
     const send = (event: string, data: unknown): void => sse(res, event, data);
     let closed = false;
+    // This DM stream's own confirm scope. Cleanup fails-closed only its
+    // prompts — a concurrent DM stream for another agent keeps its own.
+    const confirmScope = confirms.scope();
 
     // Inline confirm renderer for this DM turn — the attended path the daemon's
     // confirm router consults for the DM chat-id band (fail-closed otherwise).
@@ -184,7 +198,7 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
         const finish = (ok: boolean): void => {
           if (settled) return;
           settled = true;
-          pendingDmConfirms.delete(id);
+          confirmScope.remove(id);
           clearTimeout(timer);
           ctx.signal?.removeEventListener('abort', onAbort);
           resolve(ok);
@@ -193,7 +207,7 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
         const timer = setTimeout(() => finish(false), DM_CONFIRM_TIMEOUT_MS);
         timer.unref?.();
         ctx.signal?.addEventListener('abort', onAbort, { once: true });
-        pendingDmConfirms.set(id, finish);
+        confirmScope.add(id, finish);
       });
     };
     deps.confirmBus.register(dmChatId, confirmFn);
@@ -202,7 +216,8 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
       closed = true;
       deps.agentRuntime.stopChat(agentId);
       // Fail closed: never leave a confirm-tier tool waiting on a dead stream.
-      for (const finish of [...pendingDmConfirms.values()]) finish(false);
+      // Scoped to THIS stream's confirms only.
+      confirmScope.failAll();
     });
 
     try {
@@ -221,7 +236,7 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
       send('error', { message: e instanceof Error ? e.message : String(e) });
     } finally {
       deps.confirmBus.unregister(dmChatId, confirmFn);
-      for (const finish of [...pendingDmConfirms.values()]) finish(false);
+      confirmScope.failAll();
       res.end();
     }
   }
@@ -325,7 +340,7 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
     push();
   }
 
-  return async ({ req, res, url, path, method }) => {
+  return async ({ req, res, path, method }) => {
     // ---- Agents CRUD --------------------------------------------------------
     if (path === '/api/agents' && method === 'GET') {
       sendJson(res, 200, { agents: reg.list() });
@@ -345,6 +360,60 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
       return true;
     }
 
+    // ---- Templates ("hire an agent") ----------------------------------------
+    if (path === '/api/agents/templates' && method === 'GET') {
+      // Enabled modules, so we can flag which recommended modules a template
+      // still needs. The agent hires fine without them — this only drives the
+      // "works best with <module>" hint.
+      const installed = new Set(
+        (
+          deps.db.prepare(`SELECT name FROM module_state WHERE enabled = 1`).all() as Array<{
+            name: string;
+          }>
+        ).map((r) => r.name),
+      );
+      const taken = new Set(reg.list().map((a) => a.name));
+      const templates = AGENT_TEMPLATES.map((t) => {
+        const missingModules = t.recommendedModules.filter((m) => !installed.has(m));
+        return {
+          id: t.id,
+          title: t.title,
+          description: t.description,
+          icon: t.icon,
+          recommendedModules: t.recommendedModules,
+          missingModules,
+          installedRecommended: missingModules.length === 0,
+          // An agent already exists with this template's suggested name — the
+          // one-click hire would 409, so the UI prompts for a name instead.
+          alreadyHired: taken.has(t.build().name),
+        };
+      });
+      sendJson(res, 200, { templates });
+      return true;
+    }
+    if (path === '/api/agents/templates/hire' && method === 'POST') {
+      const body = await readJson<{ id?: string; name?: string }>(req);
+      const template = getTemplate(String(body.id ?? ''));
+      if (!template) {
+        sendJson(res, 404, { error: 'unknown template' });
+        return true;
+      }
+      const override = String(body.name ?? '').trim();
+      if (override && !AGENT_TEMPLATE_NAME_RE.test(override)) {
+        sendJson(res, 400, {
+          error: 'name must be lowercase letters, numbers, - or _ (2–41 chars)',
+        });
+        return true;
+      }
+      const input = hireFromTemplate(template, override || undefined);
+      if (reg.getByName(input.name)) {
+        sendJson(res, 409, { error: 'an agent with that name exists' });
+        return true;
+      }
+      sendJson(res, 200, { agent: reg.create(input) });
+      return true;
+    }
+
     // ---- Schedules ----------------------------------------------------------
     if (path === '/api/agents/schedules' && method === 'GET') {
       const names = new Map(reg.list().map((a) => [a.id, a.name]));
@@ -352,6 +421,28 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
         .list({ limit: 80 })
         .map((s) => ({ ...s, agentNames: s.agentIds.map((id) => names.get(id) ?? `#${id}`) }));
       sendJson(res, 200, { schedules });
+      return true;
+    }
+    // Parse a plain-English schedule into a preview ({ kind, cron|at, human }).
+    // The frontend shows it, then POSTs the structured row below. Pure preview —
+    // creates nothing.
+    if (path === '/api/agents/schedules/parse' && method === 'POST') {
+      const body = await readJson<{ text?: string }>(req);
+      const spec = await parseSchedule(String(body.text ?? ''), {
+        now: new Date(),
+        timeZone: hostTimeZone(),
+        llm: deps.llm,
+        log: deps.log,
+      });
+      if ('error' in spec) {
+        sendJson(res, 200, { error: spec.error });
+        return true;
+      }
+      sendJson(res, 200, {
+        spec,
+        human: describeSpec(spec, hostTimeZone()),
+        ...(spec.kind === 'once' ? { nextRunAt: spec.at } : { cron: spec.cron, timeZone: spec.timeZone }),
+      });
       return true;
     }
     if (path === '/api/agents/schedules' && method === 'POST') {
@@ -364,16 +455,26 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
         sendJson(res, 400, { error: 'prompt is required' });
         return true;
       }
-      if (!Number.isFinite(input.nextRunAt)) {
-        sendJson(res, 400, { error: 'nextRunAt must be a timestamp' });
-        return true;
-      }
-      if (input.nextRunAt <= Date.now()) {
-        sendJson(res, 400, { error: 'scheduled time must be in the future' });
-        return true;
+      // A cron row recurs; the store computes its first fire. A non-cron row
+      // still needs a concrete future timestamp.
+      if (!input.cron) {
+        if (!Number.isFinite(input.nextRunAt)) {
+          sendJson(res, 400, { error: 'nextRunAt must be a timestamp' });
+          return true;
+        }
+        if (input.nextRunAt <= Date.now()) {
+          sendJson(res, 400, { error: 'scheduled time must be in the future' });
+          return true;
+        }
       }
       try {
-        const schedule = createAgentScheduleStore(deps.db, reg).create(input);
+        const schedule = createAgentScheduleStore(deps.db, reg).create({
+          agentIds: input.agentIds,
+          prompt: input.prompt,
+          ...(input.cron
+            ? { cron: input.cron, timeZone: input.timeZone }
+            : { nextRunAt: input.nextRunAt, recurrence: input.recurrence }),
+        });
         sendJson(res, 200, { schedule });
       } catch (e) {
         sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
@@ -383,6 +484,62 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
     const scheduleIdMatch = /^\/api\/agents\/schedules\/(\d+)$/.exec(path);
     if (scheduleIdMatch && method === 'DELETE') {
       const ok = createAgentScheduleStore(deps.db, reg).remove(Number(scheduleIdMatch[1]));
+      sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'not found' });
+      return true;
+    }
+
+    // ---- Standing orders ----------------------------------------------------
+    if (path === '/api/agents/standing' && method === 'GET') {
+      if (!deps.standingOrders) {
+        sendJson(res, 200, { orders: [] });
+        return true;
+      }
+      const names = new Map(reg.list().map((a) => [a.id, a.name]));
+      const orders = deps.standingOrders.list({ limit: 80 }).map((o) => ({
+        ...o,
+        agentName: o.agentId != null ? (names.get(o.agentId) ?? `#${o.agentId}`) : null,
+      }));
+      sendJson(res, 200, { orders });
+      return true;
+    }
+    if (path === '/api/agents/standing' && method === 'POST') {
+      if (!deps.standingOrders) {
+        sendJson(res, 503, { error: 'standing orders unavailable' });
+        return true;
+      }
+      const body = await readJson<Record<string, unknown>>(req);
+      const instruction = String(body['instruction'] ?? '').trim();
+      if (!instruction) {
+        sendJson(res, 400, { error: 'instruction is required' });
+        return true;
+      }
+      const agentId = Number.isInteger(Number(body['agentId'])) && Number(body['agentId']) > 0
+        ? Number(body['agentId'])
+        : null;
+      const notifyChatId = Number.isFinite(Number(body['notifyChatId'])) && Number(body['notifyChatId']) !== 0
+        ? Number(body['notifyChatId'])
+        : null;
+      const cron = typeof body['cron'] === 'string' && body['cron'].trim() ? body['cron'].trim() : null;
+      try {
+        const order = deps.standingOrders.create({
+          instruction,
+          agentId,
+          notifyChatId,
+          cron,
+          ...(typeof body['timeZone'] === 'string' && body['timeZone'].trim()
+            ? { timeZone: body['timeZone'].trim() }
+            : {}),
+          notifyOnChange: body['notifyOnChange'] === true,
+        });
+        sendJson(res, 200, { order });
+      } catch (e) {
+        sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
+      }
+      return true;
+    }
+    const standingIdMatch = /^\/api\/agents\/standing\/(\d+)$/.exec(path);
+    if (standingIdMatch && method === 'DELETE') {
+      const ok = deps.standingOrders?.remove(Number(standingIdMatch[1])) ?? false;
       sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'not found' });
       return true;
     }
@@ -482,6 +639,35 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
       return true;
     }
 
+    // One-request dispatch: route server-side to the best-fitting agent, enqueue,
+    // and return the chosen agent so the UI can say "Sent to <agent>". No notify
+    // chat — the panel has its own live run view. `agent: null` = no fit.
+    if (path === '/api/agents/dispatch-auto' && method === 'POST') {
+      const prompt = String((await readJson<{ prompt?: string }>(req)).prompt ?? '').trim();
+      if (!prompt) {
+        sendJson(res, 400, { error: 'prompt is required' });
+        return true;
+      }
+      const choice = await chooseAgentForTask({
+        task: prompt,
+        agents: reg.list(),
+        llm: deps.llm,
+        log: deps.log,
+      });
+      if (!choice) {
+        sendJson(res, 200, { agent: null });
+        return true;
+      }
+      const task = reg.enqueue({ agentId: choice.agentId, prompt });
+      deps.agentQueue.notify();
+      sendJson(res, 200, {
+        agent: { id: choice.agentId, name: choice.agentName },
+        via: choice.via,
+        task,
+      });
+      return true;
+    }
+
     // ---- Direct chat (per-agent DMs) ---------------------------------------
     const chatMatch = /^\/api\/agents\/(\d+)\/chat$/.exec(path);
     if (chatMatch && method === 'GET') {
@@ -516,7 +702,7 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
     }
     if (path === '/api/agents/chat/confirm' && method === 'POST') {
       const { id, ok } = await readJson<{ id?: string; ok?: boolean }>(req);
-      const finish = id ? pendingDmConfirms.get(id) : undefined;
+      const finish = id ? confirms.get(id) : undefined;
       if (!finish) {
         sendJson(res, 409, { ok: false, error: 'no confirmation is waiting' });
         return true;
@@ -610,13 +796,12 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
       const id = Number(cancelMatch[1]);
       const t = reg.getTask(id);
       const ok = !!t && ['queued', 'running'].includes(t.status);
-      if (ok) {
-        reg.updateTask(id, {
-          status: 'cancelled',
-          error: AGENT_TASK_CANCELLED_MESSAGE,
-          finishedAt: Date.now(),
-        });
-      }
+      // cancelTask flips the row to 'cancelled' AND aborts a running task's
+      // in-flight orchestrator turn — without that abort the model keeps
+      // generating on Ollama until the next cancellation checkpoint, so a
+      // bare DB update left the Stop button feeling dead. (The per-agent
+      // cancel_all below already routes through cancelTask.)
+      if (ok) deps.agentRuntime.cancelTask(id);
       sendJson(res, ok ? 200 : 409, ok ? { ok: true } : { error: 'task is not queued or running' });
       return true;
     }
@@ -666,11 +851,17 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
     if (path === '/api/agents/tasks/cancel_all' && method === 'POST') {
       let count = 0;
       for (const t of reg.listTasks({ status: ['queued', 'running', 'paused'] })) {
-        reg.updateTask(t.id, {
-          status: 'cancelled',
-          error: AGENT_TASK_CANCELLED_MESSAGE,
-          finishedAt: Date.now(),
-        });
+        // Mirror the per-agent cancel_all: cancelTask aborts a running turn's
+        // live model call, but refuses paused rows — mark those terminal here.
+        if (t.status === 'paused') {
+          reg.updateTask(t.id, {
+            status: 'cancelled',
+            error: AGENT_TASK_CANCELLED_MESSAGE,
+            finishedAt: Date.now(),
+          });
+        } else {
+          deps.agentRuntime.cancelTask(t.id);
+        }
         count++;
       }
       sendJson(res, 200, { ok: true, count });
@@ -716,120 +907,6 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
         updated ? 200 : 409,
         updated ? { approval: updated } : { error: 'approval is not pending or does not exist' },
       );
-      return true;
-    }
-
-    // ---- Authored workflows -------------------------------------------------
-    if (path === '/api/workflows' && method === 'GET') {
-      sendJson(res, 200, { workflows: createWorkflowRegistry(deps.db).list() });
-      return true;
-    }
-    if (path === '/api/workflows' && method === 'POST') {
-      const body = await readJson<Record<string, unknown>>(req);
-      if (!String(body['name'] ?? '').trim()) {
-        sendJson(res, 400, { error: 'name is required' });
-        return true;
-      }
-      try {
-        const workflow = createWorkflowRegistry(deps.db).create({
-          name: String(body['name']).trim(),
-          description: String(body['description'] ?? ''),
-          graph: body['graph'] as WorkflowGraph,
-          active: body['active'] !== false,
-        });
-        sendJson(res, 200, { workflow });
-      } catch (e) {
-        sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
-      }
-      return true;
-    }
-    const workflowIdMatch = /^\/api\/workflows\/(\d+)$/.exec(path);
-    if (workflowIdMatch && method === 'GET') {
-      const workflow = createWorkflowRegistry(deps.db).get(Number(workflowIdMatch[1]));
-      sendJson(res, workflow ? 200 : 404, workflow ? { workflow } : { error: 'not found' });
-      return true;
-    }
-    if (workflowIdMatch && method === 'PUT') {
-      const id = Number(workflowIdMatch[1]);
-      const body = await readJson<Record<string, unknown>>(req);
-      try {
-        const wreg = createWorkflowRegistry(deps.db);
-        const updated = wreg.get(id)
-          ? wreg.update(id, {
-              ...(body['name'] !== undefined ? { name: String(body['name']).trim() } : {}),
-              ...(body['description'] !== undefined
-                ? { description: String(body['description']) }
-                : {}),
-              ...(body['graph'] !== undefined ? { graph: body['graph'] as WorkflowGraph } : {}),
-              ...(body['active'] !== undefined ? { active: !!body['active'] } : {}),
-            })
-          : null;
-        sendJson(
-          res,
-          updated ? 200 : 404,
-          updated ? { workflow: updated } : { error: 'not found' },
-        );
-      } catch (e) {
-        sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
-      }
-      return true;
-    }
-    if (workflowIdMatch && method === 'DELETE') {
-      const ok = createWorkflowRegistry(deps.db).remove(Number(workflowIdMatch[1]));
-      sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'not found' });
-      return true;
-    }
-    const workflowRunMatch = /^\/api\/workflows\/(\d+)\/run$/.exec(path);
-    if (workflowRunMatch && method === 'POST') {
-      const id = Number(workflowRunMatch[1]);
-      const body = await readJson<{ input?: string; stageToken?: string }>(req);
-      const stageToken =
-        typeof body.stageToken === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(body.stageToken)
-          ? body.stageToken
-          : null;
-      const wreg = createWorkflowRegistry(deps.db);
-      const run = wreg.get(id) ? wreg.enqueueRun(id, body.input ?? null, stageToken) : null;
-      sendJson(res, run ? 200 : 404, run ? { run } : { error: 'workflow not found' });
-      return true;
-    }
-    if (path === '/api/workflows/runs' && method === 'GET') {
-      const workflowId = url.searchParams.get('workflowId');
-      const status = url.searchParams.get('status');
-      const limit = url.searchParams.get('limit');
-      const runs = createWorkflowRegistry(deps.db).listRuns({
-        ...(workflowId ? { workflowId: Number(workflowId) } : {}),
-        ...(status ? { status: status as WorkflowRunStatus } : {}),
-        ...(limit ? { limit: Number(limit) } : {}),
-      });
-      sendJson(res, 200, { runs });
-      return true;
-    }
-    const workflowRunIdMatch = /^\/api\/workflows\/runs\/(\d+)$/.exec(path);
-    if (workflowRunIdMatch && method === 'GET') {
-      const id = Number(workflowRunIdMatch[1]);
-      const wreg = createWorkflowRegistry(deps.db);
-      const run = wreg.getRun(id);
-      sendJson(
-        res,
-        run ? 200 : 404,
-        run ? { run, steps: wreg.listStepRuns(id) } : { error: 'not found' },
-      );
-      return true;
-    }
-    const workflowCancelMatch = /^\/api\/workflows\/runs\/(\d+)\/cancel$/.exec(path);
-    if (workflowCancelMatch && method === 'POST') {
-      const id = Number(workflowCancelMatch[1]);
-      const wreg = createWorkflowRegistry(deps.db);
-      const run = wreg.getRun(id);
-      const ok = !!run && ['queued', 'running'].includes(run.status);
-      if (ok) {
-        wreg.updateRun(id, {
-          status: 'cancelled',
-          error: 'cancelled by user',
-          finishedAt: Date.now(),
-        });
-      }
-      sendJson(res, ok ? 200 : 409, ok ? { ok: true } : { error: 'run is not queued or running' });
       return true;
     }
 

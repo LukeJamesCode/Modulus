@@ -24,7 +24,7 @@ import type { Logger } from '../util/log.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import { createChatDispatcher } from '../core/chat-dispatch.js';
 import type { InstantResponder } from '../core/instant-responses.js';
-import type { LLM } from '../core/llm.js';
+import type { LLM, ThinkMode } from '../core/llm.js';
 import type { ToolRegistry, ToolHandler, ToolContext } from '../core/tools.js';
 import type { DB } from '../storage/db.js';
 import type { ChatPrefs, PrefsStore, QuietCheck } from '../core/prefs.js';
@@ -34,9 +34,24 @@ import type { AgentQueue } from '../core/agent-queue.js';
 import type { AgentApproval } from '../core/agent-approvals.js';
 import {
   formatAgentList,
+  findEditableAgent,
+  handleAgentCommand,
   handleDispatch,
   handleDispatchWithAttachments,
+  handleFire,
+  handleHire,
+  handleNewAgent,
 } from './agent-commands.js';
+import {
+  handleRemind,
+  handleEvery,
+  handleScheduleList,
+  handleScheduleCommand,
+} from './schedule-commands.js';
+import { handleStanding, type StandingDeps } from './standing-commands.js';
+import { handleSkills, handleSkill, type SkillDeps } from './skill-commands.js';
+import type { SchedulingDeps } from '../core/schedule-tools.js';
+import type { HeartbeatStats } from '../core/heartbeat.js';
 import { formatWindow, parseDuration, parseWindow } from '../core/prefs.js';
 import type { Nudge, NudgeAction, SchedulerStats } from '../core/scheduler.js';
 import {
@@ -44,6 +59,7 @@ import {
   type ModuleReadiness,
 } from '../core/module-readiness.js';
 import type {
+  AfterTurnContext,
   ModuleAfterReplyRecord,
   ModuleAfterTurnRecord,
   ModuleCallbackRecord,
@@ -52,7 +68,6 @@ import type {
   ModuleCommandRecord,
   ModuleInterceptRecord,
   TelegramCallbackContext,
-  TelegramCommandContext,
   VoicePayload,
 } from '../core/modules.js';
 
@@ -72,6 +87,19 @@ export interface TelegramOptions {
   // Per-chat proactive prefs (quiet hours / snooze). Optional in tests.
   prefs?: PrefsStore;
   followups: Followups;
+  // Natural-language scheduling (/remind, /every, /schedules). Bundles the
+  // schedule store, the host time zone, and the fallback model. Optional in
+  // tests; the reminder commands report unavailable when omitted.
+  scheduling?: SchedulingDeps;
+  // Standing orders (/standing) — the heartbeat-evaluated watches. Optional in
+  // tests; the command reports unavailable when omitted.
+  standing?: StandingDeps;
+  // Declarative skills (/skills, /skill <name>) — discovery of the reference
+  // playbooks the assistant loads on its own. Read-only; nothing here grants a
+  // tool. Optional in tests; the commands report unavailable when omitted.
+  skills?: SkillDeps;
+  // Heartbeat stats for /status (last beat, cadence). Optional.
+  heartbeatStats?: () => HeartbeatStats;
   // Multi-agent engine, for /agents and /dispatch. Optional in tests.
   agentRegistry?: AgentRegistry;
   agentQueue?: AgentQueue;
@@ -112,6 +140,10 @@ export interface TelegramOptions {
   // start.ts and shared with the panel so both surfaces share anti-repeat
   // history; omitted (undefined) when the setting is off.
   instantResponder?: InstantResponder;
+  // Core memory-extraction handler (memory.extraction gate). Created in start.ts
+  // and handed to the chat dispatcher so durable user facts are pulled in after
+  // the reply ships; omitted when the setting/tier disables it.
+  memoryExtractor?: (turn: AfterTurnContext) => Promise<void>;
   // Setup-wizard pairing bus. When the wizard is re-run while the daemon is
   // live, a non-allowlisted user can send their pairing code to the bot; the
   // allowlist-reject middleware consults this before warning them. Structural
@@ -182,14 +214,89 @@ const CORE_COMMAND_DEFS: readonly CoreCommandDef[] = [
     help: 'cancel all pending followups in this chat',
     advertised: 'Clear pending followups',
   },
+  {
+    name: 'remind',
+    argsHint: '<when>, <what>',
+    help: 'set a reminder — e.g. /remind tomorrow at 9, call the dentist',
+    advertised: 'Set a one-time reminder',
+  },
+  {
+    name: 'every',
+    argsHint: '<when>, <what>',
+    help: 'set a repeating reminder — e.g. /every weekday at 8am, take your pills',
+    advertised: 'Set a repeating reminder',
+  },
+  {
+    name: 'schedules',
+    help: 'list your active reminders',
+    advertised: 'List your reminders',
+  },
+  {
+    name: 'schedule',
+    argsHint: 'cancel <id>',
+    help: 'cancel a reminder by id',
+    advertised: 'Cancel a reminder',
+  },
+  {
+    name: 'standing',
+    argsHint: '[add <agent>, <what> | cancel <id>]',
+    help: 'standing orders the heartbeat runs on its own',
+    advertised: 'Standing orders (heartbeat watches)',
+  },
+  {
+    name: 'skills',
+    help: 'list the reference skills the assistant can draw on',
+    advertised: 'List available skills',
+  },
+  {
+    name: 'skill',
+    argsHint: '<name>',
+    help: 'view one skill: what it does and the tools it uses',
+    advertised: 'View one skill',
+  },
   { name: 'newchat', help: 'reset the conversation', advertised: 'Reset the conversation' },
   { name: 'stop', help: 'cancel an in-flight reply', advertised: 'Cancel an in-flight reply' },
+  {
+    name: 'think',
+    argsHint: 'on|off|auto',
+    help: 'set reasoning for replies in this chat',
+    advertised: 'Set reasoning mode for replies',
+  },
+  {
+    name: 'fast',
+    help: 'skip reasoning for quicker replies (same as /think off)',
+    advertised: 'Skip reasoning for quicker replies',
+  },
   { name: 'agents', help: 'list agent personas', advertised: 'List agent personas' },
   {
     name: 'dispatch',
-    argsHint: '<agent> <task>',
-    help: 'dispatch a background task to an agent',
+    argsHint: '[agent] <task>',
+    help: 'dispatch a task — name an agent, or just describe the task and I pick one',
     advertised: 'Dispatch a task to an agent',
+  },
+  {
+    name: 'hire',
+    argsHint: '<template> [name]',
+    help: 'hire a ready-made agent from the catalog',
+    advertised: 'Hire a ready-made agent',
+  },
+  {
+    name: 'newagent',
+    argsHint: '<name>',
+    help: 'create a blank custom agent to configure',
+    advertised: 'Create a custom agent',
+  },
+  {
+    name: 'agent',
+    argsHint: '<name> [set <knob> <value> | prompt <text> | role <text>]',
+    help: 'view or change one agent in plain language',
+    advertised: 'View or change an agent',
+  },
+  {
+    name: 'fire',
+    argsHint: '<name>',
+    help: 'delete a user-created agent (asks to confirm)',
+    advertised: 'Delete a user-created agent',
   },
   {
     name: 'model',
@@ -541,6 +648,23 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     return !!row?.devmode;
   }
 
+  function setChatThinkMode(chatId: number, mode: ThinkMode): void {
+    opts.db
+      .prepare(
+        `INSERT INTO telegram_chats (chat_id, user_id, think_mode, last_seen_at)
+         VALUES (?, 0, ?, ?)
+         ON CONFLICT(chat_id) DO UPDATE SET think_mode = excluded.think_mode, last_seen_at = excluded.last_seen_at`,
+      )
+      .run(chatId, mode, Date.now());
+  }
+
+  function getChatThinkMode(chatId: number): ThinkMode {
+    const row = opts.db
+      .prepare(`SELECT think_mode FROM telegram_chats WHERE chat_id = ?`)
+      .get(chatId) as { think_mode: ThinkMode } | undefined;
+    return row?.think_mode ?? 'auto';
+  }
+
   function keyboardFor(view: Parameters<typeof buildTelegramButtonRows>[0]): InlineKeyboard {
     return buildTelegramKeyboard(
       buildTelegramButtonRows(view, {
@@ -701,6 +825,11 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
       const rate = total === 0 ? 'n/a' : `${Math.round((s.cache.hits / total) * 100)}%`;
       lines.push(`fast-cache: ${rate} hit rate (${s.cache.hits}/${total}, ${s.cache.size} keys)`);
     }
+    const hb = opts.heartbeatStats?.();
+    if (hb) {
+      const last = hb.lastBeatAt ? `${Math.round((Date.now() - hb.lastBeatAt) / 1000)}s ago` : 'not yet';
+      lines.push(`heartbeat: ${hb.cron} · last beat ${last} (${hb.beats} total)`);
+    }
     return lines.join('\n');
   }
 
@@ -762,36 +891,6 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     }
   }
 
-  async function invokeModuleCommand(
-    name: string,
-    args: string,
-    chatId: number,
-    userId: number,
-    reply: (text: string) => Promise<unknown>,
-  ): Promise<boolean> {
-    const moduleCmd = (opts.moduleCommands?.() ?? []).find((c) => c.name === name);
-    if (!moduleCmd) return false;
-    const cctx: TelegramCommandContext = {
-      chatId,
-      userId,
-      args,
-      reply: async (t) => {
-        await reply(t);
-      },
-    };
-    try {
-      await moduleCmd.handler(cctx);
-    } catch (e) {
-      log.warn('module command failed', {
-        mod: moduleCmd.module,
-        command: name,
-        error: e instanceof Error ? e.message : String(e),
-      });
-      await reply(`Command failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-    return true;
-  }
-
   // Middleware: allowlist gate.
   bot.use(async (ctx, next) => {
     if (!isAllowed(ctx)) {
@@ -834,7 +933,9 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     log,
     isCoreCommand: (head) => CORE_COMMANDS.has(head),
     getDevmode,
+    getThinkMode: getChatThinkMode,
     instantResponder: opts.instantResponder,
+    ...(opts.memoryExtractor ? { memoryExtractor: opts.memoryExtractor } : {}),
   });
 
   bot.command('start', async (ctx) => {
@@ -868,6 +969,67 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     await ctx.reply(handleFollowupClear(followups, ctx.chat.id));
   });
 
+  bot.command('remind', async (ctx) => {
+    if (!ctx.chat) return;
+    if (!opts.scheduling) {
+      await ctx.reply('Reminders are not available.');
+      return;
+    }
+    await ctx.reply(await handleRemind(opts.scheduling, ctx.chat.id, (ctx.match ?? '').toString()));
+  });
+
+  bot.command('every', async (ctx) => {
+    if (!ctx.chat) return;
+    if (!opts.scheduling) {
+      await ctx.reply('Reminders are not available.');
+      return;
+    }
+    await ctx.reply(await handleEvery(opts.scheduling, ctx.chat.id, (ctx.match ?? '').toString()));
+  });
+
+  bot.command('schedules', async (ctx) => {
+    if (!ctx.chat) return;
+    if (!opts.scheduling) {
+      await ctx.reply('Reminders are not available.');
+      return;
+    }
+    await ctx.reply(handleScheduleList(opts.scheduling, ctx.chat.id));
+  });
+
+  bot.command('schedule', async (ctx) => {
+    if (!ctx.chat) return;
+    if (!opts.scheduling) {
+      await ctx.reply('Reminders are not available.');
+      return;
+    }
+    await ctx.reply(handleScheduleCommand(opts.scheduling, ctx.chat.id, (ctx.match ?? '').toString()));
+  });
+
+  bot.command('standing', async (ctx) => {
+    if (!ctx.chat) return;
+    if (!opts.standing) {
+      await ctx.reply('Standing orders are not available.');
+      return;
+    }
+    await ctx.reply(handleStanding(opts.standing, ctx.chat.id, (ctx.match ?? '').toString()));
+  });
+
+  bot.command('skills', async (ctx) => {
+    if (!opts.skills) {
+      await ctx.reply('Skills are not available.');
+      return;
+    }
+    await ctx.reply(handleSkills(opts.skills));
+  });
+
+  bot.command('skill', async (ctx) => {
+    if (!opts.skills) {
+      await ctx.reply('Skills are not available.');
+      return;
+    }
+    await ctx.reply(handleSkill(opts.skills, (ctx.match ?? '').toString()));
+  });
+
   bot.command('newchat', async (ctx) => {
     if (!ctx.chat) return;
     const keyboard = new InlineKeyboard()
@@ -898,7 +1060,62 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
       return;
     }
     const arg = (ctx.match ?? '').toString();
-    await ctx.reply(handleDispatch(opts.agentRegistry, opts.agentQueue, arg));
+    await ctx.reply(
+      await handleDispatch(opts.agentRegistry, opts.agentQueue, arg, ctx.chat?.id, {
+        llm: opts.llm,
+        log,
+      }),
+    );
+  });
+
+  bot.command('hire', async (ctx) => {
+    if (!opts.agentRegistry) {
+      await ctx.reply('Agents are not available.');
+      return;
+    }
+    await ctx.reply(handleHire(opts.agentRegistry, (ctx.match ?? '').toString()));
+  });
+
+  bot.command('newagent', async (ctx) => {
+    if (!opts.agentRegistry) {
+      await ctx.reply('Agents are not available.');
+      return;
+    }
+    await ctx.reply(handleNewAgent(opts.agentRegistry, (ctx.match ?? '').toString()));
+  });
+
+  bot.command('agent', async (ctx) => {
+    if (!opts.agentRegistry) {
+      await ctx.reply('Agents are not available.');
+      return;
+    }
+    await ctx.reply(handleAgentCommand(opts.agentRegistry, (ctx.match ?? '').toString()));
+  });
+
+  // /fire asks before deleting (mirrors /newchat's inline Yes/No). The guard runs
+  // up front so an unknown or module-owned name gets an immediate error, not a
+  // pointless confirm.
+  bot.command('fire', async (ctx) => {
+    if (!opts.agentRegistry) {
+      await ctx.reply('Agents are not available.');
+      return;
+    }
+    const name = (ctx.match ?? '').toString().trim();
+    if (!name) {
+      await ctx.reply('Usage: /fire <name>');
+      return;
+    }
+    const editable = findEditableAgent(opts.agentRegistry, name);
+    if ('error' in editable) {
+      await ctx.reply(editable.error);
+      return;
+    }
+    const keyboard = new InlineKeyboard()
+      .text('🔥 Fire', `fire:yes:${editable.agent.name}`)
+      .text('Cancel', 'fire:no');
+    await ctx.reply(`Fire '${editable.agent.name}'? This deletes the agent (its task history stays).`, {
+      reply_markup: keyboard,
+    });
   });
 
   bot.command('model', async (ctx) => {
@@ -936,6 +1153,20 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     }
     setDevmode(ctx.chat.id, arg === 'on');
     await replyWithButtons(ctx, `devmode ${arg}`, 'devmode');
+  });
+
+  bot.command('think', async (ctx) => {
+    if (!ctx.chat) return;
+    const { mode, reply } = handleThink((ctx.match ?? '').toString());
+    if (mode) setChatThinkMode(ctx.chat.id, mode);
+    await ctx.reply(reply);
+  });
+
+  // /fast is the everyday shortcut for "skip reasoning, answer quickly".
+  bot.command('fast', async (ctx) => {
+    if (!ctx.chat) return;
+    setChatThinkMode(ctx.chat.id, 'off');
+    await ctx.reply(handleThink('off').reply);
   });
 
   bot.command('quiet', async (ctx) => {
@@ -994,6 +1225,20 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     await ctx.answerCallbackQuery();
   });
 
+  // /fire Yes/No. The agent name rides in the callback data (names are short,
+  // [a-z0-9_-], well under Telegram's 64-byte cap). handleFire re-checks the
+  // guard, so a stale press can't delete a module-owned or vanished agent.
+  bot.callbackQuery(/^fire:(yes|no)(?::(.+))?$/, async (ctx) => {
+    const choice = ctx.match[1];
+    const name = ctx.match[2];
+    if (choice === 'yes' && name && opts.agentRegistry) {
+      await ctx.editMessageText(handleFire(opts.agentRegistry, name)).catch(() => {});
+    } else {
+      await ctx.editMessageText('Kept the agent.').catch(() => {});
+    }
+    await ctx.answerCallbackQuery();
+  });
+
   // Agent-approval Yes/No. The decision is global (an approval id is unique and
   // not chat-scoped) and the allowlist middleware already vetted the presser, so
   // any allowlisted user can answer. Resolving is idempotent — a stale press
@@ -1022,7 +1267,7 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     if (data.startsWith('module:')) {
       const command = data.slice('module:'.length);
       await answerCallback(ctx, `Running /${command}`);
-      const handled = await invokeModuleCommand(command, '', ctx.chat.id, ctx.from.id, (t) =>
+      const handled = await chatDispatcher.invokeCommand(command, '', ctx.chat.id, ctx.from.id, (t) =>
         ctx.reply(t, { reply_markup: keyboardFor('modules') }),
       );
       if (!handled)
@@ -1289,6 +1534,7 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
         baseDir: opts.agentAttachmentsDir,
         arg: m[1] ?? '',
         files: [{ name: file.name, bytes, ...(file.mime ? { mime: file.mime } : {}) }],
+        notifyChatId: ctx.chat?.id ?? null,
       });
       await ctx.reply(reply);
     } catch (e) {
@@ -1472,6 +1718,24 @@ export function splitForTelegram(text: string, limit = TELEGRAM_CHUNK): string[]
 //   /quiet off          — clear window + snooze
 //   /quiet 1h | 30m     — snooze for that duration
 //   /quiet 22:00-07:00  — set a daily window (start > end wraps midnight)
+// /think and /fast resolve an argument to a sticky per-chat reasoning mode. Pure
+// so it's testable without a DB: returns the mode for the caller to persist plus
+// the reply text, or mode=null on an unrecognized argument (nothing persisted).
+// A bare /think (empty arg) means "think about it" → 'on'.
+const THINK_REPLIES: Record<ThinkMode, string> = {
+  on: "Reasoning on. I'll think before answering — /fast for quicker replies.",
+  off: "Fast mode on. I'll skip reasoning — /think to turn reasoning back on.",
+  auto: "Reasoning set to auto (each model's default).",
+};
+
+export function handleThink(arg: string): { mode: ThinkMode | null; reply: string } {
+  const a = arg.trim().toLowerCase();
+  const mode: ThinkMode | null =
+    a === '' ? 'on' : a === 'on' || a === 'off' || a === 'auto' ? a : null;
+  if (mode === null) return { mode: null, reply: 'Usage: /think on | off | auto' };
+  return { mode, reply: THINK_REPLIES[mode] };
+}
+
 export function handleQuiet(
   prefs: PrefsStore,
   chatId: number,

@@ -1,0 +1,11 @@
+{
+  "kind": "skill",
+  "name": "meeting-prep",
+  "version": "1.0.0",
+  "modulus": ">=1.5.0",
+  "description": "Get ready for an upcoming meeting.",
+  "summary": "Prepare for an upcoming meeting — pull the details, research who/what, and capture the follow-ups",
+  "instructions": "SKILL.md",
+  "intent_pattern": "meeting|call|prep|agenda|brief me|who am i (meeting|talking)",
+  "tools": ["calendar_list_events", "web_search", "tasks_add", "reminder_set"]
+}

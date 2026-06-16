@@ -22,7 +22,7 @@ import type { ToolCall } from './llm.js';
 
 const log = createLogger({ level: 'error', out: () => {}, err: () => {} });
 
-function fresh(opts: { maxRows?: number; confirm?: boolean } = {}): {
+function fresh(opts: { maxRows?: number; confirm?: boolean; now?: () => Date } = {}): {
   db: ReturnType<typeof openDb>;
   tools: ReturnType<typeof createToolRegistry>;
   store: ReturnType<typeof setupMemory>;
@@ -34,7 +34,13 @@ function fresh(opts: { maxRows?: number; confirm?: boolean } = {}): {
     log,
     ...(opts.confirm ? { confirm: async () => true } : {}),
   });
-  const store = setupMemory({ db, tools, log, ...(opts.maxRows ? { maxRows: opts.maxRows } : {}) });
+  const store = setupMemory({
+    db,
+    tools,
+    log,
+    ...(opts.maxRows ? { maxRows: opts.maxRows } : {}),
+    ...(opts.now ? { now: opts.now } : {}),
+  });
   return {
     db,
     tools,
@@ -138,6 +144,14 @@ test('ftsQueryFromText quotes tokens and drops stopwords', () => {
   assert.equal(ftsQueryFromText('the and for'), '');
 });
 
+test('ftsQueryFromText keeps 2-char tech terms but drops 2-char function words', () => {
+  // The tokenizer now keeps 2-char tokens so AI, JS, Go, OS, UI, DB survive.
+  assert.equal(ftsQueryFromText('learn ai and js'), '"learn" OR "ai" OR "js"');
+  assert.equal(ftsQueryFromText('go os ui db'), '"go" OR "os" OR "ui" OR "db"');
+  // ...but 2-char function words are stopworded out, so noise stays gone.
+  assert.equal(ftsQueryFromText('is it on or no'), '');
+});
+
 test('remember tool stores with source user; forget tool fails closed unconfirmed', async () => {
   const { tools, store, cleanup } = fresh(); // no confirm hook wired
   try {
@@ -195,6 +209,104 @@ test('content is truncated at the cap so a transcript dump cannot bloat the pref
   try {
     store.remember({ content: 'x'.repeat(5000), source: 'user' });
     assert.ok(store.list()[0]!.content.length <= 600);
+  } finally {
+    cleanup();
+  }
+});
+
+test('per-agent namespaces: an agent recalls global ∪ its own, never another agent private', () => {
+  const { store, cleanup } = fresh();
+  try {
+    // Global user truth, plus two agents' private findings.
+    store.remember({ content: 'User lives in Lisbon', source: 'user' });
+    store.promoteFindings(['Agent seven private detail about widgets'], 'alpha', 7);
+    store.promoteFindings(['Agent nine private secret about gadgets'], 'beta', 9);
+
+    // Main chat (no agentId): global only — neither agent's private row leaks.
+    const chat = store.renderForPrompt('where the user lives plus widgets gadgets')!;
+    assert.match(chat, /Lisbon/);
+    assert.doesNotMatch(chat, /widgets/);
+    assert.doesNotMatch(chat, /gadgets/);
+
+    // Agent 7: global + its own, but not agent 9's namespace.
+    const a7 = store.renderForPrompt('lisbon widgets gadgets', 7)!;
+    assert.match(a7, /Lisbon/, 'the hive-mind user fact is still recalled in an agent run');
+    assert.match(a7, /widgets/, 'its own finding is recalled');
+    assert.doesNotMatch(a7, /gadgets/, "another agent's private finding must stay private");
+  } finally {
+    cleanup();
+  }
+});
+
+test('recallScoped returns global ∪ one agent, never another agent private', () => {
+  const { store, cleanup } = fresh();
+  try {
+    store.remember({ content: 'User lives in Lisbon', source: 'user' });
+    store.promoteFindings(['Agent seven private detail about widgets'], 'alpha', 7);
+    store.promoteFindings(['Agent nine private secret about gadgets'], 'beta', 9);
+
+    // Agent-scoped search surfaces the global row too (the browser bug), and
+    // keeps another agent's namespace out.
+    const a7 = store.recallScoped('lisbon widgets gadgets', 7).map((r) => r.content).join(' | ');
+    assert.match(a7, /Lisbon/, 'global rows must surface in an agent-scoped search');
+    assert.match(a7, /widgets/);
+    assert.doesNotMatch(a7, /gadgets/);
+
+    // No agentId → global only.
+    const global = store.recallScoped('lisbon widgets gadgets', undefined).map((r) => r.content).join(' | ');
+    assert.match(global, /Lisbon/);
+    assert.doesNotMatch(global, /widgets/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('promoteFindings(agentId) scopes the row; forgetAgent drops just that namespace', () => {
+  const { store, cleanup } = fresh();
+  try {
+    store.remember({ content: 'Global fact stays', source: 'user' });
+    store.promoteFindings(['Private to seven'], 'alpha', 7);
+    store.promoteFindings(['Private to nine'], 'beta', 9);
+
+    assert.equal(store.list(undefined, undefined, 7).length, 1, 'agent 7 owns one row');
+    assert.equal(store.list(undefined, undefined, 7)[0]!.agentId, 7);
+
+    const dropped = store.forgetAgent(7);
+    assert.equal(dropped, 1);
+    assert.equal(store.list(undefined, undefined, 7).length, 0, "7's namespace is gone");
+    assert.equal(store.list(undefined, undefined, 9).length, 1, "9's namespace is untouched");
+    assert.equal(store.count(), 2, 'global fact + agent 9 survive');
+  } finally {
+    cleanup();
+  }
+});
+
+test('consolidate promotes hot rows and decays stale extraction noise, sparing the rest', () => {
+  let clock = Date.UTC(2026, 0, 1);
+  const { store, cleanup } = fresh({ now: () => new Date(clock) });
+  const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+  try {
+    // A hot extraction fact that keeps earning recall…
+    store.remember({ content: 'frequently needed coffee preference', source: 'extraction' });
+    for (let i = 0; i < 5; i++) store.renderForPrompt('frequently needed coffee preference');
+    // …a stale extraction fact never recalled…
+    store.remember({ content: 'ephemeral trivia nobody asked about', source: 'extraction' });
+    // …and two rows that must be immune to decay.
+    store.remember({ content: 'durable user note kept forever', source: 'user' });
+    store.promoteFindings(['a finding worth importance two'], 'researcher');
+
+    // Jump 40 days so the stale extraction row ages past the cutoff.
+    clock += 40 * 24 * 60 * 60 * 1000;
+    const res = store.consolidate({ minUses: 5, maxStaleMs: THIRTY_DAYS });
+
+    assert.equal(res.promoted, 1, 'only the hot row crosses the uses threshold');
+    assert.equal(res.decayed, 1, 'only the stale uses-0 extraction row is pruned');
+
+    const byContent = new Map(store.list().map((r) => [r.content, r]));
+    assert.equal(byContent.get('frequently needed coffee preference')!.importance, 2);
+    assert.ok(!byContent.has('ephemeral trivia nobody asked about'), 'stale noise gone');
+    assert.ok(byContent.has('durable user note kept forever'), 'user fact immune to decay');
+    assert.ok(byContent.has('a finding worth importance two'), 'importance-2 finding immune');
   } finally {
     cleanup();
   }

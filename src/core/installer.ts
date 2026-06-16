@@ -27,7 +27,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
@@ -52,8 +54,15 @@ export interface ModulePermissions {
   filesystem?: string[];
 }
 
+// A registry entry is a module by default. Skills (kind: "skill") ride the same
+// pinned, consent-gated pipeline but are held to a stricter, code-free contract
+// at stage time (see stageSkill / assertNoExecutableContent). Absent kind ===
+// 'module' keeps every pre-skills index entry valid.
+export type RegistryKind = 'module' | 'skill';
+
 export interface RegistryIndexEntry {
   name: string;
+  kind?: RegistryKind;
   displayName?: string;
   version: string;
   description?: string;
@@ -61,6 +70,10 @@ export interface RegistryIndexEntry {
   sha256: string;
   minCoreVersion?: string;
   permissions?: ModulePermissions;
+  // For kind:"skill" entries only — the tool allowlist, so the consent screen
+  // can render per-tool tiers BEFORE downloading (the skill analog of a module's
+  // `permissions` block). Published under the JSON key "tools".
+  skillTools?: string[];
   docs?: string;
 }
 
@@ -108,6 +121,9 @@ export function parseRegistryEntry(raw: unknown): RegistryIndexEntry {
   const name = String(o['name'] ?? '');
   if (!MODULE_NAME_RE.test(name))
     throw new InstallError(`bad module name: ${JSON.stringify(name)}`);
+  const kind = o['kind'] === undefined ? 'module' : o['kind'];
+  if (kind !== 'module' && kind !== 'skill')
+    throw new InstallError(`bad kind for ${name}: ${JSON.stringify(o['kind'])}`);
   const version = String(o['version'] ?? '');
   if (!VERSION_RE.test(version))
     throw new InstallError(`bad version for ${name}: ${JSON.stringify(version)}`);
@@ -118,6 +134,7 @@ export function parseRegistryEntry(raw: unknown): RegistryIndexEntry {
   if (!SHA256_RE.test(sha256)) throw new InstallError(`bad sha256 for ${name}`);
   const entry: RegistryIndexEntry = {
     name,
+    kind,
     version,
     tarball,
     sha256,
@@ -126,6 +143,8 @@ export function parseRegistryEntry(raw: unknown): RegistryIndexEntry {
   if (typeof o['displayName'] === 'string') entry.displayName = o['displayName'];
   if (typeof o['description'] === 'string') entry.description = o['description'];
   if (typeof o['docs'] === 'string') entry.docs = o['docs'];
+  // A skill entry's tool allowlist (JSON key "tools"); ignored for modules.
+  if (kind === 'skill' && isStringArray(o['tools'])) entry.skillTools = o['tools'];
   if (typeof o['minCoreVersion'] === 'string') {
     if (!VERSION_RE.test(o['minCoreVersion']))
       throw new InstallError(`bad minCoreVersion for ${name}`);
@@ -420,4 +439,227 @@ export function describePermissions(p: ModulePermissions): string[] {
   for (const f of p.filesystem ?? []) lines.push(`Declares it reads and writes files under ${f}`);
   if (lines.length === 0) lines.push('Needs no special permissions');
   return lines;
+}
+
+// ---------------------------------------------------------------------------
+// Declarative skills (kind: "skill")
+// ---------------------------------------------------------------------------
+//
+// A skill is DATA, never code: a skill.json manifest + a SKILL.md playbook (+
+// optional references/*.md and an icon.svg). It rides this same pinned,
+// consent-gated pipeline, but a skill bundle is held to a stricter contract
+// than a module: assertNoExecutableContent() refuses anything that could be
+// imported or executed, and stageSkill() refuses an `entrypoints` key. That
+// gate is the *verifiable* code-free boundary the skills threat model rests on
+// — the loader (skills.ts) never dynamic-imports, so even a bundle that slipped
+// past could not run, but we fail closed here long before that. A skill has no
+// permissions of its own; its capability is exactly the consented tool
+// allowlist, which the UI renders per-tool with each tool's tier.
+
+// Only these may appear inside a skill bundle. An allowlist (not a denylist) IS
+// the boundary: anything we don't positively recognise as inert text/markup is
+// refused, so a novel executable extension can't sneak through a gap in a ban
+// list. .svg is data here (an icon) — the panel sanitises before rendering it.
+const SKILL_ALLOWED_EXTS = new Set(['.md', '.json', '.svg', '.txt']);
+// Extensionless metadata files that legitimately ship without one.
+const SKILL_ALLOWED_EXTLESS = new Set(['LICENSE', 'NOTICE', 'COPYING', 'AUTHORS', 'README']);
+
+// SKILL.md is injected into the model's context on demand; cap it so a bundle
+// can't blow the token budget. 32 KB is generous for a playbook.
+export const MAX_SKILL_INSTRUCTIONS_BYTES = 32 * 1024;
+// intent_pattern is compiled to a RegExp run on user messages; cap its length
+// as a cheap ReDoS guard (the loader also validates it compiles).
+export const MAX_INTENT_PATTERN_LEN = 256;
+
+export interface StagedSkill {
+  name: string;
+  version: string;
+  // Temp directory holding the verified, code-free skill. Never executed from;
+  // commitSkill copies it into the live skills root.
+  dir: string;
+  manifest: Record<string, unknown>;
+  // Declared tool allowlist — what the consent screen resolves to per-tool tiers.
+  tools: string[];
+}
+
+function walkSkillDir(dir: string, onFile: (name: string) => void): void {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isSymbolicLink())
+      throw new InstallError(`skill bundle contains a symlink: ${e.name}`);
+    if (e.isDirectory()) {
+      // node_modules/ and migrations/ are the two ways a "data" bundle would
+      // smuggle code or schema; refuse both by name regardless of contents.
+      if (e.name === 'node_modules')
+        throw new InstallError('skill bundle contains node_modules/ — skills carry no code');
+      if (e.name === 'migrations')
+        throw new InstallError('skill bundle contains migrations/ — skills own no schema');
+      walkSkillDir(join(dir, e.name), onFile);
+    } else if (e.isFile()) {
+      onFile(e.name);
+    } else {
+      throw new InstallError(`skill bundle contains a non-regular file: ${e.name}`);
+    }
+  }
+}
+
+// The code-free gate. Throws (caller deletes the temp dir) on the first file
+// that isn't recognised inert data. Verifiable: the set of accepted files is an
+// allowlist, so the proof that a skill can't run is "nothing executable was
+// written", not "we remembered to ban every executable extension".
+export function assertNoExecutableContent(dir: string): void {
+  walkSkillDir(dir, (name) => {
+    if (SKILL_ALLOWED_EXTLESS.has(name)) return;
+    const dot = name.lastIndexOf('.');
+    const ext = dot > 0 ? name.slice(dot).toLowerCase() : '';
+    if (!SKILL_ALLOWED_EXTS.has(ext)) {
+      throw new InstallError(
+        `skill bundle contains a non-data file: ${name} — skills may only ship ${[...SKILL_ALLOWED_EXTS].join(', ')} files`,
+      );
+    }
+  });
+}
+
+function parseSkillTools(v: unknown, name: string): string[] {
+  if (v === undefined) return [];
+  if (!Array.isArray(v) || !v.every((x) => typeof x === 'string'))
+    throw new InstallError(`skill ${name} must declare "tools" as an array of tool names`);
+  return v as string[];
+}
+
+// Download → verify → extract → CODE-FREE GATE → validate identity. Mirrors
+// stageModule but for a skill bundle; the extra assertNoExecutableContent step
+// (and the entrypoints refusal) are what make a skill provably inert.
+export async function stageSkill(
+  entry: RegistryIndexEntry,
+  opts: StageOptions,
+): Promise<StagedSkill> {
+  if (entry.minCoreVersion && compareSemver(opts.hostVersion, entry.minCoreVersion) < 0) {
+    throw new InstallError(
+      `${entry.name} ${entry.version} needs Modulus >= ${entry.minCoreVersion} (this is ${opts.hostVersion}) — update Modulus first`,
+    );
+  }
+  const buf = await downloadAndVerify(entry, {
+    ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+    ...(opts.maxBytes ? { maxBytes: opts.maxBytes } : {}),
+  });
+  mkdirSync(opts.stagingRoot, { recursive: true });
+  const dir = mkdtempSync(join(opts.stagingRoot, `${entry.name}-`));
+  try {
+    extractTarGz(buf, dir);
+    // Refuse any code BEFORE reading a byte of the manifest — the gate runs on
+    // the whole extracted tree so nothing executable can hide beside skill.json.
+    assertNoExecutableContent(dir);
+    // The tarball may root the skill at ./ or at ./<name>/ — accept both.
+    const root = existsSync(join(dir, 'skill.json'))
+      ? dir
+      : existsSync(join(dir, entry.name, 'skill.json'))
+        ? join(dir, entry.name)
+        : null;
+    if (!root) throw new InstallError(`tarball for ${entry.name} contains no skill.json`);
+    const manifest = JSON.parse(readFileSync(join(root, 'skill.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    if ('entrypoints' in manifest)
+      throw new InstallError(`skill ${entry.name} declares entrypoints — skills run no code`);
+    if (manifest['kind'] !== 'skill')
+      throw new InstallError(`skill.json for ${entry.name} must set "kind":"skill"`);
+    const manifestName = String(manifest['name'] ?? '');
+    if (manifestName !== entry.name)
+      throw new InstallError(
+        `skill.json name '${manifestName}' does not match registry entry '${entry.name}'`,
+      );
+    const tools = parseSkillTools(manifest['tools'], entry.name);
+    // The playbook must exist inside the bundle and fit the size cap.
+    const instr = String(manifest['instructions'] ?? 'SKILL.md');
+    assertSafeEntryPath(instr);
+    const instrPath = resolve(root, instr);
+    if (instrPath !== root && !instrPath.startsWith(root + sep))
+      throw new InstallError(`skill ${entry.name} instructions path escapes the bundle`);
+    if (!existsSync(instrPath))
+      throw new InstallError(`skill ${entry.name} is missing its playbook (${instr})`);
+    if (statSync(instrPath).size > MAX_SKILL_INSTRUCTIONS_BYTES)
+      throw new InstallError(
+        `skill ${entry.name} playbook exceeds the ${MAX_SKILL_INSTRUCTIONS_BYTES}-byte cap`,
+      );
+    const ip = manifest['intent_pattern'];
+    if (typeof ip === 'string' && ip.length > MAX_INTENT_PATTERN_LEN)
+      throw new InstallError(
+        `skill ${entry.name} intent_pattern exceeds the ${MAX_INTENT_PATTERN_LEN}-char cap`,
+      );
+    opts.log?.info('skill staged', {
+      name: entry.name,
+      version: entry.version,
+      dir: root,
+      tools: tools.length,
+    });
+    return { name: entry.name, version: entry.version, dir: root, manifest, tools };
+  } catch (e) {
+    rmSync(dir, { recursive: true, force: true });
+    throw e;
+  }
+}
+
+export function discardSkill(staged: StagedSkill): void {
+  let root = staged.dir;
+  const parent = dirname(root);
+  if (parent !== root && /-[A-Za-z0-9]+$/.test(parent.split(sep).pop() ?? '')) root = parent;
+  rmSync(root, { recursive: true, force: true });
+}
+
+// Copy the verified, consented skill into the live skills root (kept separate
+// from the modules root so the module loader never sees it). Same no-clobber
+// rule as commitModule: a fresh install refuses to overwrite.
+export function commitSkill(
+  staged: StagedSkill,
+  destRoot: string,
+  opts: { replace?: boolean } = {},
+): string {
+  if (!MODULE_NAME_RE.test(staged.name)) throw new InstallError('unsafe skill name');
+  const root = resolve(destRoot);
+  const dest = resolve(root, staged.name);
+  if (dest !== root && !dest.startsWith(root + sep))
+    throw new InstallError('destination escapes the skills root');
+  if (existsSync(dest)) {
+    if (!opts.replace) throw new InstallError(`${staged.name} is already installed`);
+    rmSync(dest, { recursive: true, force: true });
+  }
+  mkdirSync(root, { recursive: true });
+  cpSync(staged.dir, dest, { recursive: true });
+  discardSkill(staged);
+  return dest;
+}
+
+// Tools ADDED by `after` relative to `before` — the skill analog of
+// permissionDiff. A non-empty result is a capability growth that must be
+// re-consented on update ("no silent tool grants").
+export function skillToolDiff(before: readonly string[], after: readonly string[]): string[] {
+  const have = new Set(before);
+  return after.filter((t) => !have.has(t));
+}
+
+// Per-tool execution tier as the consent screen needs it. 'unknown' = the skill
+// names a tool that isn't installed/registered here, so it stays unavailable.
+export type SkillToolTier = 'auto' | 'confirm' | 'owner' | 'unknown';
+
+// Plain-language consent lines, one per tool, leading with what the user
+// actually cares about: will this run on its own, or stop to ask me? Everyday
+// language — no "tier" jargon. The caller resolves each tool's tier against the
+// live registry (this stays pure so it has no registry dependency).
+export function describeSkillTools(
+  tools: ReadonlyArray<{ name: string; tier: SkillToolTier }>,
+): string[] {
+  if (tools.length === 0) return ['Uses no tools — this skill is guidance only'];
+  return tools.map(({ name, tier }) => {
+    switch (tier) {
+      case 'auto':
+        return `Uses ${name} (runs automatically)`;
+      case 'confirm':
+        return `Uses ${name} (asks you each time)`;
+      case 'owner':
+        return `Uses ${name} (only you, the owner, can approve)`;
+      default:
+        return `Wants ${name} (not installed — stays unavailable until you add it)`;
+    }
+  });
 }

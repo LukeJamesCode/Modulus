@@ -1,0 +1,11 @@
+{
+  "kind": "skill",
+  "name": "day-planner",
+  "version": "1.0.0",
+  "modulus": ">=1.5.0",
+  "description": "Turn a to-do pile into a realistic day.",
+  "summary": "Plan a realistic day around your calendar, tasks, and the weather",
+  "instructions": "SKILL.md",
+  "intent_pattern": "plan my day|plan today|organi[sz]e my day|what should i do today|map out (my )?day",
+  "tools": ["plan_day", "tasks_list", "calendar_list_events", "find_free_slot", "weather_get", "reminder_set"]
+}

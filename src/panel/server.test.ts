@@ -265,6 +265,15 @@ test('static index is open and carries a CSP that names no third-party origin', 
   assert.match(react.headers.get('content-type') ?? '', /javascript/);
 });
 
+test('the panel HTML refuses to be framed (frame-ancestors + X-Frame-Options)', async () => {
+  const res = await fetch(`${base}/`);
+  assert.equal(res.status, 200);
+  const csp = res.headers.get('content-security-policy') ?? '';
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.equal(res.headers.get('x-frame-options'), 'DENY');
+  await res.text(); // drain
+});
+
 test('path traversal outside web/ is forbidden', async () => {
   // Raw request — fetch would normalize ../, so go through the encoded form.
   const res = await fetch(`${base}/..%2f..%2fpackage.json`);

@@ -27,7 +27,7 @@ test('agent schedules: a one-shot schedule can enqueue the same task for multipl
       nextRunAt: now - 1,
       recurrence: 'once',
     });
-    const fired = store.sweepDue(
+    const { fired } = store.sweepDue(
       (agentId, prompt) => reg.enqueue({ agentId, prompt }),
       new Date(now),
     );
@@ -128,6 +128,90 @@ test('agent schedules: recurring schedules advance after firing', () => {
     assert.equal(reg.listTasks({ status: 'queued' }).length, 1);
     db.close();
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('agent schedules: a cron row advances via nextFireAfter and stays active', () => {
+  const dir = tmp();
+  const db = open({ path: join(dir, 'g.db') });
+  try {
+    const reg = createAgentRegistry(db);
+    const planner = reg.create({ name: 'planner', systemPrompt: 'plan', toolAllowlist: [] });
+    const store = createAgentScheduleStore(db, reg);
+    // Every weekday at 08:00 UTC, first fire pinned to Thursday 2026-06-04 so
+    // the sweep below is deterministic regardless of the wall clock.
+    const schedule = store.create({
+      agentIds: [planner.id],
+      prompt: 'Standup',
+      cron: '0 8 * * 1-5',
+      timeZone: 'UTC',
+      nextRunAt: Date.parse('2026-06-04T08:00:00Z'),
+    });
+    // Thursday 2026-06-04 09:00 UTC — past today's 08:00, so the next fire is
+    // Friday 08:00.
+    store.sweepDue((agentId, prompt) => reg.enqueue({ agentId, prompt }), new Date('2026-06-04T09:00:00Z'));
+
+    const updated = store.get(schedule.id)!;
+    assert.equal(updated.active, true);
+    assert.equal(updated.nextRunAt, Date.parse('2026-06-05T08:00:00Z')); // Fri 08:00
+    assert.equal(reg.listTasks({ status: 'queued' }).length, 1);
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('agent schedules: a notify-only reminder emits a nudge instead of a task', () => {
+  const dir = tmp();
+  const db = open({ path: join(dir, 'g.db') });
+  try {
+    const reg = createAgentRegistry(db);
+    const store = createAgentScheduleStore(db, reg);
+    const now = Date.now();
+
+    const schedule = store.create({
+      agentIds: [],
+      prompt: 'Take your pills',
+      nextRunAt: now - 1,
+      recurrence: 'once',
+      notifyChatId: 4242,
+    });
+    const { fired, nudges } = store.sweepDue(
+      (agentId, prompt) => reg.enqueue({ agentId, prompt }),
+      new Date(now),
+    );
+
+    assert.equal(fired.length, 1);
+    assert.equal(reg.listTasks({ status: 'queued' }).length, 0, 'no agent task for a notify-only row');
+    assert.equal(nudges.length, 1);
+    assert.equal(nudges[0]!.chatId, 4242);
+    assert.equal(nudges[0]!.text, 'Take your pills');
+    assert.equal(store.get(schedule.id)?.active, false); // one-shot deactivates
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('agent schedules: removeForChat only deletes a reminder owned by that chat', () => {
+  const dir = tmp();
+  const db = open({ path: join(dir, 'g.db') });
+  try {
+    const reg = createAgentRegistry(db);
+    const store = createAgentScheduleStore(db, reg);
+    const s = store.create({
+      agentIds: [],
+      prompt: 'ping',
+      nextRunAt: Date.now() + 60_000,
+      notifyChatId: 100,
+    });
+    assert.equal(store.removeForChat(999, s.id), false, 'wrong chat cannot delete');
+    assert.ok(store.get(s.id), 'still present');
+    assert.equal(store.removeForChat(100, s.id), true);
+    assert.equal(store.get(s.id), undefined);
+  } finally {
+    db.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

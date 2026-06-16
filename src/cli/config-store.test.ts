@@ -59,6 +59,54 @@ test('saveConfig + loadConfig round-trips', () => {
   }
 });
 
+test('saveConfig + loadConfig round-trips the memory block', () => {
+  const home = mkHome();
+  try {
+    const input: ModulusConfig = {
+      telegram: { token: 'abc', allowedIds: [1] },
+      ollama: { url: 'http://example:11434' },
+      models: { chat: 'qwen3.5:0.5b' },
+      tier: 'standard',
+      logLevel: 'info',
+      panel: { enabled: true, port: 7777, bind: '127.0.0.1' },
+      instantResponses: { enabled: true },
+      memory: { extraction: { enabled: false }, dreaming: { enabled: false } },
+    };
+    saveConfig(input, home);
+    assert.deepEqual(loadConfig(home), input);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('memory toggles: env tri-state wins; unset leaves enabled undefined for the tier default', () => {
+  const home = mkHome();
+  try {
+    saveConfig(
+      { telegram: { token: 't', allowedIds: [1] }, ollama: { url: 'http://x:11434' }, models: { chat: 'c' } },
+      home,
+    );
+    // No env and no file memory block → enabled stays undefined so start.ts can
+    // apply the tier-aware default rather than a fixed boolean here.
+    const eff = effectiveConfig(home);
+    assert.equal(eff.memory?.extraction?.enabled, undefined);
+    assert.equal(eff.memory?.dreaming?.enabled, undefined);
+
+    const oldEnv = { ...process.env };
+    process.env['MODULUS_MEMORY_EXTRACTION'] = 'false';
+    process.env['MODULUS_MEMORY_DREAMING'] = 'true';
+    try {
+      const e2 = effectiveConfig(home);
+      assert.equal(e2.memory?.extraction?.enabled, false);
+      assert.equal(e2.memory?.dreaming?.enabled, true);
+    } finally {
+      process.env = oldEnv;
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('saveConfig accepts legacy-shaped config and drops retired provider fields', () => {
   const home = mkHome();
   try {

@@ -48,6 +48,15 @@ export interface ModulusConfig {
   instantResponses?: {
     enabled?: boolean;
   };
+  // Long-term memory background jobs. `extraction` pulls 0–2 durable user facts
+  // from each chat turn (default on for Standard/Heavy, off for Small — the
+  // tier-aware default is resolved at boot in start.ts, so an unset value stays
+  // undefined here). `dreaming` is the deterministic nightly consolidation pass
+  // (default on). See src/core/memory-extraction.ts and src/core/dreaming.ts.
+  memory?: {
+    extraction?: { enabled?: boolean };
+    dreaming?: { enabled?: boolean };
+  };
 }
 
 // Whitelist of accepted hardware tiers. An unknown value (from env or disk)
@@ -158,7 +167,22 @@ export function effectiveConfig(home: string = homeDir()): ModulusConfig {
           ? false
           : (file.instantResponses?.enabled ?? true),
     },
+    // Left unset (undefined enabled) unless explicitly chosen, so start.ts can
+    // apply the tier-aware extraction default. env 'true'/'false' wins over file.
+    memory: {
+      extraction: { enabled: envBool(env['MODULUS_MEMORY_EXTRACTION'], file.memory?.extraction?.enabled) },
+      dreaming: { enabled: envBool(env['MODULUS_MEMORY_DREAMING'], file.memory?.dreaming?.enabled) },
+    },
   };
+}
+
+// Tri-state env override: explicit 'true'/'false' wins, else the file value
+// (which may itself be undefined → caller applies its own default).
+function envBool(raw: string | undefined, fallback: boolean | undefined): boolean | undefined {
+  const v = raw?.trim();
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  return fallback;
 }
 
 // SSRF guard for the Ollama base URL. Ollama is always a separate process
@@ -258,6 +282,14 @@ function mergeWithDefaults(input: Partial<ConfigOnDisk>): ModulusConfig {
   if (input.instantResponses && base.instantResponses) {
     if (typeof input.instantResponses.enabled === 'boolean')
       base.instantResponses.enabled = input.instantResponses.enabled;
+  }
+  if (input.memory) {
+    const mem: NonNullable<ModulusConfig['memory']> = {};
+    if (typeof input.memory.extraction?.enabled === 'boolean')
+      mem.extraction = { enabled: input.memory.extraction.enabled };
+    if (typeof input.memory.dreaming?.enabled === 'boolean')
+      mem.dreaming = { enabled: input.memory.dreaming.enabled };
+    if (mem.extraction || mem.dreaming) base.memory = mem;
   }
   return base;
 }

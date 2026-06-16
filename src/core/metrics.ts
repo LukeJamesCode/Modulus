@@ -23,6 +23,9 @@ export interface MetricsSnapshot {
   // Per-module count of watcher-driven hot reloads since the daemon started.
   // Empty when nothing has reloaded; a value climbing on its own is a leak.
   moduleReloads: Record<string, number>;
+  // Per-module count of tripwire denials (a module reaching a host/binary/path
+  // it never declared). Empty in the healthy case; non-zero means drift.
+  moduleTripwireDenials: Record<string, number>;
 }
 
 export interface MetricsWriterOptions {
@@ -33,6 +36,9 @@ export interface MetricsWriterOptions {
   // Live per-module reload counts (loader.reloadCounts). Optional so callers
   // without a module loader (and the existing tests) can omit it.
   moduleReloads?: () => Record<string, number>;
+  // Live per-module tripwire denial counts (loader.tripwireDenials). Optional
+  // for the same reason.
+  moduleTripwireDenials?: () => Record<string, number>;
   // Defaults to 60s. Tests pass a smaller value or 0 for one-shot.
   intervalMs?: number;
   // Test seam.
@@ -59,6 +65,7 @@ export function createMetricsWriter(opts: MetricsWriterOptions): MetricsWriter {
       uptimeMs: t - opts.startedAt,
       scheduler: opts.scheduler.stats(),
       moduleReloads: opts.moduleReloads?.() ?? {},
+      moduleTripwireDenials: opts.moduleTripwireDenials?.() ?? {},
     };
   }
 

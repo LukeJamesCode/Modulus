@@ -2,7 +2,8 @@
 // Values that are pinned by an environment variable show a "set by environment"
 // lock and are read-only here, mirroring how effectiveConfig() lets env vars
 // win over the on-disk config.json. Changes are staged locally and written with
-// one Save; they take effect on the next agent restart.
+// one Save; a model change applies live (the daemon re-points its LLM profiles),
+// while the rest take effect on the next agent restart.
 const { useState: useStateSet, useEffect: useEffectSet } = React;
 const FRONTEND_EXT_NAME = 'modulus-frontend';
 
@@ -45,6 +46,8 @@ function SettingsTab({ onReRunWizard, onSaved }) {
       tier: cfg.tier,
       logLevel: cfg.logLevel,
       instantResponses: cfg.instantResponses,
+      memoryExtraction: cfg.memoryExtraction,
+      memoryDreaming: cfg.memoryDreaming,
     };
     // Only send a new token if the user typed a real one (not the mask).
     if (cfg.newToken && !cfg.newToken.includes('•')) body.token = cfg.newToken;
@@ -73,7 +76,7 @@ function SettingsTab({ onReRunWizard, onSaved }) {
     <div>
       <div style={{ maxWidth: 760, margin: '0 auto' }}>
         <window.SectionTitle
-          sub="Everything in Modulus Core's config, in plain language. Changes apply on the next restart."
+          sub="Everything in Modulus Core's config, in plain language. Model changes apply right away; other settings take effect on the next restart."
           right={
             <window.Button
               variant="primary"
@@ -463,7 +466,11 @@ function ModelsSection({ cfg, set, locks, models, onReRun }) {
     },
   ];
   return (
-    <Group icon="spark" title="Models" desc="Modulus uses up to three model “slots”.">
+    <Group
+      icon="spark"
+      title="Models"
+      desc="Modulus uses up to three model “slots”. Saving a change applies it on the next message."
+    >
       {slots.map((s) => (
         <div key={s.key}>
           <window.Label hint={s.hint}>
@@ -535,10 +542,13 @@ function LoggingSection({ cfg, set, locks }) {
 
 function BehaviourSection({ cfg, set }) {
   // cfg.instantResponses arrives from /api/config as a plain boolean and is
-  // saved back through the shared config save() with the other fields.
+  // saved back through the shared config save() with the other fields. The two
+  // memory toggles work the same way; both take effect on the next restart.
   const on = cfg.instantResponses !== false;
+  const extraction = cfg.memoryExtraction !== false;
+  const dreaming = cfg.memoryDreaming !== false;
   return (
-    <Group icon="spark" title="Behaviour" desc="How Modulus replies before a slow turn finishes.">
+    <Group icon="spark" title="Behaviour" desc="How Modulus replies, learns, and tidies its memory.">
       <div>
         <window.Label hint="Acknowledge instantly when a reply is predicted slow (reasoning, delegation), then stream the real answer when it’s ready — no extra model call for the ack.">
           Instant responses
@@ -552,6 +562,32 @@ function BehaviourSection({ cfg, set }) {
           <span style={{ fontSize: 13.5, color: 'var(--text-2)' }}>{on ? 'On' : 'Off'}</span>
         </div>
       </div>
+      <div>
+        <window.Label hint="After each chat turn, quietly note 0–2 durable facts about you (preferences, names, recurring context) so later turns recall them. Runs on the small model after the reply ships — never on the reply path. Off by default on Small-tier hardware. Takes effect on next restart.">
+          Memory extraction
+        </window.Label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <window.Toggle
+            checked={extraction}
+            onChange={(v) => set({ memoryExtraction: v })}
+            label="Memory extraction"
+          />
+          <span style={{ fontSize: 13.5, color: 'var(--text-2)' }}>{extraction ? 'On' : 'Off'}</span>
+        </div>
+      </div>
+      <div>
+        <window.Label hint="A nightly housekeeping pass that consolidates memory — promotes facts that keep proving useful and forgets stale notes that never were. Deterministic, no model call. Takes effect on next restart.">
+          Memory dreaming
+        </window.Label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <window.Toggle
+            checked={dreaming}
+            onChange={(v) => set({ memoryDreaming: v })}
+            label="Memory dreaming"
+          />
+          <span style={{ fontSize: 13.5, color: 'var(--text-2)' }}>{dreaming ? 'On' : 'Off'}</span>
+        </div>
+      </div>
     </Group>
   );
 }
@@ -563,14 +599,22 @@ function MemoryBrowserSection() {
   const [memories, setMemories] = useStateSet(null);
   const [total, setTotal] = useStateSet(0);
   const [query, setQuery] = useStateSet('');
+  // Scope filter: '' = the whole store, else an agent id (string) showing just
+  // that agent's private namespace.
+  const [scope, setScope] = useStateSet('');
+  const [agents, setAgents] = useStateSet([]);
   const [error, setError] = useStateSet(null);
   const [busy, setBusy] = useStateSet(false);
 
-  const load = async (q) => {
+  const load = async (q, sc) => {
     setBusy(true);
+    const scopeVal = sc !== undefined ? sc : scope;
+    const params = new URLSearchParams();
     const trimmed = (q || '').trim();
-    const path = trimmed ? `/api/memory?q=${encodeURIComponent(trimmed)}` : '/api/memory';
-    const r = await window.api.get(path);
+    if (trimmed) params.set('q', trimmed);
+    if (scopeVal) params.set('agentId', scopeVal);
+    const qs = params.toString();
+    const r = await window.api.get(qs ? `/api/memory?${qs}` : '/api/memory');
     setBusy(false);
     if (r.ok && r.data) {
       setMemories(Array.isArray(r.data.memories) ? r.data.memories : []);
@@ -581,7 +625,20 @@ function MemoryBrowserSection() {
 
   useEffectSet(() => {
     load('');
+    window.api.get('/api/agents').then((r) => {
+      if (r.ok && r.data && Array.isArray(r.data.agents)) setAgents(r.data.agents);
+    });
   }, []);
+
+  const agentName = (id) => {
+    const a = agents.find((x) => x.id === id);
+    return a ? a.name : `agent ${id}`;
+  };
+
+  const onScope = (v) => {
+    setScope(v);
+    load(query, v);
+  };
 
   const remove = async (id) => {
     const r = await window.api.del(`/api/memory/${id}`);
@@ -593,12 +650,12 @@ function MemoryBrowserSection() {
 
   const clearSearch = () => {
     setQuery('');
-    load('');
+    load('', scope);
   };
 
   return (
     <div>
-      <window.SectionTitle sub="Everything Modulus has remembered — one store shared by the main chat and every agent. Search to filter; delete to forget.">
+      <window.SectionTitle sub="Everything Modulus has remembered. The shared store is the hive mind — facts the main chat and every agent recall. Each agent also keeps a private namespace for its own findings; pick a scope to see it. Search to filter; delete to forget.">
         Hive memory
       </window.SectionTitle>
       {error && <ErrorNote text={error} onRetry={() => load(query)} />}
@@ -612,6 +669,16 @@ function MemoryBrowserSection() {
               placeholder="Search memories…"
             />
           </div>
+          {agents.length > 0 && (
+            <window.Select value={scope} onChange={(e) => onScope(e.target.value)}>
+              <option value="">All memory</option>
+              {agents.map((a) => (
+                <option key={a.id} value={String(a.id)}>
+                  {a.name}’s memory
+                </option>
+              ))}
+            </window.Select>
+          )}
           <window.Button variant="subtle" icon="search" onClick={() => load(query)} disabled={busy}>
             {busy ? 'Searching' : 'Search'}
           </window.Button>
@@ -665,6 +732,15 @@ function MemoryBrowserSection() {
                   <window.Badge tone="neutral" style={{ fontSize: 10.5 }}>
                     {m.source}
                   </window.Badge>
+                  {m.agentId != null ? (
+                    <window.Badge tone="accent" style={{ fontSize: 10.5 }}>
+                      {agentName(m.agentId)}
+                    </window.Badge>
+                  ) : (
+                    <window.Badge tone="neutral" style={{ fontSize: 10.5 }}>
+                      shared
+                    </window.Badge>
+                  )}
                   {m.scope && m.scope !== 'global' && (
                     <window.Badge tone="neutral" style={{ fontSize: 10.5 }}>
                       {m.scope}

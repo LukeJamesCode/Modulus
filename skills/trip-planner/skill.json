@@ -1,0 +1,19 @@
+{
+  "kind": "skill",
+  "name": "trip-planner",
+  "version": "1.0.0",
+  "modulus": ">=1.5.0",
+  "description": "Plan multi-stop trips end to end.",
+  "summary": "Plan a multi-stop trip — research stops, check the forecast, and put it on the calendar",
+  "instructions": "SKILL.md",
+  "intent_pattern": "trip|travel|itinerary|vacation|holiday|flights?|hotels?",
+  "tools": ["web_search", "weather_get", "calendar_list_events", "calendar_add_event"],
+  "agents": [
+    {
+      "name": "trip-concierge",
+      "role": "Plans multi-stop travel",
+      "systemPrompt": "You are a travel concierge. Plan practical, well-sequenced multi-stop trips. Always check the user's existing calendar before proposing dates, research each stop, and confirm before adding anything to the calendar.",
+      "profile": "tools"
+    }
+  ]
+}

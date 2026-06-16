@@ -2,6 +2,16 @@
 
 Modulus is "the everyday AI orchestrator": a small, terminal-first AI agent that runs CPU-only (no GPU needed) on hardware as small as a Raspberry Pi 4. It is the everyday-person evolution of an earlier project called Gurney (itself the successor to a homelab agent, ATLAS). Almost nothing is built in — "modules" are drop-in folders that turn it into anything (calendar, tasks, voice, web search, etc.). It talks to you over a Telegram bot AND an integrated local web panel. The LLM backend is Ollama (running qwen3.5 models), which runs as a SEPARATE process and is NOT bundled with Modulus.
 
+## What's New Since 1.0.0
+
+Five feature milestones have landed since the 1.0.0 release. See [CHANGELOG.md](CHANGELOG.md) for the full detail.
+
+- **1.1.0 — Reasoning controls & notifications**: a per-chat `/think`·`/fast` reasoning mode, and a task dispatched from Telegram now pings you back with its result when it finishes.
+- **1.2.0 — Agent management**: hire ready-made agents from a catalog, a plain-language Simple/Advanced agent editor, one-request auto-dispatch ("pick the best agent for me"), and full agent CRUD from Telegram.
+- **1.3.0 — Proactive scheduling**: natural-language reminders (`/remind`, `/every`), a periodic heartbeat, and standing orders the heartbeat evaluates on its own — all on one cron + time-zone spine.
+- **1.4.0 — Memory**: background extraction of durable facts about you, a nightly deterministic "dreaming" consolidation pass, and per-agent memory namespaces so a busy fleet's findings don't flood the main chat.
+- **1.5.0 — Declarative skills + security hardening**: **skills** are the *safe tier* of the marketplace — pure-data playbooks (no code) the assistant loads on demand to do multi-step tasks with tools you already have. Manage them with `/skills` on Telegram or the panel's **Modules → Skills** section. Plus module runtime tripwires (network/subprocess/filesystem allowlist enforcement) and panel security hardening.
+
 ## Quickstart
 
 ### 1. Prerequisites

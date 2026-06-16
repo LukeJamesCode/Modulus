@@ -29,6 +29,7 @@ import { createOrchestrator } from '../core/orchestrator.js';
 import { createScheduler, type Nudge } from '../core/scheduler.js';
 import { setupFollowups } from '../core/followups.js';
 import { setupMemory } from '../core/memory.js';
+import { createMemoryExtractor } from '../core/memory-extraction.js';
 import {
   createAgentRegistry,
   createAgentRuntime,
@@ -42,6 +43,7 @@ import {
   REQUEST_APPROVAL_TOOL_NAME,
 } from '../core/agents.js';
 import { createAgentQueue } from '../core/agent-queue.js';
+import { formatTaskNotification } from '../adapters/agent-commands.js';
 import { setupAgentApprovals } from '../core/agent-approvals.js';
 import { setupAgentDelegation } from '../core/agent-delegation.js';
 import { setupAgentEscalation, ESCALATE_TOOL_NAME } from '../core/agent-escalation.js';
@@ -50,10 +52,23 @@ import { setupAgentPlanning } from '../core/agent-planning.js';
 import { setupFilesystemTools } from '../core/fs-tools.js';
 import { pinnedFilesRoot } from '../core/agent-attachments.js';
 import { setupAgentSchedules } from '../core/agent-schedules.js';
-import { createWorkflowRegistry, seedStarterWorkflows } from '../core/workflows.js';
-import { createWorkflowRunner } from '../core/workflow-runner.js';
+import {
+  setupScheduleTools,
+  CREATE_SCHEDULE_TOOL_NAME,
+  type SchedulingDeps,
+} from '../core/schedule-tools.js';
+import { hostTimeZone } from '../core/schedule-parse.js';
+import { createStandingOrderStore } from '../core/standing-orders.js';
+import { setupHeartbeat } from '../core/heartbeat.js';
+import { setupDreaming } from '../core/dreaming.js';
 import type { Tier } from './profiles.js';
 import { createModuleLoader, type HostOrchestrator, type VoicePayload } from '../core/modules.js';
+import { createSkillLoader } from '../core/skills.js';
+import {
+  setupSkillTools,
+  createSkillActivation,
+  USE_SKILL_TOOL_NAME,
+} from '../core/skill-tools.js';
 import {
   collectModuleReadiness,
   formatSetupIssuesNudge,
@@ -102,6 +117,18 @@ export function defaultModuleRoots(home: string): string[] {
   const here = dirname(fileURLToPath(import.meta.url));
   const repoModule = resolve(here, '..', '..', 'modules');
   return [userDir, repoModule];
+}
+
+// Skills install under ~/.modulus/skills, kept apart from modules so neither
+// loader ever sees the other's folders. The repo's skills/ dir (first-party
+// launch skills) is only included when it exists, so this never creates an
+// empty dir in the working tree before any first-party skill ships.
+export function defaultSkillRoots(home: string): string[] {
+  const roots = [join(home, 'skills')];
+  const here = dirname(fileURLToPath(import.meta.url));
+  const repoSkills = resolve(here, '..', '..', 'skills');
+  if (existsSync(repoSkills)) roots.push(repoSkills);
+  return roots;
 }
 
 function knownAllowedChats(
@@ -301,7 +328,10 @@ async function bootDaemon(
     // as followups); the provider feeds recall into the main orchestrator AND
     // every per-agent orchestrator below, so the whole fleet shares one memory.
     const memory = setupMemory({ db, tools, log });
-    const memoryProvider = (message: string): string | undefined => memory.renderForPrompt(message);
+    // agentId is undefined for the main chat (global recall) and bound to the
+    // running agent inside the per-agent orchestrator (global ∪ its namespace).
+    const memoryProvider = (message: string, agentId?: number): string | undefined =>
+      memory.renderForPrompt(message, agentId);
 
     // Bridges browser-chat confirm-tier prompts into the daemon's confirm router
     // (consulted below before the Telegram fallback). The panel registers per-turn
@@ -336,6 +366,16 @@ async function bootDaemon(
     // the fleet during loadAll. Only needs the DB, so the early construction is
     // free; all the run-time machinery (runtime, queue) still wires up below.
     const agentRegistry = createAgentRegistry(db);
+    // Deleting an agent also drops its private memory namespace (migration 0032
+    // adds no FK cascade). Wrap remove() once here — the same registry object is
+    // shared with the loader, runtime, queue, and panel, so every delete path
+    // (panel, fleet tools) inherits the cleanup.
+    const removeAgentRow = agentRegistry.remove.bind(agentRegistry);
+    agentRegistry.remove = (id: number): boolean => {
+      const ok = removeAgentRow(id);
+      if (ok) memory.forgetAgent(id);
+      return ok;
+    };
     const loader = createModuleLoader({
       roots: modulesRoots,
       stateRoot,
@@ -364,6 +404,29 @@ async function bootDaemon(
     cleanups.push(() => loader.shutdown());
     await loader.loadAll();
 
+    // Declarative skills: the SAFE tier of the marketplace. The loader is a
+    // pure-data sibling of the module loader — no Host, no dynamic import — so a
+    // skill can never run code. It shares the agent registry (skill personas
+    // sync with origin 'skill:<name>') and is held to the code-free contract at
+    // load as well as install. Consumed by the orchestrator/Telegram/panel in
+    // later phases; created here so skill personas exist in the fleet at boot.
+    const skillRoots = defaultSkillRoots(home);
+    ensurePrivateDir(skillRoots[0]!);
+    const skills = createSkillLoader({
+      roots: skillRoots,
+      db,
+      log,
+      hostVersion: HOST_VERSION,
+      tools,
+      agents: agentRegistry,
+      watch: true,
+      onDidReload: async () => {
+        await notifySetupIssues?.();
+      },
+    });
+    cleanups.push(() => skills.shutdown());
+    await skills.loadAll();
+
     const maxToolRounds = envInt('MODULUS_MAX_TOOL_ROUNDS');
     // The main (Telegram/panel) chat must not see the agent-only tools —
     // spawn_agent and request_approval are only meaningful inside an agent run,
@@ -376,6 +439,11 @@ async function bootDaemon(
         h.name !== SPAWN_AGENTS_TOOL_NAME &&
         h.name !== REQUEST_APPROVAL_TOOL_NAME,
     );
+    // Declarative-skill activation: register the use_skill tool, then build the
+    // orchestrator's skill surface against chatTools (the same registry the
+    // orchestrator runs on, so the grant intersection matches what's permitted).
+    setupSkillTools({ tools, skills, log });
+    const skillActivation = createSkillActivation(skills, chatTools);
     const orchestrator = createOrchestrator({
       db,
       llm,
@@ -389,6 +457,7 @@ async function bootDaemon(
       toolResultMaxChars,
       ...(cfg.models.tools ? { toolProfile: 'tools' as const } : {}),
       ...(maxToolRounds !== undefined ? { maxToolRounds } : {}),
+      ...(skillActivation ? { skills: skillActivation } : {}),
     });
     orchestratorImpl = orchestrator;
 
@@ -431,7 +500,16 @@ async function bootDaemon(
     // delegation tools from the chat.
     const agentTools = filterToolRegistry(
       tools,
-      (h) => h.name !== ESCALATE_TOOL_NAME && !FLEET_TOOL_NAMES.includes(h.name),
+      (h) =>
+        h.name !== ESCALATE_TOOL_NAME &&
+        !FLEET_TOOL_NAMES.includes(h.name) &&
+        // create_schedule notifies a real chat; an agent run's chat id is a
+        // pseudo id, so reminders are a chat-surface feature only.
+        h.name !== CREATE_SCHEDULE_TOOL_NAME &&
+        // use_skill is a chat-surface feature: skills advertise to the chat
+        // model and widen its manifest. An agent run has its own configured
+        // grant, so the skill loader stays out of it (mirrors create_schedule).
+        h.name !== USE_SKILL_TOOL_NAME,
     );
     const agentRuntime = createAgentRuntime({
       db,
@@ -452,10 +530,13 @@ async function bootDaemon(
           .listArtifacts(task.id)
           .filter((a) => a.name === 'finding' && typeof a.content === 'string')
           .map((a) => a.content as string);
-        if (findings.length > 0) memory.promoteFindings(findings, agent.name);
+        if (findings.length > 0) memory.promoteFindings(findings, agent.name, agent.id);
       },
     });
     cleanups.push(() => agentRuntime.shutdown());
+    // Ping the chat that dispatched a task when it finishes. Wired to Telegram
+    // once the adapter is up (below); a no-op until then.
+    let sendTaskNotification: (chatId: number, text: string) => Promise<void> = async () => {};
     const agentQueue = createAgentQueue({
       registry: agentRegistry,
       runtime: agentRuntime,
@@ -465,6 +546,15 @@ async function bootDaemon(
       // The web panel enqueues tasks from its own process; poll so the daemon —
       // the single executor — picks them up.
       pollMs: 2500,
+      // Task-done notifications: on a terminal state, message the dispatching
+      // chat. Only tasks that recorded a notifyChatId (Telegram /dispatch) ping;
+      // the formatter returns null for non-terminal/cancelled states.
+      onTaskUpdate: (task) => {
+        if (task.notifyChatId == null) return;
+        const agent = agentRegistry.get(task.agentId);
+        const text = formatTaskNotification(task, agent?.name ?? 'agent');
+        if (text) void sendTaskNotification(task.notifyChatId, text);
+      },
     });
     // escalate_to_agent: the main chat's hand-off to the autonomous operator on
     // the queue. Registered on the full registry so chatTools (which only hides
@@ -528,12 +618,49 @@ async function bootDaemon(
         return globalRoot;
       },
     });
-    setupAgentSchedules({
+    const agentSchedules = setupAgentSchedules({
       db,
       scheduler,
       registry: agentRegistry,
       queue: agentQueue,
       log,
+    });
+    // Natural-language scheduling: one shared store + parser behind the
+    // create_schedule tool (chat model) and the /remind · /every commands.
+    const scheduling: SchedulingDeps = {
+      store: agentSchedules,
+      registry: agentRegistry,
+      log,
+      timeZone: hostTimeZone(),
+      llm,
+    };
+    setupScheduleTools({ ...scheduling, tools });
+
+    // Standing orders + the heartbeat that evaluates them. The heartbeat is one
+    // cheap registered job (cadence from MODULUS_HEARTBEAT_CRON, default */30) —
+    // a quiet beat is a single SQL read; it only escalates to an agent task or a
+    // nudge when an order is actually due. Agentic orders inherit agent gating.
+    const standingOrders = createStandingOrderStore(db, log);
+    const heartbeatCron = process.env['MODULUS_HEARTBEAT_CRON']?.trim();
+    const heartbeat = setupHeartbeat({
+      scheduler,
+      orders: standingOrders,
+      queue: agentQueue,
+      registry: agentRegistry,
+      log,
+      ...(heartbeatCron ? { cron: heartbeatCron } : {}),
+    });
+    // The "dreaming" pass: one nightly registered job (MODULUS_DREAMING_CRON,
+    // default 04:00) that deterministically consolidates memory — promote facts
+    // that keep earning recall, decay stale extraction noise. No model call, so
+    // it's safe to leave on everywhere.
+    const dreamingCron = process.env['MODULUS_DREAMING_CRON']?.trim();
+    setupDreaming({
+      memory,
+      scheduler,
+      log,
+      enabled: cfg.memory?.dreaming?.enabled ?? true,
+      ...(dreamingCron ? { cron: dreamingCron } : {}),
     });
     // Human-in-the-loop approvals: registers the request_approval tool and the
     // manager that parks a confirm-tier agent call until the owner answers (over
@@ -548,33 +675,6 @@ async function bootDaemon(
     // Pick up any queued/re-queued work now that the engine is live.
     agentQueue.notify();
 
-    // Authored-workflow engine. Mirrors the agent queue: the panel inserts a
-    // queued workflow_runs row, and this runner polls + claims + executes them.
-    const workflowRegistry = createWorkflowRegistry(db);
-    // Seed the bundled "Code Review Pipeline" example (and its agents) on a fresh
-    // install, so the Agents → Workflows tab opens with a real, editable graph.
-    seedStarterWorkflows(workflowRegistry, agentRegistry);
-    // Re-queue any workflow runs left 'running' by a crash (same pattern as agent tasks).
-    const requeued_wf = db
-      .prepare(
-        `UPDATE workflow_runs SET status = 'queued', started_at = NULL WHERE status = 'running'`,
-      )
-      .run().changes;
-    if (requeued_wf > 0) log.info('re-queued interrupted workflow runs', { count: requeued_wf });
-    const workflowRunner = createWorkflowRunner({
-      registry: workflowRegistry,
-      agents: agentRegistry,
-      runtime: agentRuntime,
-      tools,
-      llm,
-      log,
-      ownerUserId: ownerId,
-      attachmentsDir,
-      pollMs: 2500,
-    });
-    workflowRunner.start();
-    cleanups.push(() => workflowRunner.stop());
-
     // One instant-responder shared by both chat surfaces (Telegram + panel) so
     // their anti-repeat variant history is shared. Off entirely when the setting
     // is disabled. Config changes take effect on the next restart.
@@ -587,6 +687,17 @@ async function bootDaemon(
     // the same manager is handed to the panel as deps.pairing for the /pair route.
     const pairing = createPairingManager({ db, log, pollUpdates: false });
 
+    // Memory extraction: an afterTurn handler the chat dispatcher invokes
+    // detached, reply-first, to pull durable user facts into the hive store.
+    // Default on for Standard/Heavy, off for Small (the per-turn small-model call
+    // is the dominant cost there); env MODULUS_MEMORY_EXTRACTION overrides.
+    const memoryExtractor = createMemoryExtractor({
+      llm,
+      memory,
+      log,
+      enabled: cfg.memory?.extraction?.enabled ?? cfg.tier !== 'small',
+    });
+
     const telegram = createTelegram({
       token: cfg.telegram.token,
       allowedUserIds: cfg.telegram.allowedIds,
@@ -597,9 +708,16 @@ async function bootDaemon(
       tools,
       db,
       instantResponder,
+      memoryExtractor,
       pairing,
       prefs,
       followups,
+      scheduling,
+      standing: { store: standingOrders, registry: agentRegistry },
+      // Skill discovery surface; tiers resolve against chatTools, the same
+      // registry the use_skill activation intersects against.
+      skills: { skills, tools: chatTools },
+      heartbeatStats: () => heartbeat.stats(),
       agentRegistry,
       agentQueue,
       agentAttachmentsDir: attachmentsDir,
@@ -650,6 +768,8 @@ async function bootDaemon(
     };
     // And the voice-note path now that the adapter exists.
     sendVoiceImpl = (chatId, voice) => telegram.sendVoice(chatId, voice);
+    // And the task-done notification path (queue → Telegram), now reachable.
+    sendTaskNotification = (chatId, text) => telegram.sendMessage(chatId, text);
     // Point the tool registry's confirm hook at a surface router. Modules
     // that own a chat surface (e.g. modulus-discord) register a renderer via
     // host.chat.registerConfirm, scoped to their own chatId namespace; the
@@ -769,6 +889,7 @@ async function bootDaemon(
       log,
       scheduler,
       moduleReloads: () => loader.reloadCounts(),
+      moduleTripwireDenials: () => loader.tripwireDenials(),
       startedAt: Date.now(),
     });
     metricsWriter.start();
@@ -800,6 +921,11 @@ async function bootDaemon(
           memory,
           orchestrator,
           loader,
+          // Skills section of the Modules tab; tiers resolve against chatTools,
+          // the same registry the use_skill activation intersects against.
+          skills: { loader: skills, tools: chatTools },
+          standingOrders,
+          heartbeat,
           confirmBus: panelConfirmBus,
           pairing,
           ...(instantResponder ? { instantResponder } : {}),
@@ -879,14 +1005,16 @@ async function bootDaemon(
         /* ignore */
       }
       try {
-        workflowRunner.stop();
-      } catch {
-        /* ignore */
-      }
-      try {
         await loader.shutdown();
       } catch (e) {
         log.warn('module loader shutdown failed', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      try {
+        await skills.shutdown();
+      } catch (e) {
+        log.warn('skill loader shutdown failed', {
           error: e instanceof Error ? e.message : String(e),
         });
       }

@@ -204,10 +204,6 @@ export async function ingestStagedDir(opts: {
   taskId: number;
   stagingDir: string;
   allowVisual: boolean;
-  // Leave the staging dir in place after ingest. A workflow run shares one batch
-  // across several agent-node tasks, so each node ingests with keepStaging:true
-  // and the runner removes the batch once (removeStagedBatch) when the run ends.
-  keepStaging?: boolean;
 }): Promise<{ ingested: number; rejected: string[] }> {
   const { registry, baseDir, taskId, stagingDir, allowVisual } = opts;
   if (!existsSync(stagingDir)) return { ingested: 0, rejected: [] };
@@ -216,15 +212,8 @@ export async function ingestStagedDir(opts: {
     bytes: readFileSync(abs),
   }));
   const result = await ingestFiles({ registry, baseDir, taskId, allowVisual, files });
-  if (!opts.keepStaging) rmSync(stagingDir, { recursive: true, force: true });
+  rmSync(stagingDir, { recursive: true, force: true });
   return result;
-}
-
-// Remove a staged batch by token (best-effort). The staging layout is
-// <baseDir>/staging/<token>; callers that ingest with keepStaging:true use this
-// to clean up once, after every consumer has read the batch.
-export function removeStagedBatch(baseDir: string, token: string): void {
-  rmSync(join(baseDir, 'staging', token), { recursive: true, force: true });
 }
 
 // Read a staged batch (raw bytes under stagingDir) into in-memory attachments

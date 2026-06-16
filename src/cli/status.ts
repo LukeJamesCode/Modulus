@@ -115,6 +115,7 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
         enabledCount: enabledModules,
         npmDeps: moduleNpmDeps,
         reloads: metrics?.moduleReloads ?? {},
+        tripwireDenials: metrics?.moduleTripwireDenials ?? {},
       },
       db: {
         status: dbStatus,
@@ -219,6 +220,13 @@ export async function run(options: StatusRunOptions = {}): Promise<void> {
       rows.push({
         label: 'reloads',
         value: reloads.map(([name, n]) => `${name}=${n}`).join(', '),
+      });
+    }
+    const denials = Object.entries(metrics.moduleTripwireDenials ?? {}).filter(([, n]) => n > 0);
+    if (denials.length > 0) {
+      rows.push({
+        label: 'tripwire denials',
+        value: denials.map(([name, n]) => `${name}=${n}`).join(', '),
       });
     }
   } else if (running) {

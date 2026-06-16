@@ -15,6 +15,7 @@
 // it to chat-surface modules via host.chat.dispatchInbound.
 
 import type { Logger } from '../util/log.js';
+import type { ThinkMode } from './llm.js';
 import type { InstantResponder } from './instant-responses.js';
 import type {
   HostOrchestrator,
@@ -54,14 +55,33 @@ export interface ChatDispatcherDeps {
   // Per-chat devmode flag. When true the orchestrator reply is annotated with
   // model/timing/tool metadata. Telegram only; omit elsewhere.
   getDevmode?: (chatId: number) => boolean;
+  // Per-chat sticky reasoning mode (Telegram /think · /fast), applied to every
+  // turn. Omit (or return 'auto') to leave the model/profile default in place.
+  getThinkMode?: (chatId: number) => ThinkMode;
   // Core instant responses (gated by `instantResponses.enabled`). When present,
   // free-form messages get a templated reply or a pre-answer ack before the
   // module intercept chain runs. Omit to disable.
   instantResponder?: InstantResponder;
+  // Core memory extraction. Invoked detached after the reply ships, in the same
+  // failure-isolated block as the module afterTurn chain — quietly pulls 0–2
+  // durable user facts into the hive store. Omit to disable. Prefer this core
+  // dep over a module afterTurn hook so it shares the post-reply path. See
+  // src/core/memory-extraction.ts.
+  memoryExtractor?: (turn: AfterTurnContext) => Promise<void>;
 }
 
 export interface ChatDispatcher {
   dispatchInbound(msg: InboundMessage): Promise<void>;
+  // Run a module command directly (no leading '/'), for surfaces that fire a
+  // command from a button press rather than a typed message. Returns false when
+  // no module owns `name`.
+  invokeCommand(
+    name: string,
+    args: string,
+    chatId: number,
+    userId: number,
+    reply: (text: string) => Promise<unknown>,
+  ): Promise<boolean>;
 }
 
 export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
@@ -99,7 +119,7 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
     args: string,
     chatId: number,
     userId: number,
-    reply: (text: string) => Promise<void>,
+    reply: (text: string) => Promise<unknown>,
   ): Promise<boolean> => {
     const moduleCmd = deps.commands().find((c) => c.name === name);
     if (!moduleCmd) return false;
@@ -135,11 +155,14 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
   ): void => {
     let buffer = '';
     const devmode = deps.getDevmode?.(chatId) ?? false;
+    const thinkMode = deps.getThinkMode?.(chatId);
     void orchestrator
       .handleUserMessage({
         chatId,
         userId,
         text,
+        // Omit 'auto' so the orchestrator's own default stays authoritative.
+        ...(thinkMode && thinkMode !== 'auto' ? { thinkMode } : {}),
         send: async (chunk: HostReplyChunk) => {
           if (chunk.delta) buffer += chunk.delta;
           if (!chunk.done) return;
@@ -172,11 +195,19 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
             log.warn('afterReply chain failed', { error: errStr(e) }),
           );
           if (chunk.meta?.afterTurn) {
-            void runAfterTurns({
+            const turn: AfterTurnContext = {
               ...chunk.meta.afterTurn,
               assistantText: replyText,
               finishedAt: Date.now(),
-            }).catch((e) => log.warn('afterTurn chain failed', { error: errStr(e) }));
+            };
+            void runAfterTurns(turn).catch((e) =>
+              log.warn('afterTurn chain failed', { error: errStr(e) }),
+            );
+            if (deps.memoryExtractor) {
+              void deps
+                .memoryExtractor(turn)
+                .catch((e) => log.warn('memory extraction failed', { error: errStr(e) }));
+            }
           }
         },
       })
@@ -254,7 +285,7 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
     await runNext();
   }
 
-  return { dispatchInbound };
+  return { dispatchInbound, invokeCommand: invokeModuleCommand };
 }
 
 function errStr(e: unknown): string {

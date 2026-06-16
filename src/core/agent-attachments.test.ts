@@ -21,7 +21,6 @@ import {
   taskFilesDir,
   classifyKind,
   readStagedAttachments,
-  removeStagedBatch,
   MAX_ATTACHMENT_BYTES,
 } from './agent-attachments.js';
 
@@ -170,31 +169,6 @@ test('ingestStagedDir: ingests a folder, gating images out when not multimodal',
       readFileSync(join(taskFilesDir(h.baseDir, h.taskId), 'src', 'a.ts'), 'utf8'),
       'export const a = 1;',
     );
-  } finally {
-    h.cleanup();
-  }
-});
-
-test('ingestStagedDir keepStaging:true leaves the batch for sibling consumers', async () => {
-  const h = harness();
-  try {
-    const staging = join(h.baseDir, 'staging', 'tok-keep');
-    mkdirSync(staging, { recursive: true });
-    writeFile(join(staging, 'a.ts'), 'export const a = 1;');
-    const r = await ingestStagedDir({
-      registry: h.registry,
-      baseDir: h.baseDir,
-      taskId: h.taskId,
-      stagingDir: staging,
-      allowVisual: false,
-      keepStaging: true,
-    });
-    assert.equal(r.ingested, 1);
-    // Batch is still on disk — a second agent node could ingest the same files.
-    assert.equal(existsSync(join(staging, 'a.ts')), true);
-    // removeStagedBatch(token) is the single cleanup the runner calls at run end.
-    removeStagedBatch(h.baseDir, 'tok-keep');
-    assert.equal(existsSync(staging), false);
   } finally {
     h.cleanup();
   }

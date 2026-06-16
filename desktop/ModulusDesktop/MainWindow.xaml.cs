@@ -26,17 +26,37 @@ public sealed partial class MainWindow : Window
         _dispatcher = DispatcherQueue.GetForCurrentThread();
 
         SystemBackdrop = new MicaBackdrop();
+
+        // Reclaim the title-bar strip and theme the caption buttons for the dark
+        // backdrop, so there's no white bar across the top.
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
+        var titleBar = AppWindow.TitleBar;
+        titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonForegroundColor = Microsoft.UI.Colors.White;
+        titleBar.ButtonInactiveForegroundColor = Windows.UI.Color.FromArgb(255, 0x6b, 0x6b, 0x73);
+        titleBar.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(255, 0x23, 0x23, 0x29);
+        titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.White;
+        titleBar.ButtonPressedBackgroundColor = Windows.UI.Color.FromArgb(255, 0x1b, 0x1b, 0x1f);
+        titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.White;
+
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1280, 800));
         // Title-bar/taskbar icon; ApplicationIcon in the csproj only covers the
         // exe file itself.
         try { AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "icon.ico")); }
         catch (Exception e) { DaemonLog.Write($"window icon failed: {e.Message}"); }
+        // Closing the window quits Modulus and stops the daemon. Cancel the
+        // native close so the window can hide immediately for responsiveness,
+        // then hand off to Quit, which stops the daemon, tears down the tray,
+        // and exits the process.
         AppWindow.Closing += (_, e) =>
         {
             if (!_app.IsQuitting)
             {
                 e.Cancel = true;
                 AppWindow.Hide();
+                _app.Quit();
             }
         };
 

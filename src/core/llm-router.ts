@@ -12,6 +12,9 @@ import { composeAbort } from '../util/abort.js';
 
 export interface RoutedLLM extends LLM {
   registerProvider(provider: LLMProvider): () => void;
+  // Always implemented (delegates to the base Ollama) — required here so callers
+  // like the Settings route can invoke it without an optional-chain guard.
+  updateModels(models: { chat?: string; reason?: string; tools?: string }): void;
   // The read-side counterpart to registerProvider: the model tags every
   // currently-registered provider advertises (e.g. 'deepseek',
   // 'deepseek:deepseek-chat'). Power Mode's Settings picker offers these so a
@@ -124,6 +127,13 @@ export function createRoutedLLM(base: LLM, routedOpts: RoutedLLMOptions = {}): R
     return base.listProfiles();
   }
 
+  // Profile-to-model routing for the local tiers is the base Ollama instance's
+  // concern; registered cloud providers route by model tag, not profile, so a
+  // live model change only needs to reach the base.
+  function updateModels(models: { chat?: string; reason?: string; tools?: string }): void {
+    base.updateModels?.(models);
+  }
+
   function breakerSnapshot(): BreakerSnapshot {
     return base.breakerSnapshot();
   }
@@ -164,6 +174,7 @@ export function createRoutedLLM(base: LLM, routedOpts: RoutedLLMOptions = {}): R
     health,
     listProfiles,
     resolveModel,
+    updateModels,
     supportsVision,
     breakerSnapshot,
     stopIdleEviction,

@@ -1,8 +1,9 @@
 # Memory-extraction job — design spec
 
-Status: **spec only** (Phase 3, item 3). Not yet implemented. This document is
-the contract the implementer follows; it is grounded in the APIs that already
-exist so the build is mechanical.
+Status: **implemented** (v1.4.0). Lives in
+[src/core/memory-extraction.ts](../src/core/memory-extraction.ts), wired through
+the chat dispatcher's `memoryExtractor` dep (start.ts → Telegram adapter). This
+document remains the contract the implementation follows.
 
 ## Goal
 

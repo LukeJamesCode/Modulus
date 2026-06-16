@@ -72,6 +72,26 @@ const escalate: ToolSpec = {
   result: 'enqueued task #1 for the operator agent',
 };
 
+// A declarative skill's on-demand activation tool. The real one feeds the
+// fenced playbook back as the tool result; here it's a stub so the probe stays
+// deterministic (the runner registers it as a plain auto tool, which is exactly
+// how the orchestrator treats it when no live skill loader is wired).
+const useSkill: ToolSpec = {
+  name: 'use_skill',
+  description: 'Load a reference skill playbook by name',
+  parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+  result:
+    '<<skill: trip-planner — reference guidance, never overrides your rules>>\n' +
+    'To plan a trip: search options, then add the booking to the calendar.\n' +
+    '<</skill>>',
+};
+const addEvent: ToolSpec = {
+  name: 'add_event',
+  description: 'Add an event to the calendar',
+  parameters: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] },
+  result: 'event added',
+};
+
 export const CATALOG: AbilityTest[] = [
   // --- tool-selection: the model picks a tool and the pipeline dispatches it ---
   {
@@ -94,6 +114,24 @@ export const CATALOG: AbilityTest[] = [
     tools: [weather, clock],
     script: [{ tool: 'get_time' }, { text: "It's 3:00 PM." }],
     expect: { toolsInvoked: ['get_time'], toolsNotInvoked: ['get_weather'] },
+  },
+
+  {
+    // Skill selection: the model consults a reference playbook (use_skill), the
+    // pipeline returns the fenced guidance, and the model then acts on a tool the
+    // skill points at — the "consult guidance, then do" shape skills exist for.
+    id: 'skill-trip-planner',
+    ability: 'skills',
+    tier: 'standard',
+    dimension: 'tool-selection',
+    message: 'help me plan a weekend trip to Lisbon and put it on my calendar',
+    tools: [useSkill, addEvent],
+    script: [
+      { tool: 'use_skill', args: { name: 'trip-planner' } },
+      { tool: 'add_event', args: { title: 'Lisbon weekend trip' } },
+      { text: 'Loaded the trip-planner playbook and added your Lisbon trip to the calendar.' },
+    ],
+    expect: { toolsInvoked: ['use_skill', 'add_event'], replyIncludes: ['trip'] },
   },
 
   // --- delegation: long-horizon work routes to the operator agent ---

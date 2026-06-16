@@ -44,9 +44,9 @@ function textToList(text) {
 }
 
 // ---------------------------------------------------------------------------
-// Active Workflows — a visual read of the task table. A "workflow" is a
-// top-level task (parentId == null); its pipeline is that task plus the
-// sub-agent tasks it delegated. Clicking a card shows that delegation tree.
+// Active runs — a visual read of the task table. A "run" is a top-level task
+// (parentId == null); its pipeline is that task plus the sub-agent tasks it
+// delegated. Clicking a card shows that delegation tree.
 // ---------------------------------------------------------------------------
 
 const WF_STATUS = {
@@ -85,11 +85,9 @@ function matchesRunFilter(status, filter) {
   return true;
 }
 
-// Build the unified Run feed: agent task-trees AND authored-workflow runs,
-// normalised into one card model so they live in a single list. An agent item
-// keeps {root, children} for its delegation diagram; a workflow item keeps
-// {run}. `kind` drives which actions/detail view a card offers.
-function buildFeed(tasks, wfRuns, wfNameById, filter) {
+// Build the Run feed: top-level agent tasks normalised into card models, each
+// keeping {root, children} for its delegation diagram.
+function buildFeed(tasks, filter) {
   const childrenByParent = new Map();
   for (const t of tasks) {
     if (t.parentId != null) {
@@ -121,7 +119,6 @@ function buildFeed(tasks, wfRuns, wfNameById, filter) {
         }
       }
       return {
-        kind: 'agent',
         key: `agent:${root.id}`,
         id: root.id,
         title: root.agentName || `Task #${root.id}`,
@@ -136,40 +133,10 @@ function buildFeed(tasks, wfRuns, wfNameById, filter) {
         children,
       };
     });
-  const workflowItems = (wfRuns || [])
-    .filter((r) => matchesRunFilter(r.status, filter))
-    .map((r) => {
-      const name = (wfNameById && wfNameById.get(r.workflowId)) || `Workflow #${r.workflowId}`;
-      const meta = wfStatusOf(r.status);
-      return {
-        kind: 'workflow',
-        key: `workflow:${r.id}`,
-        id: r.id,
-        title: name,
-        prompt: r.input || '',
-        status: r.status,
-        when: r.createdAt || 0,
-        meta,
-        percent: { queued: 5, running: 50, done: 100, error: 100, cancelled: 100 }[r.status] ?? 0,
-        stepLabel: meta.label,
-        tags: [{ tone: wfTagTone(r.workflowId), label: name }],
-        run: r,
-      };
-    });
-  return [...agentItems, ...workflowItems].sort((a, b) => b.when - a.when).slice(0, 12);
+  return agentItems.sort((a, b) => b.when - a.when).slice(0, 12);
 }
 
-function WorkflowCard({
-  item,
-  selected,
-  onSelect,
-  onOpen,
-  onCancel,
-  onPause,
-  onResume,
-  onViewOutput,
-}) {
-  const isAgent = item.kind === 'agent';
+function RunCard({ item, selected, onSelect, onOpen, onCancel, onPause, onResume, onViewOutput }) {
   const active = item.status === 'running' || item.status === 'queued';
   const paused = item.status === 'paused';
   return (
@@ -189,7 +156,7 @@ function WorkflowCard({
       <div className="card-header">
         <div className={`card-icon ${item.meta.tone}`}>
           <window.Icon
-            name={isAgent ? 'spark' : 'git-merge'}
+            name="spark"
             size={20}
             className={item.meta.spin ? 'spin' : undefined}
           />
@@ -198,7 +165,6 @@ function WorkflowCard({
           <h3 title={item.prompt}>{wfClip(item.title, 30)}</h3>
           <span className={`status-label ${item.meta.tone}`}>
             <span className={`dot ${item.meta.tone}`}></span>
-            {isAgent ? '' : 'Workflow · '}
             {item.meta.label}
           </span>
         </div>
@@ -236,17 +202,15 @@ function WorkflowCard({
         </button>
         {active ? (
           <>
-            {isAgent && (
-              <button
-                className="dash-btn sub"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (onPause) onPause(item);
-                }}
-              >
-                <window.Icon name="pause-circle" size={14} /> Pause
-              </button>
-            )}
+            <button
+              className="dash-btn sub"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onPause) onPause(item);
+              }}
+            >
+              <window.Icon name="pause-circle" size={14} /> Pause
+            </button>
             <button
               className="dash-btn sub"
               onClick={(e) => {
@@ -296,7 +260,7 @@ function WorkflowCard({
   );
 }
 
-function WorkflowDiagram({ wf }) {
+function RunDiagram({ wf }) {
   const nodes = [
     { icon: 'file-text', title: 'Input', desc: wfClip(wf.root.prompt, 36), state: 'source' },
     {
@@ -313,7 +277,7 @@ function WorkflowDiagram({ wf }) {
     })),
   ];
   return (
-    <div className="workflow-diagram" style={{ overflowX: 'auto' }}>
+    <div className="run-diagram" style={{ overflowX: 'auto' }}>
       {nodes.map((n, i) => {
         const arrowGreen = n.state === 'done' || n.state === 'active';
         return (
@@ -557,12 +521,10 @@ function ApprovalsPanel({ approvals, onResolve, busyId }) {
   );
 }
 
-// The mission-control layout: workflow cards + pipeline diagram + run log down
-// the left, a status/health/approvals/memory sidebar down the right.
+// The mission-control layout: run cards + pipeline diagram + run log down the
+// left, a status/health/approvals/memory sidebar down the right.
 function MissionControl({
   tasks,
-  wfRuns,
-  wfNameById,
   agents,
   state,
   approvals,
@@ -582,7 +544,7 @@ function MissionControl({
 }) {
   const [selectedKey, setSelectedKey] = useState(null);
   const [filter, setFilter] = useState('Active');
-  const items = buildFeed(tasks, wfRuns, wfNameById, filter);
+  const items = buildFeed(tasks, filter);
   const selected = items.find((it) => it.key === selectedKey) || items[0] || null;
   return (
     <div className="dash-bottom-grid" style={{ marginBottom: 26 }}>
@@ -656,8 +618,8 @@ function MissionControl({
         {items.length === 0 ? (
           <div className="dash-card">
             <div style={{ color: 'var(--text-3)', fontSize: 14, padding: '8px 2px' }}>
-              No {filter.toLowerCase()} runs. Launch a workflow or dispatch an agent above and it
-              shows up here — agent task-trees and authored-workflow runs alike.
+              No {filter.toLowerCase()} runs. Dispatch an agent above and its task-tree shows up
+              here.
             </div>
           </div>
         ) : (
@@ -669,7 +631,7 @@ function MissionControl({
             }}
           >
             {items.map((it) => (
-              <WorkflowCard
+              <RunCard
                 key={it.key}
                 item={it}
                 selected={selected && it.key === selected.key}
@@ -688,37 +650,18 @@ function MissionControl({
           <div className="dash-section" style={{ marginBottom: 0 }}>
             <div className="section-header">
               <h3>
-                <window.Icon name="git-merge" size={16} className="green-text" />{' '}
-                {selected.kind === 'agent' ? 'Agent run' : 'Workflow run'}: {selected.title}
+                <window.Icon name="git-merge" size={16} className="green-text" /> Agent run:{' '}
+                {selected.title}
               </h3>
               <span className={`status-label ${selected.meta.tone}`}>
                 <span className={`dot ${selected.meta.tone}`}></span> {selected.meta.label}
               </span>
             </div>
-            {selected.kind === 'agent' ? (
-              <WorkflowDiagram wf={selected} />
-            ) : (
-              <div
-                className="dash-card"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                }}
-              >
-                <span style={{ color: 'var(--text-3)', fontSize: 13.5 }}>
-                  Authored workflow run — open it to see each node’s status and output.
-                </span>
-                <button className="dash-btn" onClick={() => onOpenItem(selected)}>
-                  <window.Icon name="external-link" size={14} /> Open run
-                </button>
-              </div>
-            )}
+            <RunDiagram wf={selected} />
           </div>
         )}
 
-        <LiveRunLog tasks={tasks} onOpen={(id) => onOpenItem({ kind: 'agent', id })} />
+        <LiveRunLog tasks={tasks} onOpen={(id) => onOpenItem({ id })} />
       </div>
 
       <div className="dash-col-right">
@@ -734,7 +677,107 @@ function MissionControl({
   );
 }
 
-function AgentsFleet({ agents, onNew, onEdit, onDelete, onDispatch, onSchedule }) {
+// "Hire an agent" gallery — a modal of curated template cards. Hiring posts to
+// the templates route and refreshes the fleet; a name collision prompts for an
+// alternative (mirroring the server's 409). Templates create user-owned agents
+// the user can then edit or fire like any other.
+function HireGallery({ onClose, onChanged, onNotice }) {
+  const [templates, setTemplates] = useState(null); // null = loading
+  const [busyId, setBusyId] = useState(null);
+  const [err, setErr] = useState('');
+
+  const reload = useCallback(async () => {
+    const r = await window.api.get('/api/agents/templates');
+    if (r.ok) setTemplates(r.data.templates || []);
+    else setErr(r.error || 'Could not load templates');
+  }, []);
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const hire = async (t) => {
+    setErr('');
+    setBusyId(t.id);
+    let r = await window.api.post('/api/agents/templates/hire', { id: t.id });
+    if (!r.ok && r.status === 409) {
+      const alt = window.prompt(`You already have an agent named “${t.id}”. Name the new one:`);
+      if (!alt || !alt.trim()) {
+        setBusyId(null);
+        return;
+      }
+      r = await window.api.post('/api/agents/templates/hire', { id: t.id, name: alt.trim() });
+    }
+    setBusyId(null);
+    if (!r.ok) {
+      setErr(r.error || 'Hire failed');
+      return;
+    }
+    onNotice(`Hired ${r.data && r.data.agent ? r.data.agent.name : t.id}.`);
+    await reload(); // refresh the "already hired" flags
+    onChanged(); // refresh the fleet list behind the modal
+  };
+
+  return (
+    <window.Modal
+      open
+      onClose={onClose}
+      width={720}
+      title="Hire an agent"
+      footer={
+        <>
+          {err && <window.Badge tone="err">{err}</window.Badge>}
+          <window.Button variant="subtle" onClick={onClose}>
+            Done
+          </window.Button>
+        </>
+      }
+    >
+      {templates === null ? (
+        <div style={{ color: 'var(--text-3)' }}>Loading…</div>
+      ) : (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+            gap: 14,
+          }}
+        >
+          {templates.map((t) => (
+            <div key={t.id} className="dash-card">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <div style={{ fontSize: 22 }}>{t.icon}</div>
+                <div style={{ fontWeight: 'bold', fontSize: 15 }}>{t.title}</div>
+              </div>
+              <div
+                style={{ color: 'var(--text-2)', fontSize: 13, minHeight: 38, marginBottom: 10 }}
+              >
+                {t.description}
+              </div>
+              {t.missingModules && t.missingModules.length > 0 && (
+                <div style={{ color: 'var(--text-3)', fontSize: 12, marginBottom: 10 }}>
+                  Works best with {t.missingModules.join(', ')} (not installed).
+                </div>
+              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <window.Button
+                  variant="primary"
+                  icon="plus"
+                  disabled={busyId === t.id}
+                  onClick={() => hire(t)}
+                >
+                  {busyId === t.id ? 'Hiring…' : 'Hire'}
+                </window.Button>
+                {t.alreadyHired && <window.Badge tone="neutral">already hired</window.Badge>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </window.Modal>
+  );
+}
+
+function AgentsFleet({ agents, onNew, onHire, onEdit, onDelete, onDispatch, onSchedule }) {
   return (
     <div>
       <div
@@ -746,12 +789,20 @@ function AgentsFleet({ agents, onNew, onEdit, onDelete, onDispatch, onSchedule }
         }}
       >
         <h2>Agents</h2>
-        <window.Button variant="primary" icon="plus" onClick={onNew}>
-          New Agent
-        </window.Button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <window.Button variant="primary" icon="spark" onClick={onHire}>
+            Hire an agent
+          </window.Button>
+          <window.Button variant="subtle" icon="plus" onClick={onNew}>
+            New Agent
+          </window.Button>
+        </div>
       </div>
       {agents.length === 0 ? (
-        <div style={{ color: 'var(--text-3)' }}>No agents yet. Click New Agent to create one.</div>
+        <div style={{ color: 'var(--text-3)' }}>
+          No agents yet. Click <strong>Hire an agent</strong> for a ready-made one, or New Agent to
+          build your own.
+        </div>
       ) : (
         <div
           style={{
@@ -810,34 +861,31 @@ function AgentsFleet({ agents, onNew, onEdit, onDelete, onDispatch, onSchedule }
   );
 }
 
-// One bar to start work: dispatch a task to an agent, or run a saved workflow.
-// This is what makes "New Run" actually launch something.
-function LaunchComposer({ agents, workflows, onDispatchAgent, onRunWorkflow }) {
-  const [mode, setMode] = useState('agent');
+// One bar to start work: dispatch a task to an agent. This is what makes "New
+// Run" actually launch something.
+function LaunchComposer({ agents, onDispatchAgent, onDispatchAuto }) {
+  // '' = none chosen, 'auto' = let the server pick, otherwise an agent id.
   const [agentId, setAgentId] = useState('');
-  const [workflowId, setWorkflowId] = useState('');
   const [text, setText] = useState('');
   // 'inherit' = use the agent's saved think mode; otherwise override this run.
   const [think, setThink] = useState('inherit');
   // Files/images/PDFs for this launch. null = don't block visual drops up front;
   // the server gates images on the target's model and reports any it skips.
   const att = window.useAttachments(null);
-  // An agent needs a prompt; a workflow can launch on attachments alone.
-  const canLaunch =
-    mode === 'agent' ? !!agentId && (!!text.trim() || !!att.staged.length) : !!workflowId;
+  const isAuto = agentId === 'auto';
+  // Auto routes server-side and doesn't take attachments, so it only needs text.
+  const canLaunch = isAuto
+    ? !!text.trim()
+    : !!agentId && (!!text.trim() || !!att.staged.length);
   const launch = () => {
     if (!canLaunch || att.staging) return;
-    const stageToken = att.token;
-    if (mode === 'agent')
-      onDispatchAgent(
-        Number(agentId),
-        text.trim(),
-        think === 'inherit' ? undefined : think,
-        stageToken,
-      );
-    else onRunWorkflow(Number(workflowId), text.trim() || null, stageToken);
+    if (isAuto) {
+      onDispatchAuto(text.trim());
+    } else {
+      onDispatchAgent(Number(agentId), text.trim(), think === 'inherit' ? undefined : think, att.token);
+      att.clear();
+    }
     setText('');
-    att.clear();
   };
   return (
     <div className="dash-card" style={{ marginBottom: 20 }}>
@@ -852,49 +900,25 @@ function LaunchComposer({ agents, workflows, onDispatchAgent, onRunWorkflow }) {
       >
         <window.Icon name="play" size={18} className="green-text" />
         <h3 style={{ fontSize: 16, margin: 0 }}>Launch</h3>
-        <window.Segmented
-          size="sm"
-          value={mode}
-          onChange={setMode}
-          options={[
-            { value: 'agent', label: 'Agent' },
-            { value: 'workflow', label: 'Workflow' },
-          ]}
-        />
         <div style={{ flex: 1, minWidth: 180 }}>
-          {mode === 'agent' ? (
-            <window.Select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-              <option value="">— Select agent —</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </window.Select>
-          ) : (
-            <window.Select value={workflowId} onChange={(e) => setWorkflowId(e.target.value)}>
-              <option value="">— Select workflow —</option>
-              {workflows.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name}
-                </option>
-              ))}
-            </window.Select>
-          )}
+          <window.Select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+            <option value="">— Select agent —</option>
+            <option value="auto">✨ Auto — pick for me</option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </window.Select>
         </div>
-        {mode === 'agent' && (
-          <div
-            style={{ minWidth: 130 }}
-            title="Reasoning for this run (overrides the agent default)"
-          >
-            <window.Select value={think} onChange={(e) => setThink(e.target.value)}>
-              <option value="inherit">Think: default</option>
-              <option value="auto">Think: auto</option>
-              <option value="on">Think: on</option>
-              <option value="off">Think: off</option>
-            </window.Select>
-          </div>
-        )}
+        <div style={{ minWidth: 130 }} title="Reasoning for this run (overrides the agent default)">
+          <window.Select value={think} onChange={(e) => setThink(e.target.value)}>
+            <option value="inherit">Think: default</option>
+            <option value="auto">Think: auto</option>
+            <option value="on">Think: on</option>
+            <option value="off">Think: off</option>
+          </window.Select>
+        </div>
       </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
         <window.AttachButton onPick={att.addFiles} title="Attach files or a folder for this run" />
@@ -902,7 +926,7 @@ function LaunchComposer({ agents, workflows, onDispatchAgent, onRunWorkflow }) {
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={2}
-          placeholder={mode === 'agent' ? 'Task for the agent…' : 'Workflow input (optional)…'}
+          placeholder="Task for the agent…"
           style={{
             flex: 1,
             resize: 'vertical',
@@ -937,45 +961,38 @@ function AgentsTab({
   health,
   activeModel,
 }) {
-  const [view, setView] = useState('chats'); // chats | run | agents | workflows
+  const [view, setView] = useState('chats'); // chats | run | agents
   const [agents, setAgents] = useState([]);
   const [tasks, setTasks] = useState([]);
-  const [workflows, setWorkflows] = useState([]); // authored workflow definitions
-  const [wfRuns, setWfRuns] = useState([]); // authored workflow runs
   const [schedules, setSchedules] = useState([]);
+  const [standing, setStanding] = useState([]);
+  const [standingOpen, setStandingOpen] = useState(false);
   const [editing, setEditing] = useState(null); // agent object or EMPTY_AGENT when creating
+  const [hiring, setHiring] = useState(false); // "Hire an agent" template gallery open
   const [dispatchFor, setDispatchFor] = useState(null); // agent to dispatch to
   const [scheduleFor, setScheduleFor] = useState(null); // agent preselected for scheduling; null = choose in modal
   const [openTask, setOpenTask] = useState(null); // agent task id whose detail is open
-  const [openWfRun, setOpenWfRun] = useState(null); // workflow run id whose detail is open
   const [viewOutputFor, setViewOutputFor] = useState(null); // task object
   const [pauseTarget, setPauseTarget] = useState(null); // { task, isBulk }
   const [approvals, setApprovals] = useState({ pending: [], recent: [] });
   const [approvalBusyId, setApprovalBusyId] = useState(null); // approval id mid-resolve
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState(''); // transient success line (e.g. "Sent to researcher")
 
   const load = useCallback(async () => {
-    const [a, t, w, wr, s, p] = await Promise.all([
+    const [a, t, s, p, o] = await Promise.all([
       window.api.get('/api/agents'),
       window.api.get('/api/agents/tasks'),
-      window.api.get('/api/workflows'),
-      window.api.get('/api/workflows/runs?limit=50'),
       window.api.get('/api/agents/schedules'),
       window.api.get('/api/agents/approvals'),
+      window.api.get('/api/agents/standing'),
     ]);
     if (a.ok) setAgents(a.data.agents || []);
     if (t.ok) setTasks(t.data.tasks || []);
-    if (w.ok) setWorkflows(w.data.workflows || []);
-    if (wr.ok) setWfRuns(wr.data.runs || []);
     if (s.ok) setSchedules(s.data.schedules || []);
     if (p.ok) setApprovals({ pending: p.data.pending || [], recent: p.data.recent || [] });
+    if (o.ok) setStanding(o.data.orders || []);
   }, []);
-
-  const wfNameById = useMemo(() => {
-    const m = new Map();
-    for (const w of workflows) m.set(w.id, w.name);
-    return m;
-  }, [workflows]);
 
   const resolveApproval = async (id, approved) => {
     setApprovalBusyId(id);
@@ -1032,7 +1049,7 @@ function AgentsTab({
     load();
   };
 
-  // Launch composer: dispatch by id / run a saved workflow by id.
+  // Launch composer: dispatch to an agent by id.
   const dispatchById = async (agentId, prompt, thinkMode, stageToken) => {
     setError('');
     const r = await window.api.post(`/api/agents/${agentId}/dispatch`, {
@@ -1046,13 +1063,21 @@ function AgentsTab({
     }
     load();
   };
-  const runWorkflowById = async (workflowId, input, stageToken) => {
+
+  // Launch composer "Auto": let the server pick the best-fitting agent.
+  const dispatchAuto = async (prompt) => {
     setError('');
-    const r = await window.api.post(`/api/workflows/${workflowId}/run`, {
-      input,
-      ...(stageToken ? { stageToken } : {}),
-    });
-    if (!r.ok) setError(r.error || 'Run failed');
+    setNotice('');
+    const r = await window.api.post('/api/agents/dispatch-auto', { prompt });
+    if (!r.ok) {
+      setError(r.error || 'Dispatch failed');
+      return;
+    }
+    if (!r.data || !r.data.agent) {
+      setError("No agent fits that task — pick one, or hire a specialist.");
+      return;
+    }
+    setNotice(`Sent to ${r.data.agent.name}.`);
     load();
   };
 
@@ -1062,17 +1087,10 @@ function AgentsTab({
     load();
   };
 
-  const cancelWfRun = async (id) => {
-    await window.api.post(`/api/workflows/runs/${id}/cancel`);
-    load();
-  };
-
-  // Kind-aware handlers for the merged Run feed (item = normalized feed entry).
-  const openItem = (item) => (item.kind === 'agent' ? setOpenTask(item.id) : setOpenWfRun(item.id));
-  const cancelItem = (item) =>
-    item.kind === 'agent' ? cancelTask(item.root) : cancelWfRun(item.id);
-  const viewOutputItem = (item) =>
-    item.kind === 'agent' ? setViewOutputFor(item.root) : setOpenWfRun(item.id);
+  // Handlers for the Run feed (item = normalized feed entry).
+  const openItem = (item) => setOpenTask(item.id);
+  const cancelItem = (item) => cancelTask(item.root);
+  const viewOutputItem = (item) => setViewOutputFor(item.root);
 
   const requestPauseTask = (task) => setPauseTarget({ task, isBulk: false });
   const requestPauseAll = () => setPauseTarget({ task: null, isBulk: true });
@@ -1102,11 +1120,6 @@ function AgentsTab({
   const cancelAll = async () => {
     if (!window.confirm('Are you sure you want to stop all active runs?')) return;
     await window.api.post('/api/agents/tasks/cancel_all');
-    await Promise.all(
-      wfRuns
-        .filter((r) => r.status === 'queued' || r.status === 'running')
-        .map((r) => window.api.post(`/api/workflows/runs/${r.id}/cancel`)),
-    );
     load();
   };
 
@@ -1123,6 +1136,22 @@ function AgentsTab({
 
   const removeSchedule = async (schedule) => {
     await fetchDelete(`/api/agents/schedules/${schedule.id}`);
+    load();
+  };
+
+  const createStanding = async (draft) => {
+    setError('');
+    const r = await window.api.post('/api/agents/standing', draft);
+    if (!r.ok) {
+      setError((r.data && r.data.error) || r.error || 'Could not create standing order');
+      return;
+    }
+    setStandingOpen(false);
+    load();
+  };
+
+  const removeStanding = async (order) => {
+    await fetchDelete(`/api/agents/standing/${order.id}`);
     load();
   };
 
@@ -1144,7 +1173,6 @@ function AgentsTab({
             { value: 'chats', label: 'Chats' },
             { value: 'run', label: 'Run' },
             { value: 'agents', label: 'Agents' },
-            { value: 'workflows', label: 'Workflows' },
           ]}
         />
       </div>
@@ -1152,6 +1180,11 @@ function AgentsTab({
       {error && (
         <div style={{ marginBottom: 14 }}>
           <window.Badge tone="err">{error}</window.Badge>
+        </div>
+      )}
+      {notice && (
+        <div style={{ marginBottom: 14 }}>
+          <window.Badge tone="ok">{notice}</window.Badge>
         </div>
       )}
 
@@ -1176,17 +1209,10 @@ function AgentsTab({
 
       {view === 'run' && (
         <>
-          <LaunchComposer
-            agents={agents}
-            workflows={workflows}
-            onDispatchAgent={dispatchById}
-            onRunWorkflow={runWorkflowById}
-          />
+          <LaunchComposer agents={agents} onDispatchAgent={dispatchById} onDispatchAuto={dispatchAuto} />
 
           <MissionControl
             tasks={tasks}
-            wfRuns={wfRuns}
-            wfNameById={wfNameById}
             agents={agents}
             state={state}
             approvals={approvals}
@@ -1216,6 +1242,18 @@ function AgentsTab({
             Schedules
           </window.SectionTitle>
           <ScheduleList schedules={schedules} onDelete={removeSchedule} />
+
+          <window.SectionTitle
+            sub="Conditional watches the heartbeat evaluates on its own."
+            right={
+              <window.Button variant="primary" icon="plus" onClick={() => setStandingOpen(true)}>
+                Add Standing Order
+              </window.Button>
+            }
+          >
+            Standing Orders
+          </window.SectionTitle>
+          <StandingList orders={standing} onDelete={removeStanding} />
         </>
       )}
 
@@ -1223,6 +1261,7 @@ function AgentsTab({
         <AgentsFleet
           agents={agents}
           onNew={() => setEditing({ ...EMPTY_AGENT })}
+          onHire={() => setHiring(true)}
           onEdit={(a) => setEditing(a)}
           onDelete={removeAgent}
           onDispatch={(a) => setDispatchFor(a)}
@@ -1230,7 +1269,16 @@ function AgentsTab({
         />
       )}
 
-      {view === 'workflows' && <window.WorkflowBuilder state={state} />}
+      {hiring && (
+        <HireGallery
+          onClose={() => setHiring(false)}
+          onChanged={load}
+          onNotice={(m) => {
+            setNotice(m);
+            setError('');
+          }}
+        />
+      )}
 
       {editing && (
         <AgentEditor
@@ -1256,6 +1304,13 @@ function AgentsTab({
           onSchedule={createSchedule}
         />
       )}
+      {standingOpen && (
+        <StandingModal
+          agents={agents}
+          onClose={() => setStandingOpen(false)}
+          onCreate={createStanding}
+        />
+      )}
       {pauseTarget && (
         <PauseModal
           task={pauseTarget.task}
@@ -1273,9 +1328,6 @@ function AgentsTab({
             load();
           }}
         />
-      )}
-      {openWfRun != null && (
-        <WorkflowRunDetail runId={openWfRun} onClose={() => setOpenWfRun(null)} />
       )}
       {viewOutputFor && <OutputModal task={viewOutputFor} onClose={() => setViewOutputFor(null)} />}
     </div>
@@ -1534,7 +1586,7 @@ function PauseModal({ task, isBulk, onClose, onConfirm }) {
     <window.Modal
       open
       onClose={onClose}
-      title={isBulk ? 'Pause All Workflows' : `Pause Workflow ${task ? `#${task.id}` : ''}`}
+      title={isBulk ? 'Pause All Runs' : `Pause Run ${task ? `#${task.id}` : ''}`}
       footer={
         <>
           <window.Button variant="subtle" onClick={onClose}>
@@ -1576,7 +1628,7 @@ function PauseModal({ task, isBulk, onClose, onConfirm }) {
       {mode === 'until' && (
         <Field
           label="Resume At"
-          hint="The system will automatically resume the workflow at this time."
+          hint="The system will automatically resume the run at this time."
         >
           <input
             type="datetime-local"
@@ -1633,7 +1685,7 @@ function ScheduleList({ schedules, onDelete }) {
           }}
         >
           <window.Badge tone={s.active ? 'accent' : 'neutral'}>
-            {s.active ? s.recurrence : 'done'}
+            {!s.active ? 'done' : s.cron ? 'repeats' : s.recurrence}
           </window.Badge>
           <span style={{ fontWeight: 600, fontSize: 13, minWidth: 130 }}>
             {(s.agentNames || []).join(', ')}
@@ -1652,7 +1704,7 @@ function ScheduleList({ schedules, onDelete }) {
             {s.prompt}
           </span>
           <span style={{ fontSize: 11.5, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-            {new Date(s.nextRunAt).toLocaleString()}
+            {s.cron ? s.cron : new Date(s.nextRunAt).toLocaleString()}
           </span>
           <window.Button size="sm" variant="subtle" icon="trash" onClick={() => onDelete(s)} />
         </div>
@@ -1666,10 +1718,56 @@ function ScheduleModal({ agents, initialAgent, onClose, onSchedule }) {
   const [prompt, setPrompt] = useState('');
   const [when, setWhen] = useState(() => localDateTimeValue(Date.now() + 60 * 60_000));
   const [recurrence, setRecurrence] = useState('once');
+  // Natural-language scheduling. When a phrase resolves to a repeating cron we
+  // keep it here and submit cron+timeZone instead of nextRunAt+recurrence; a
+  // one-time phrase just fills the date/time field below.
+  const [nlText, setNlText] = useState('');
+  const [nlCron, setNlCron] = useState(null);
+  const [nlTimeZone, setNlTimeZone] = useState(null);
+  const [nlHuman, setNlHuman] = useState('');
+  const [nlError, setNlError] = useState('');
+  const [parsing, setParsing] = useState(false);
   const toggleAgent = (id) =>
     setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
   const nextRunAt = parseLocalDateTime(when);
   const invalidTime = nextRunAt === null || nextRunAt <= Date.now();
+  // A resolved cron makes the structured time fields advisory, so they no
+  // longer gate the submit button.
+  const blockSubmit = selected.length === 0 || !prompt.trim() || (!nlCron && invalidTime);
+
+  const parseNl = async () => {
+    const text = nlText.trim();
+    if (!text) return;
+    setParsing(true);
+    setNlError('');
+    const r = await window.api.post('/api/agents/schedules/parse', { text });
+    setParsing(false);
+    const d = (r && r.data) || {};
+    if (!r.ok || d.error) {
+      setNlCron(null);
+      setNlHuman('');
+      setNlError(d.error || (r && r.error) || 'Could not read a time from that.');
+      return;
+    }
+    if (d.cron) {
+      setNlCron(d.cron);
+      setNlTimeZone(d.timeZone || null);
+      setNlHuman(d.human || `repeats (${d.cron})`);
+    } else if (d.nextRunAt) {
+      setNlCron(null);
+      setNlTimeZone(null);
+      setWhen(localDateTimeValue(d.nextRunAt));
+      setRecurrence('once');
+      setNlHuman(d.human || '');
+    }
+  };
+
+  const submit = () => {
+    const base = { agentIds: selected, prompt: prompt.trim() };
+    onSchedule(
+      nlCron ? { ...base, cron: nlCron, timeZone: nlTimeZone } : { ...base, nextRunAt, recurrence },
+    );
+  };
   return (
     <window.Modal
       open
@@ -1681,25 +1779,44 @@ function ScheduleModal({ agents, initialAgent, onClose, onSchedule }) {
           <window.Button variant="subtle" onClick={onClose}>
             Cancel
           </window.Button>
-          <window.Button
-            variant="primary"
-            icon="send"
-            disabled={selected.length === 0 || !prompt.trim() || invalidTime}
-            onClick={() =>
-              onSchedule({
-                agentIds: selected,
-                prompt: prompt.trim(),
-                nextRunAt,
-                recurrence,
-              })
-            }
-          >
+          <window.Button variant="primary" icon="send" disabled={blockSubmit} onClick={submit}>
             Schedule
           </window.Button>
         </>
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Field label="Plain English (optional)">
+          <div style={{ display: 'flex', gap: 8 }}>
+            <window.Input
+              value={nlText}
+              placeholder='e.g. "every weekday at 8am" or "in 2 hours"'
+              onChange={(e) => {
+                setNlText(e.target.value);
+                setNlError('');
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  parseNl();
+                }
+              }}
+              style={{ flex: 1 }}
+            />
+            <window.Button variant="subtle" onClick={parseNl} disabled={parsing || !nlText.trim()}>
+              {parsing ? 'Reading…' : 'Read time'}
+            </window.Button>
+          </div>
+          {nlError && (
+            <div style={{ color: 'var(--err)', fontSize: 12.5, marginTop: 6 }}>{nlError}</div>
+          )}
+          {nlHuman && !nlError && (
+            <div style={{ color: 'var(--ok)', fontSize: 12.5, marginTop: 6 }}>
+              {nlCron ? 'Repeats: ' : 'Runs: '}
+              {nlHuman}
+            </div>
+          )}
+        </Field>
         <Field label="Agents">
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {agents.map((a) => (
@@ -1748,11 +1865,16 @@ function ScheduleModal({ agents, initialAgent, onClose, onSchedule }) {
               type="datetime-local"
               value={when}
               min={localDateTimeValue(Date.now() + 60_000)}
+              disabled={!!nlCron}
               onChange={(e) => setWhen(e.target.value)}
             />
           </Field>
           <Field label="Repeat">
-            <window.Select value={recurrence} onChange={(e) => setRecurrence(e.target.value)}>
+            <window.Select
+              value={recurrence}
+              disabled={!!nlCron}
+              onChange={(e) => setRecurrence(e.target.value)}
+            >
               <option value="once">once (specific date)</option>
               <option value="daily">daily</option>
               <option value="weekly">weekly</option>
@@ -1761,6 +1883,147 @@ function ScheduleModal({ agents, initialAgent, onClose, onSchedule }) {
             </window.Select>
           </Field>
         </Row>
+        {nlCron && (
+          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+            Using the repeating schedule from the phrase above; the date/time fields are ignored.
+          </div>
+        )}
+      </div>
+    </window.Modal>
+  );
+}
+
+function StandingList({ orders, onDelete }) {
+  if (orders.length === 0) {
+    return (
+      <window.Card>
+        <div style={{ color: 'var(--text-3)', fontSize: 14 }}>No standing orders yet.</div>
+      </window.Card>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 26 }}>
+      {orders.map((o) => (
+        <div
+          key={o.id}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '10px 14px',
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-sm)',
+          }}
+        >
+          <window.Badge tone={o.active ? 'accent' : 'neutral'}>
+            {o.active ? (o.agentName ? 'agent' : 'notify') : 'off'}
+          </window.Badge>
+          <span style={{ fontWeight: 600, fontSize: 13, minWidth: 110 }}>
+            {o.agentName || 'notify-only'}
+          </span>
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: 13,
+              color: 'var(--text-2)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {o.instruction}
+          </span>
+          <span style={{ fontSize: 11.5, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+            {o.cron || 'each beat'}
+          </span>
+          <window.Button size="sm" variant="subtle" icon="trash" onClick={() => onDelete(o)} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StandingModal({ agents, onClose, onCreate }) {
+  const [agentId, setAgentId] = useState(() => (agents[0] ? String(agents[0].id) : ''));
+  const [instruction, setInstruction] = useState('');
+  const [cron, setCron] = useState('');
+  const noAgents = agents.length === 0;
+  return (
+    <window.Modal
+      open
+      onClose={onClose}
+      width={560}
+      title="New standing order"
+      footer={
+        <>
+          <window.Button variant="subtle" onClick={onClose}>
+            Cancel
+          </window.Button>
+          <window.Button
+            variant="primary"
+            icon="send"
+            disabled={noAgents || !agentId || !instruction.trim()}
+            onClick={() =>
+              onCreate({
+                instruction: instruction.trim(),
+                agentId: Number(agentId),
+                cron: cron.trim() || null,
+              })
+            }
+          >
+            Create
+          </window.Button>
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
+          The heartbeat runs this on its own and reports the result in the task view. Leave the
+          schedule blank to evaluate every beat, or pin it with a cron.
+        </div>
+        <Field label="Agent">
+          {noAgents ? (
+            <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
+              Create an agent first — standing orders run an agent.
+            </div>
+          ) : (
+            <window.Select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </window.Select>
+          )}
+        </Field>
+        <Field label="Instruction">
+          <textarea
+            autoFocus
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            rows={4}
+            placeholder="e.g. Check my calendar for tomorrow and flag anything outdoors at weather risk"
+            style={{
+              width: '100%',
+              resize: 'vertical',
+              padding: '10px 12px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border)',
+              background: 'var(--surface-2)',
+              color: 'var(--text)',
+              font: 'inherit',
+            }}
+          />
+        </Field>
+        <Field label="Schedule (cron, optional)">
+          <window.Input
+            value={cron}
+            placeholder="blank = every beat · e.g. 0 8 * * 1-5"
+            onChange={(e) => setCron(e.target.value)}
+          />
+        </Field>
       </div>
     </window.Modal>
   );
@@ -1775,6 +2038,21 @@ function AgentEditor({ initial, agents, onClose, onSave, error }) {
   const set = (k, v) => setD((s) => ({ ...s, [k]: v }));
   const allowlistText = d.toolAllowlist === null ? '' : listToText(d.toolAllowlist);
   const otherAgents = agents.filter((a) => a.id !== d.id).map((a) => a.name);
+  // Simple speaks the plain vocabulary (mirrors src/core/agent-knobs.ts — the
+  // single source of truth for these words); Advanced is the full knob set.
+  // Default to Simple, the everyday path. Mapping is pure UI: the saved body
+  // shape is unchanged, so the server's normalizeAgentInput needs no edits.
+  const [editView, setEditView] = useState('simple');
+  const taStyle = {
+    width: '100%',
+    resize: 'vertical',
+    padding: '10px 12px',
+    borderRadius: 'var(--radius-sm)',
+    border: '1px solid var(--border)',
+    background: 'var(--surface-2)',
+    color: 'var(--text)',
+    font: 'inherit',
+  };
 
   return (
     <window.Modal
@@ -1800,6 +2078,84 @@ function AgentEditor({ initial, agents, onClose, onSave, error }) {
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <window.Segmented
+          size="sm"
+          value={editView}
+          onChange={setEditView}
+          options={[
+            { value: 'simple', label: 'Simple' },
+            { value: 'advanced', label: 'Advanced' },
+          ]}
+        />
+
+        {editView === 'simple' && (
+          <>
+            <Field label="Name">
+              <window.Input
+                value={d.name}
+                onChange={(e) => set('name', e.target.value)}
+                placeholder="researcher"
+              />
+            </Field>
+            <Field
+              label="What should it do?"
+              hint="Plain instructions — this becomes the agent's system prompt."
+            >
+              <textarea
+                value={d.systemPrompt}
+                onChange={(e) => set('systemPrompt', e.target.value)}
+                rows={4}
+                placeholder="e.g. Look things up on the web and report the facts, with a source."
+                style={taStyle}
+              />
+            </Field>
+            <Field
+              label="Brainpower"
+              hint="Quick = fast tiny model · Deep = heavy model that reasons more."
+            >
+              <window.Segmented
+                size="sm"
+                value={d.profile === 'reason' ? 'deep' : d.profile === 'tools' ? 'balanced' : 'quick'}
+                onChange={(v) =>
+                  set('profile', v === 'deep' ? 'reason' : v === 'balanced' ? 'tools' : 'chat')
+                }
+                options={[
+                  { value: 'quick', label: 'Quick' },
+                  { value: 'balanced', label: 'Balanced' },
+                  { value: 'deep', label: 'Deep' },
+                ]}
+              />
+            </Field>
+            <Field
+              label="Think before answering"
+              hint="On = reasons first (slower). Auto = the model's default."
+            >
+              <window.Segmented
+                size="sm"
+                value={d.thinkMode || 'auto'}
+                onChange={(v) => set('thinkMode', v)}
+                options={[
+                  { value: 'auto', label: 'Auto' },
+                  { value: 'on', label: 'On' },
+                  { value: 'off', label: 'Off' },
+                ]}
+              />
+            </Field>
+            <Field
+              label="Works on its own?"
+              hint="On = plans and works a multi-step goal across many turns."
+            >
+              <window.Toggle
+                checked={d.mode === 'autonomous'}
+                onChange={(v) => set('mode', v ? 'autonomous' : 'single')}
+                label="Autonomous"
+              />
+            </Field>
+          </>
+        )}
+
+        {editView === 'advanced' && (
+          <>
         <Row>
           <Field label="Name">
             <window.Input
@@ -1967,6 +2323,8 @@ function AgentEditor({ initial, agents, onClose, onSave, error }) {
               onChange={(e) => set('delegatableAgents', textToList(e.target.value))}
             />
           </Field>
+        )}
+          </>
         )}
       </div>
     </window.Modal>
@@ -2452,108 +2810,4 @@ function OutputModal({ task, onClose }) {
   );
 }
 
-function WorkflowRunDetail({ runId, onClose }) {
-  const [detail, setDetail] = useState(null);
-  const load = useCallback(async () => {
-    const r = await window.api.get(`/api/workflows/runs/${runId}`);
-    if (r.ok) setDetail(r.data);
-  }, [runId]);
-  useEffect(() => {
-    load();
-    const id = setInterval(load, 2500);
-    return () => clearInterval(id);
-  }, [load]);
-
-  const run = detail && detail.run;
-  const steps = detail && detail.steps;
-
-  return (
-    <window.Modal
-      open
-      onClose={onClose}
-      width={640}
-      title={`Workflow run #${runId}`}
-      footer={
-        <window.Button variant="primary" onClick={onClose}>
-          Close
-        </window.Button>
-      }
-    >
-      {!detail ? (
-        <div style={{ color: 'var(--text-3)' }}>Loading…</div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <window.Badge tone={STATUS_TONE[run.status] || 'neutral'}>{run.status}</window.Badge>
-          </div>
-          {run.input && (
-            <div>
-              <window.Label>Input</window.Label>
-              <div style={{ fontSize: 13.5, color: 'var(--text-2)', whiteSpace: 'pre-wrap' }}>
-                {run.input}
-              </div>
-            </div>
-          )}
-          {steps && steps.length > 0 && (
-            <div>
-              <window.Label>Steps</window.Label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {steps.map((step) => (
-                  <div
-                    key={step.id}
-                    style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}
-                  >
-                    <window.Badge tone={STATUS_TONE[step.status] || 'neutral'}>
-                      {step.status}
-                    </window.Badge>
-                    <span style={{ fontWeight: 600, color: 'var(--text)' }}>{step.nodeType}</span>
-                    {step.error ? (
-                      <span style={{ color: 'var(--err)', marginLeft: 8 }}>{step.error}</span>
-                    ) : step.output ? (
-                      <span
-                        style={{
-                          color: 'var(--text-2)',
-                          marginLeft: 8,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {wfClip(step.output, 80)}
-                      </span>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {(run.output || run.error) && (
-            <div>
-              <window.Label>Result</window.Label>
-              {run.error ? (
-                <div style={{ fontSize: 13, color: 'var(--err)' }}>{run.error}</div>
-              ) : (
-                <div
-                  style={{
-                    fontSize: 13,
-                    fontFamily: 'var(--font-mono)',
-                    whiteSpace: 'pre-wrap',
-                    color: 'var(--text-2)',
-                    background: 'var(--surface-2)',
-                    padding: '8px 10px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  {run.output}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-    </window.Modal>
-  );
-}
-
-Object.assign(window, { AgentsTab, AgentsFleet, WorkflowRunDetail });
+Object.assign(window, { AgentsTab, AgentsFleet });

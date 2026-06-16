@@ -16,6 +16,7 @@ import type { ToolContext, ToolHandler } from '../../core/tools.js';
 import { readJson, sendJson, sse as sseWrite, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
 import type { PanelDeps } from '../types.js';
+import { createConfirmRegistry } from './confirm-registry.js';
 
 // Matches the Telegram adapter's confirm timeout: an unanswered prompt fails
 // closed after this long.
@@ -43,9 +44,10 @@ function ownerChat(db: DB, cfg: ModulusConfig): { chatId: number; userId: number
 }
 
 export function createChatRoutes(deps: PanelDeps): RouteModule {
-  // Confirm prompts parked for this server, keyed by id; resolved by
-  // POST /api/chat/confirm or failed closed on timeout/abort/disconnect.
-  const pendingConfirms = new Map<string, (ok: boolean) => void>();
+  // Confirm prompts parked across every live stream. POST /api/chat/confirm
+  // resolves by id (registry-global); each stream below takes its own scope so
+  // finishing one stream only fails-closed its own confirms, not another tab's.
+  const confirms = createConfirmRegistry();
 
   async function streamChat(
     req: Parameters<RouteModule>[0]['req'],
@@ -69,6 +71,9 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
     const sse = (event: string, data: unknown): void => sseWrite(res, event, data);
 
     const controller = new AbortController();
+    // This stream's own confirm scope. Cleanup below fails-closed only its
+    // prompts — a sibling tab on the same chat keeps its own pending confirms.
+    const confirmScope = confirms.scope();
 
     // Browser confirm renderer for this turn (A). Registered on the shared bus
     // so the daemon's confirm router routes this chatId's confirms here.
@@ -91,7 +96,7 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
         const finish = (ok: boolean): void => {
           if (settled) return;
           settled = true;
-          pendingConfirms.delete(id);
+          confirmScope.remove(id);
           clearTimeout(timer);
           ctx.signal?.removeEventListener('abort', onAbort);
           resolve(ok);
@@ -100,7 +105,7 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
         const timer = setTimeout(() => finish(false), CONFIRM_TIMEOUT_MS);
         timer.unref?.();
         ctx.signal?.addEventListener('abort', onAbort, { once: true });
-        pendingConfirms.set(id, finish);
+        confirmScope.add(id, finish);
       });
     };
     deps.confirmBus.register(chatId, confirmFn);
@@ -109,8 +114,9 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
       controller.abort();
       deps.orchestrator.stop(chatId);
       // Fail closed: a disconnect mid-confirm must never leave a confirm-tier
-      // tool waiting (and thus eligible to run) on a dead stream.
-      for (const finish of [...pendingConfirms.values()]) finish(false);
+      // tool waiting (and thus eligible to run) on a dead stream. Scoped to
+      // THIS stream — a sibling tab's pending confirms stay alive.
+      confirmScope.failAll();
     });
 
     let full = '';
@@ -198,7 +204,7 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
       sse('error', { message: e instanceof Error ? e.message : String(e) });
     } finally {
       deps.confirmBus.unregister(chatId, confirmFn);
-      for (const finish of [...pendingConfirms.values()]) finish(false);
+      confirmScope.failAll();
       res.end();
     }
   }
@@ -211,7 +217,7 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
 
     if (path === '/api/chat/confirm' && method === 'POST') {
       const { id, ok } = await readJson<{ id?: string; ok?: boolean }>(req);
-      const finish = id ? pendingConfirms.get(id) : undefined;
+      const finish = id ? confirms.get(id) : undefined;
       if (!finish) {
         sendJson(res, 409, { ok: false, error: 'no confirmation is waiting' });
         return true;

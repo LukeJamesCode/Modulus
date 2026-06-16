@@ -27,6 +27,10 @@ export const IGNORED_WATCH_DIRS = new Set(['node_modules', 'uploads', '.git']);
 export interface ModuleWatcherDeps {
   log: Logger;
   roots: readonly string[];
+  // The discovery filename whose presence makes a folder a loadable unit:
+  // 'manifest.json' for modules, 'skill.json' for skills. Defaults to
+  // manifest.json so the module loader needs no change.
+  manifestFile?: string;
   // Read the loader's shutdown flag so a watcher callback that fires during
   // teardown becomes a no-op.
   isShuttingDown: () => boolean;
@@ -67,6 +71,7 @@ export interface ModuleWatcher {
 
 export function createModuleWatcher(deps: ModuleWatcherDeps): ModuleWatcher {
   const { log } = deps;
+  const manifestFile = deps.manifestFile ?? 'manifest.json';
   const watchers: Array<() => void> = [];
   const moduleWatchers = new Map<string, () => void>();
   const reloadTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -83,7 +88,7 @@ export function createModuleWatcher(deps: ModuleWatcherDeps): ModuleWatcher {
       reloadTimers.delete(name);
       const reloadTask = (async () => {
         if (deps.isShuttingDown()) return;
-        if (!existsSync(folder) || !existsSync(join(folder, 'manifest.json'))) {
+        if (!existsSync(folder) || !existsSync(join(folder, manifestFile))) {
           await deps.unloadModule(name);
           return;
         }
@@ -286,7 +291,7 @@ export function createModuleWatcher(deps: ModuleWatcherDeps): ModuleWatcher {
               }
               return;
             }
-            if (!existsSync(join(folder, 'manifest.json'))) return;
+            if (!existsSync(join(folder, manifestFile))) return;
             // Already-loaded folder: content changes are the per-module
             // watcher's job. The root watcher reacting here too would fire on
             // the folder's own mtime bump when a subdir like node_modules is

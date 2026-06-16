@@ -76,6 +76,37 @@ test('chat() streams ndjson chunks and records prompt/completion tokens', async 
   llm.stopIdleEviction();
 });
 
+test('updateModels() re-points an existing profile so the next turn uses the new tag', async () => {
+  const chatModels: string[] = [];
+  const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { model?: string };
+    if (String(url).endsWith('/api/chat')) chatModels.push(body.model!);
+    return streamingResponse([
+      JSON.stringify({ model: body.model, message: { content: 'ok' }, done: true }),
+    ]);
+  };
+  const llm = createOllama({
+    baseUrl: 'http://x',
+    log: silentLogger(),
+    fetchImpl: fetchImpl as unknown as typeof fetch,
+    profiles: { chat: { model: 'old:1b', contextTokens: 4096, heavy: false } },
+  });
+
+  await collect(llm.chat({ profile: 'chat', messages: [{ role: 'user', content: 'hi' }] }));
+  assert.equal(llm.resolveModel('chat'), 'old:1b');
+
+  llm.updateModels!({ chat: 'new:7b' });
+  assert.equal(llm.resolveModel('chat'), 'new:7b');
+
+  await collect(llm.chat({ profile: 'chat', messages: [{ role: 'user', content: 'hi' }] }));
+  assert.deepEqual(chatModels, ['old:1b', 'new:7b']);
+
+  // A slot the host never configured is left absent — adding one needs a restart.
+  llm.updateModels!({ chat: 'new:7b', tools: 'tools:7b' });
+  assert.equal(llm.listProfiles().tools, null);
+  llm.stopIdleEviction();
+});
+
 test('chat() forwards message images to Ollama for a multimodal turn', async () => {
   const calls: Array<{ url: string; body: { messages?: Array<{ images?: string[] }> } }> = [];
   const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
@@ -454,7 +485,7 @@ test('releaseHeavy() unloads the resident heavy model immediately', async () => 
 });
 
 test('releaseHeavy() skips the unload while a heavy call is in flight', async () => {
-  // The cross-component safety guard: a workflow finishing must not unload the
+  // The cross-component safety guard: one task finishing must not unload the
   // model an agent-queue task is mid-using (agent tasks bypass the queue's heavy
   // governor, so the two can overlap on the single Ollama heavy slot). WHY a
   // test: without the in-flight guard the unload would yank the model out from

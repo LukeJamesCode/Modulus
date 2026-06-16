@@ -50,6 +50,37 @@ entry in a curated index is a publishing bug, not a module to silently drop.
 `tarball` must be `https://`. `permissions` is what the user consents to; keep it
 honest and minimal — it's exactly what the panel and CLI display before granting.
 
+### Skill entries (`"kind": "skill"`)
+
+A declarative skill rides the same index. Its entry sets `"kind": "skill"` and,
+instead of `permissions`, carries a `tools` array — the allowlist the consent
+screen resolves to per-tool tiers *before* downloading (the skill analog of a
+module's `permissions`). An entry with no `kind` is a module, so every existing
+entry stays valid. See [skills.md](skills.md) for the bundle contract.
+
+```jsonc
+{
+  "name": "trip-planner", //  must equal skill.json `name`
+  "kind": "skill", //  required for a skill
+  "version": "1.0.0",
+  "displayName": "Trip Planner",
+  "description": "Plan a multi-stop trip and put it on your calendar.",
+  "tarball": "https://github.com/<owner>/modulus-registry/releases/download/trip-planner-1.0.0/trip-planner-1.0.0.tgz",
+  "sha256": "a1b2…64 hex chars…",
+  "tools": ["web_search", "calendar_add_event"], //  consented tools (mirrors skill.json `tools`)
+}
+```
+
+At stage time the installer runs the **code-free gate** over the whole tarball
+(no `.js`/`.ts`/`.sh`/`.py`/`.wasm` or any non-data file, no `node_modules/`,
+no `migrations/`, no `entrypoints` key) before reading the manifest — a skill
+bundle carrying code fails closed. Pack a skill folder the same ustar way:
+
+```sh
+tar --format=ustar -czf "trip-planner-1.0.0.tgz" -C skills trip-planner
+sha256sum "trip-planner-1.0.0.tgz"
+```
+
 ## Tarball requirements (the strict extractor)
 
 `installer.ts`'s extractor is deliberately strict, so the CI must pack to match:

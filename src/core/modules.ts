@@ -29,12 +29,17 @@ import { pathToFileURL } from 'node:url';
 import type { DB } from '../storage/db.js';
 import { migrate as runMigrations } from '../storage/db.js';
 import type { Logger } from '../util/log.js';
-import type { LLM } from './llm.js';
+import type { LLM, ThinkMode } from './llm.js';
 import type { AfterExecuteListener, ToolHandler, ToolRegistry } from './tools.js';
 import type { Scheduler, JobHandler, ScheduledJob, NudgeAction, Nudge } from './scheduler.js';
 import { matchesCron, parseCron } from './cron.js';
 import type { FastCache } from './fast-cache.js';
 import type { ModulePermissions } from './installer.js';
+import {
+  createModuleTripwires,
+  type ModuleTripwires,
+  type TripwireSurface,
+} from './module-tripwires.js';
 import { namespacedCache } from './fast-cache.js';
 import { createChatDispatcher, type ChatDispatcher, type InboundMessage } from './chat-dispatch.js';
 import { createModuleWatcher } from './module-watcher.js';
@@ -354,6 +359,9 @@ export interface HostUserMessage {
   chatId: number;
   userId: number;
   text: string;
+  // Per-turn reasoning override. A surface's sticky per-chat setting (Telegram
+  // /think · /fast) flows through here; omitted (or 'auto') keeps the default.
+  thinkMode?: ThinkMode;
   send: (chunk: HostReplyChunk) => void | Promise<void>;
 }
 
@@ -423,6 +431,16 @@ export interface Host {
   // Optional — wired by start.ts but absent in some test harnesses. Modules
   // that need it should check at runtime and fall back to host.llm if missing.
   orchestrator?: HostOrchestrator;
+
+  // Tripwire-enforced gateways to the outside world. A module that reaches the
+  // network, spawns a binary, or touches the filesystem THROUGH these has its
+  // declared permissions block enforced (a non-allowlisted host/binary/path
+  // throws and is counted), so the consent screen stays truthful. Using node's
+  // fetch/child_process/fs directly bypasses them — see module-tripwires.ts and
+  // SECURITY.md for the (honest) threat model.
+  fetch: ModuleTripwires['fetch'];
+  spawn: ModuleTripwires['spawn'];
+  fs: ModuleTripwires['fs'];
 
   // Per-module config / settings store
   settings: ModuleSettings;
@@ -681,6 +699,10 @@ export interface ModuleLoader {
   // keeps climbing with no one editing files flags a reload leak; surfaced in
   // metrics + `modulus status` so it's noticeable before it pegs the CPU.
   reloadCounts(): Record<string, number>;
+  // Per-module count of tripwire denials (a module reaching a host/binary/path
+  // it never declared). Non-zero means a module is drifting from its consent;
+  // surfaced in metrics + /status + the System tab.
+  tripwireDenials(): Record<string, number>;
   shutdown(): Promise<void>;
 }
 
@@ -751,6 +773,10 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
   const loaded = new Map<string, LoadedModule>();
   const registrations = new Map<string, RegistrationsForModule>();
   const dirs = new Map<string, string>(); // module name -> resolved folder
+  // Per-module count of tripwire denials (a module reaching a host/binary/path
+  // it never declared). A non-zero value is a module misbehaving or drifting
+  // from its consent; surfaced in /status + the System tab.
+  const tripwireDenials = new Map<string, number>();
   let importVersion = 0;
   let shuttingDown = false;
 
@@ -1031,6 +1057,17 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
     // Mode is a no-op on Windows. recursive: true tolerates existing dirs.
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
+    // Tripwire-enforced gateways, scoped to this module's declared permissions.
+    // A denial bumps the per-module counter surfaced in metrics/status.
+    const tripwires = createModuleTripwires({
+      moduleName: manifest.name,
+      permissions: manifest.permissions ?? {},
+      dataDir,
+      log: cl,
+      onDenied: (_surface: TripwireSurface) =>
+        tripwireDenials.set(manifest.name, (tripwireDenials.get(manifest.name) ?? 0) + 1),
+    });
+
     let intentPattern: RegExp | undefined;
     if (manifest.intent_pattern) {
       // Hard length cap defends against ReDoS: a malicious module can
@@ -1092,6 +1129,9 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
           }
         : opts.llm,
       ...(opts.orchestrator ? { orchestrator: opts.orchestrator } : {}),
+      fetch: tripwires.fetch,
+      spawn: tripwires.spawn,
+      fs: tripwires.fs,
       settings,
       tools: {
         register: (h) => {
@@ -1591,6 +1631,7 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
     suspendReload: (name: string) => watcher.suspend(name),
     resumeReload: (name: string) => watcher.resume(name),
     reloadCounts: () => watcher.reloadCounts(),
+    tripwireDenials: () => Object.fromEntries(tripwireDenials),
     shutdown,
   };
 }

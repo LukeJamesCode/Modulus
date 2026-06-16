@@ -13,6 +13,7 @@ import { moduleFolders } from './module-paths.js';
 import { open as openDb, type DB } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import type { AuthFlow, AuthFlowIO, Host, Manifest } from '../core/modules.js';
+import { createModuleTripwires } from '../core/module-tripwires.js';
 import { homeDir } from './config-store.js';
 import { fetchBotUsername, printTelegramCommandsGuide } from './ext-setup.js';
 
@@ -54,6 +55,17 @@ export async function runAuthForModule(
   const dataDir = join(homeDir(), 'module_state', mod.name);
   mkdirSync(dataDir, { recursive: true });
 
+  // The auth flow runs the module's own code, so it gets the same tripwire-
+  // enforced gateways the loader hands a running module — an OAuth fetch the
+  // module didn't declare is denied here too.
+  const tripwires = createModuleTripwires({
+    moduleName: mod.name,
+    permissions: mod.manifest.permissions ?? {},
+    dataDir,
+    log,
+    onDenied: () => {},
+  });
+
   let captured: AuthFlow | null = null;
   const host: Host = {
     name: mod.name,
@@ -61,6 +73,9 @@ export async function runAuthForModule(
     log,
     dataDir,
     db,
+    fetch: tripwires.fetch,
+    spawn: tripwires.spawn,
+    fs: tripwires.fs,
     llm: {
       chat() {
         throw new Error('llm not available during auth');

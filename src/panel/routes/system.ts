@@ -121,12 +121,16 @@ function metricsView(deps: PanelDeps): unknown {
   const hits = s.cache?.hits ?? 0;
   const misses = s.cache?.misses ?? 0;
   const total = hits + misses;
+  const tripwireDenials = Object.entries(metrics.moduleTripwireDenials ?? {})
+    .filter(([, n]) => n > 0)
+    .map(([module, count]) => ({ module, count }));
   return {
     hasMetrics: true,
     agentRunning: true,
     startedAt: metrics.startedAt,
     metricsAt: metrics.updatedAt,
     uptimeMs: metrics.uptimeMs,
+    tripwireDenials,
     scheduler: {
       jobsRegistered: s.jobsRegistered,
       ticks: s.ticks,

@@ -38,6 +38,12 @@ cpSync(join(repoRoot, 'modules'), join(stagingApp, 'modules'), {
   recursive: true,
   filter: (src) => !src.endsWith('.test.ts'),
 });
+// First-party skills sit beside modules at the app root (defaultSkillRoots
+// resolves them relative to dist/, i.e. app/skills). Pure data — no tests live
+// inside a bundle, so copy as-is.
+if (existsSync(join(repoRoot, 'skills'))) {
+  cpSync(join(repoRoot, 'skills'), join(stagingApp, 'skills'), { recursive: true });
+}
 cpSync(join(repoRoot, 'package.json'), join(stagingApp, 'package.json'));
 cpSync(join(repoRoot, 'package-lock.json'), join(stagingApp, 'package-lock.json'));
 

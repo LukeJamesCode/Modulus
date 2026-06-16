@@ -8,8 +8,12 @@ import type { createAgentRegistry, createAgentRuntime } from '../core/agents.js'
 import type { createAgentQueue } from '../core/agent-queue.js';
 import type { createRoutedLLM } from '../core/llm-router.js';
 import type { MemoryStore } from '../core/memory.js';
+import type { StandingOrderStore } from '../core/standing-orders.js';
+import type { Heartbeat } from '../core/heartbeat.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ModuleLoader } from '../core/modules.js';
+import type { SkillLoader } from '../core/skills.js';
+import type { ToolRegistry } from '../core/tools.js';
 import type { InstantResponder } from '../core/instant-responses.js';
 import type { ModulusConfig } from '../cli/config-store.js';
 import type { PanelConfirmBus } from './confirm-bus.js';
@@ -43,6 +47,18 @@ export interface PanelDeps {
   // the exact same pipeline as Telegram (intercepts → orchestrator → SSE).
   orchestrator: Orchestrator;
   loader: ModuleLoader;
+  // The declarative-skill loader plus the chat tool registry its tiers resolve
+  // against, so the Skills section can list/enable/disable/install skills and
+  // render each one's tools in the same everyday language as the install
+  // consent screen. Absent in tests that don't exercise skills.
+  skills?: {
+    loader: SkillLoader;
+    tools: ToolRegistry;
+  };
+  // Standing orders store + the heartbeat that evaluates them. The panel does
+  // CRUD on the orders and reads heartbeat stats for the System tab.
+  standingOrders?: StandingOrderStore;
+  heartbeat?: Heartbeat;
   // Shared with the daemon's confirm router so a confirm-tier tool fired during
   // a browser turn prompts inline in the browser (fail-closed otherwise).
   confirmBus: PanelConfirmBus;

@@ -7,14 +7,20 @@
 // on later without changing this module's interface.
 //
 // Write paths:
-// - the `remember` tool (auto tier, any agent or the main chat)
-// - promoteFindings(): an agent task's record_finding notes, distilled into
-//   rows tagged `agent:<name>` when the task completes (wired in start.ts)
-// - a future background extraction job (calls remember() directly)
+// - the `remember` tool (auto tier, any agent or the main chat) → global store
+// - the background extraction job (memory-extraction.ts): 0–2 durable user facts
+//   per chat turn, source 'extraction', global
+// - promoteFindings(): an agent task's record_finding notes, distilled into rows
+//   tagged `agent:<name>` and scoped to that agent's namespace (wired in start.ts)
 //
-// Read path: the orchestrator's memoryProvider hook calls renderForPrompt()
-// per turn; the result fills the `memory` slot of the deterministic prefix
-// (system → tools → memory → session → history).
+// Namespaces (migration 0032): agent_id NULL is the shared hive mind (user facts
+// + extraction); a value is one agent's private namespace (its findings). An
+// agent run recalls global ∪ its own; the main chat recalls global only.
+//
+// Read path: the orchestrator's memoryProvider hook calls renderForPrompt(message,
+// agentId) per turn; the result fills the `memory` slot of the deterministic
+// prefix (system → tools → memory → session → history). The dreaming pass
+// (dreaming.ts) periodically calls consolidate() to promote/decay rows.
 
 import { createHash } from 'node:crypto';
 import type { DB } from '../storage/db.js';
@@ -39,6 +45,9 @@ export interface MemoryRow {
   scope: string;
   source: string;
   importance: number;
+  // NULL = global/shared (the hive mind); a value scopes the row to one agent's
+  // private namespace (migration 0032).
+  agentId: number | null;
   createdAt: number;
   lastUsedAt: number | null;
   uses: number;
@@ -54,27 +63,58 @@ export interface MemoryOptions {
   now?: () => Date;
 }
 
+export interface ConsolidateResult {
+  // Rows whose importance was bumped because they keep proving useful.
+  promoted: number;
+  // Stale, never-useful extraction rows pruned.
+  decayed: number;
+}
+
 export interface MemoryStore {
   // Store a fact. Returns the row id; a duplicate (same normalised content)
-  // returns the existing id and keeps the higher importance.
-  remember(input: { content: string; source: string; importance?: number }): number;
-  // BM25 search. Empty query or no match returns [].
+  // returns the existing id and keeps the higher importance. agentId scopes the
+  // row to one agent's private namespace; omit (or NULL) for the global store.
+  remember(input: {
+    content: string;
+    source: string;
+    importance?: number;
+    agentId?: number | null;
+  }): number;
+  // BM25 search across the whole store (every namespace). Empty query or no
+  // match returns []. Used by the owner's memory browser and `forget`.
   recall(query: string, limit?: number): MemoryRow[];
+  // BM25 search filtered in SQL to what an agent would actually recall: global
+  // ∪ that agent's private namespace when agentId is given, else global only.
+  // Used by the browser's agent-scoped search so high-ranked private rows past
+  // the limit aren't dropped and global rows still surface.
+  recallScoped(query: string, agentId: number | undefined, limit?: number): MemoryRow[];
   // Formatted prompt block for this turn's message, or undefined when nothing
-  // relevant is stored. Bumps last_used_at/uses on the returned rows.
-  renderForPrompt(message: string): string | undefined;
-  // Delete matching rows; returns how many were removed.
+  // relevant is stored. Bumps last_used_at/uses on the returned rows. When
+  // agentId is given, recalls global ∪ that agent's namespace; otherwise the
+  // main chat's global-only view.
+  renderForPrompt(message: string, agentId?: number): string | undefined;
+  // Delete matching rows (any namespace); returns how many were removed.
   forget(query: string): number;
-  // Promote an agent task's findings into shared memory. Returns rows stored.
-  promoteFindings(findings: string[], agentName: string): number;
-  // Browser/UI surface.
-  list(limit?: number, offset?: number): MemoryRow[];
+  // Drop an agent's entire private namespace, for agent deletion cleanup.
+  forgetAgent(agentId: number): number;
+  // Promote an agent task's findings into that agent's namespace (agentId) or
+  // the global store (omit). Returns rows stored.
+  promoteFindings(findings: string[], agentName: string, agentId?: number | null): number;
+  // Deterministic "dreaming" consolidation: bump importance of frequently
+  // recalled facts, prune stale never-useful extraction noise. Returns counts.
+  consolidate(opts: { minUses: number; maxStaleMs: number }): ConsolidateResult;
+  // Browser/UI surface. agentId filters to one namespace (its private rows).
+  list(limit?: number, offset?: number, agentId?: number): MemoryRow[];
   remove(id: number): boolean;
   count(): number;
 }
 
-const SELECT_COLS = `id, content, scope, source, importance,
+const SELECT_COLS = `id, content, scope, source, importance, agent_id AS agentId,
   created_at AS createdAt, last_used_at AS lastUsedAt, uses`;
+
+// Same columns, aliased for the memories_fts JOIN (m.* form).
+const FTS_COLS = `m.id, m.content, m.scope, m.source, m.importance, m.agent_id AS agentId,
+  m.created_at AS createdAt, m.last_used_at AS lastUsedAt, m.uses`;
 
 // Words too common to discriminate anything. Tiny on purpose — BM25 already
 // down-weights frequent terms; this just keeps junk out of the MATCH query.
@@ -115,14 +155,43 @@ const STOPWORDS = new Set([
   'all',
   'any',
   'its',
+  // 2-char function words: now reachable since the tokenizer keeps 2-char tokens
+  // (to let AI, JS, Go, OS, UI, DB through). Tech 2-char terms are deliberately
+  // absent here so they survive.
+  'of',
+  'to',
+  'in',
+  'is',
+  'it',
+  'on',
+  'at',
+  'as',
+  'an',
+  'be',
+  'by',
+  'or',
+  'if',
+  'so',
+  'no',
+  'do',
+  'my',
+  'me',
+  'we',
+  'he',
+  'us',
+  'up',
+  'am',
 ]);
 
 // Build a safe FTS5 MATCH expression from free text. Tokens are quoted, so
 // user input can never inject FTS query syntax (NEAR, column filters, etc.).
+// 2-char tokens are kept (AI, JS, Go, OS, UI, DB) — discarding them missed a
+// whole class of common product/tech terms; the stopword list and the BM25
+// rank still down-weight noise.
 export function ftsQueryFromText(text: string, maxTerms = 12): string {
   const seen = new Set<string>();
   const terms: string[] = [];
-  for (const m of text.toLowerCase().matchAll(/[a-z0-9]{3,}/g)) {
+  for (const m of text.toLowerCase().matchAll(/[a-z0-9]{2,}/g)) {
     const tok = m[0];
     if (STOPWORDS.has(tok) || seen.has(tok)) continue;
     seen.add(tok);
@@ -153,16 +222,23 @@ export function setupMemory(opts: MemoryOptions): MemoryStore {
   const recallLimit = opts.recallLimit ?? MEMORY_DEFAULT_RECALL_LIMIT;
   const now = opts.now ?? (() => new Date());
 
-  function remember(input: { content: string; source: string; importance?: number }): number {
+  function remember(input: {
+    content: string;
+    source: string;
+    importance?: number;
+    agentId?: number | null;
+  }): number {
     const content = normalize(input.content).slice(0, MEMORY_MAX_CHARS);
     if (!content) throw new Error('memory content is empty');
     const importance = clampImportance(input.importance ?? 1);
+    const agentId = input.agentId ?? null;
     const hash = hashContent(content);
     const existing = db
       .prepare(`SELECT id, importance FROM memories WHERE content_hash = ?`)
       .get(hash) as { id: number; importance: number } | undefined;
     if (existing) {
       // Same fact re-learned: keep the stronger importance, refresh recency.
+      // Scope is left as first-learned — a fact promoted globally stays global.
       db.prepare(`UPDATE memories SET importance = ?, last_used_at = ? WHERE id = ?`).run(
         Math.max(existing.importance, importance),
         now().getTime(),
@@ -172,10 +248,10 @@ export function setupMemory(opts: MemoryOptions): MemoryStore {
     }
     const r = db
       .prepare(
-        `INSERT INTO memories (content, content_hash, source, importance, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO memories (content, content_hash, source, importance, agent_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(content, hash, input.source, importance, now().getTime());
+      .run(content, hash, input.source, importance, agentId, now().getTime());
     evictOverflow();
     log.debug('memory stored', { id: Number(r.lastInsertRowid), source: input.source });
     return Number(r.lastInsertRowid);
@@ -200,8 +276,7 @@ export function setupMemory(opts: MemoryOptions): MemoryStore {
     if (!match) return [];
     return db
       .prepare(
-        `SELECT m.id, m.content, m.scope, m.source, m.importance,
-                m.created_at AS createdAt, m.last_used_at AS lastUsedAt, m.uses
+        `SELECT ${FTS_COLS}
          FROM memories_fts f JOIN memories m ON m.id = f.rowid
          WHERE memories_fts MATCH ?
          ORDER BY rank
@@ -210,8 +285,28 @@ export function setupMemory(opts: MemoryOptions): MemoryStore {
       .all(match, limit) as MemoryRow[];
   }
 
-  function renderForPrompt(message: string): string | undefined {
-    const rows = recall(message);
+  // Prompt recall, namespace-aware: global ∪ one agent's private rows when an
+  // agentId is given, else global only (the main chat). Separate from recall(),
+  // which scans every namespace for the owner's browser and `forget`.
+  function recallScoped(query: string, agentId: number | undefined, limit = recallLimit): MemoryRow[] {
+    const match = ftsQueryFromText(query);
+    if (!match) return [];
+    const scope =
+      agentId === undefined ? 'AND m.agent_id IS NULL' : 'AND (m.agent_id IS NULL OR m.agent_id = ?)';
+    const stmt = db.prepare(
+      `SELECT ${FTS_COLS}
+       FROM memories_fts f JOIN memories m ON m.id = f.rowid
+       WHERE memories_fts MATCH ? ${scope}
+       ORDER BY rank
+       LIMIT ?`,
+    );
+    const rows =
+      agentId === undefined ? stmt.all(match, limit) : stmt.all(match, agentId, limit);
+    return rows as MemoryRow[];
+  }
+
+  function renderForPrompt(message: string, agentId?: number): string | undefined {
+    const rows = recallScoped(message, agentId);
     if (rows.length === 0) return undefined;
     const t = now().getTime();
     const bump = db.prepare(`UPDATE memories SET last_used_at = ?, uses = uses + 1 WHERE id = ?`);
@@ -231,13 +326,19 @@ export function setupMemory(opts: MemoryOptions): MemoryStore {
     return rows.length;
   }
 
-  function promoteFindings(findings: string[], agentName: string): number {
+  function forgetAgent(agentId: number): number {
+    const n = db.prepare(`DELETE FROM memories WHERE agent_id = ?`).run(agentId).changes;
+    if (n > 0) log.info('agent memories forgotten', { agentId, n });
+    return n;
+  }
+
+  function promoteFindings(findings: string[], agentName: string, agentId?: number | null): number {
     let stored = 0;
     for (const note of findings) {
       const content = normalize(note);
       if (!content) continue;
       try {
-        remember({ content, source: `agent:${agentName}`, importance: 2 });
+        remember({ content, source: `agent:${agentName}`, importance: 2, agentId: agentId ?? null });
         stored++;
       } catch (e) {
         log.warn('finding promotion failed', {
@@ -249,7 +350,37 @@ export function setupMemory(opts: MemoryOptions): MemoryStore {
     return stored;
   }
 
-  function list(limit = 100, offset = 0): MemoryRow[] {
+  // Deterministic "dreaming" pass (no model call). Promote facts that keep
+  // earning recall, then prune extraction noise that never proved useful and has
+  // aged out. Only ever deletes importance-1, uses-0, source='extraction' rows —
+  // user facts, agent findings, and anything importance ≥ 2 are immune.
+  function consolidate(opts: { minUses: number; maxStaleMs: number }): ConsolidateResult {
+    const cutoff = now().getTime() - opts.maxStaleMs;
+    const run = db.transaction((): ConsolidateResult => {
+      const promoted = db
+        .prepare(`UPDATE memories SET importance = importance + 1 WHERE importance < 3 AND uses >= ?`)
+        .run(opts.minUses).changes;
+      const decayed = db
+        .prepare(
+          `DELETE FROM memories
+           WHERE source = 'extraction' AND importance = 1 AND uses = 0 AND created_at < ?`,
+        )
+        .run(cutoff).changes;
+      return { promoted, decayed };
+    });
+    const result = run();
+    if (result.promoted > 0 || result.decayed > 0) log.info('memory consolidated', { ...result });
+    return result;
+  }
+
+  function list(limit = 100, offset = 0, agentId?: number): MemoryRow[] {
+    if (agentId !== undefined) {
+      return db
+        .prepare(
+          `SELECT ${SELECT_COLS} FROM memories WHERE agent_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+        )
+        .all(agentId, limit, offset) as MemoryRow[];
+    }
     return db
       .prepare(`SELECT ${SELECT_COLS} FROM memories ORDER BY created_at DESC LIMIT ? OFFSET ?`)
       .all(limit, offset) as MemoryRow[];
@@ -329,5 +460,17 @@ export function setupMemory(opts: MemoryOptions): MemoryStore {
     tools.register(forgetTool);
   }
 
-  return { remember, recall, renderForPrompt, forget, promoteFindings, list, remove, count };
+  return {
+    remember,
+    recall,
+    recallScoped,
+    renderForPrompt,
+    forget,
+    forgetAgent,
+    promoteFindings,
+    consolidate,
+    list,
+    remove,
+    count,
+  };
 }

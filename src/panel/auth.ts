@@ -30,6 +30,9 @@ export const PANEL_CSP =
   "font-src 'self'; " +
   "connect-src 'self'; " +
   "base-uri 'none'; " +
+  // No origin may frame the panel — defends against clickjacking that would
+  // wrap the token-bearing UI. X-Frame-Options: DENY is the legacy belt to this.
+  "frame-ancestors 'none'; " +
   "form-action 'self'";
 
 // Read the panel token, generating and persisting one (owner-only) on first
