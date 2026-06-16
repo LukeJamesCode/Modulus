@@ -84,7 +84,7 @@ Almost nothing is built in—Modulus uses "modules" for features. The following 
 Modules install from a curated registry (the `modulus-registry` repo) as sha256-pinned tarballs, with a consent screen showing exactly what permissions each module requests. You can browse and install from the panel's **Modules** tab or by running `modulus mod install <name>` in the terminal.
 
 ## CLI Commands
-The `modulus` CLI (version 1.0.0) provides the following commands:
+The `modulus` CLI (version 1.5.0) provides the following commands:
 - `modulus init`
 - `modulus start`
 - `modulus stop`

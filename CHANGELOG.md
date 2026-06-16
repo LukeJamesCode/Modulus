@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-06-16
+
+This release rolls up everything built since 1.0.0 — the 1.1.0 through 1.5.0
+milestones below ship together as Modulus 1.5.0.
+
 ### Added
 
 - **1.5.0 — Declarative skills (the safe tier of the marketplace)**: a skill teaches Modulus *how* to do a multi-step task — "plan my day", "prep for this meeting", "plan a trip" — as pure prompt data. A bundle is a `skill.json` + a `SKILL.md` playbook + an allowlist of tools you already have; it ships **no code**, registers no tools, and holds no permission of its own. Its only capability is the union of the tools it lists, each keeping its own tier. The loader (`src/core/skills.ts`) is a deliberately tiny sibling of the module loader with no `Host` and no dynamic import anywhere on its path — that absence is the security guarantee, and an `assertNoExecutableContent` gate enforces the code-free contract at both install and load time (a bundle carrying a `.js`, `node_modules/`, `migrations/`, or an `entrypoints` key fails closed). Three launch skills ship in the repo's `skills/` dir (day-planner, meeting-prep, trip-planner) as drop-in proof. Browse/install/enable/disable/view from the panel's **Modules → Skills** section, or `/skills` and `/skill <name>` on Telegram. New `docs/skills.md` is the authoring contract.
