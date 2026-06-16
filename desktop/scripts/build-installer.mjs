@@ -7,15 +7,19 @@
 //
 // Requires the vpk dotnet tool (local manifest): `dotnet tool restore` in desktop/.
 
-import { cpSync, existsSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 
-const VERSION = process.env.MODULUS_DESKTOP_VERSION ?? '0.1.0';
-
 const here = dirname(fileURLToPath(import.meta.url));
 const desktop = join(here, '..');
+// Desktop release version tracks the repo package.json so the installer matches
+// the project version; override with MODULUS_DESKTOP_VERSION. vpk aborts unless
+// this is past the latest in desktop/Releases.
+const VERSION =
+  process.env.MODULUS_DESKTOP_VERSION ??
+  JSON.parse(readFileSync(join(desktop, '..', 'package.json'), 'utf8')).version;
 const project = join(desktop, 'ModulusDesktop', 'ModulusDesktop.csproj');
 const publishDir = join(desktop, 'publish');
 const stagingDaemon = join(desktop, 'staging', 'daemon');
