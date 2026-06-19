@@ -54,7 +54,7 @@ honest and minimal — it's exactly what the panel and CLI display before granti
 
 A declarative skill rides the same index. Its entry sets `"kind": "skill"` and,
 instead of `permissions`, carries a `tools` array — the allowlist the consent
-screen resolves to per-tool tiers *before* downloading (the skill analog of a
+screen resolves to per-tool tiers _before_ downloading (the skill analog of a
 module's `permissions`). An entry with no `kind` is a module, so every existing
 entry stays valid. See [skills.md](skills.md) for the bundle contract.
 

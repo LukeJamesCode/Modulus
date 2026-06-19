@@ -49,3 +49,23 @@ test('nextFireAfter handles weekday constraint', () => {
   assert.equal(next.getHours(), 9);
   assert.equal(next.getMinutes(), 0);
 });
+
+test('day-of-month and day-of-week OR when both are restricted (Vixie cron)', () => {
+  // "9:00 on the 13th OR any Friday" — NOT "Friday the 13th only".
+  const p = parseCron('0 9 13 * 5');
+  const fri13 = new Date(2026, 1, 13, 9, 0); // 2026-02-13 is a Friday — both match
+  const fri = new Date(2026, 4, 1, 9, 0); // 2026-05-01 is a Friday, not the 13th
+  const the13th = new Date(2026, 4, 13, 9, 0); // 2026-05-13 is a Wednesday
+  const neither = new Date(2026, 4, 12, 9, 0); // 2026-05-12, Tuesday, not the 13th
+  assert.equal(matchesCron(p, fri13), true);
+  assert.equal(matchesCron(p, fri), true, 'a Friday that is not the 13th still fires');
+  assert.equal(matchesCron(p, the13th), true, 'the 13th on a non-Friday still fires');
+  assert.equal(matchesCron(p, neither), false);
+});
+
+test('a single restricted day field still ANDs with the rest', () => {
+  // Only DOM pinned: fires on the 13th regardless of weekday, and never else.
+  const dom = parseCron('0 9 13 * *');
+  assert.equal(matchesCron(dom, new Date(2026, 4, 13, 9, 0)), true);
+  assert.equal(matchesCron(dom, new Date(2026, 4, 1, 9, 0)), false); // a Friday, not the 13th
+});

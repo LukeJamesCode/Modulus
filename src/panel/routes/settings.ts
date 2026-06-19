@@ -113,7 +113,10 @@ function saveCoreConfig(
   if (typeof body['instantResponses'] === 'boolean') {
     next.instantResponses = { enabled: body['instantResponses'] };
   }
-  if (typeof body['memoryExtraction'] === 'boolean' || typeof body['memoryDreaming'] === 'boolean') {
+  if (
+    typeof body['memoryExtraction'] === 'boolean' ||
+    typeof body['memoryDreaming'] === 'boolean'
+  ) {
     next.memory = {
       ...(next.memory ?? {}),
       ...(typeof body['memoryExtraction'] === 'boolean'

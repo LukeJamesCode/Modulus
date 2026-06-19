@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "servers_json": {
+      "type": "string",
+      "default": "[]",
+      "description": "MCP servers to connect, as a JSON array. Each entry: { \"name\": \"filesystem\", \"transport\": \"stdio\", \"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/data\"], \"autoTools\": [] } for a local server, or { \"name\": \"github\", \"transport\": \"http\", \"url\": \"https://mcp.example.com/sse\", \"headers\": { \"Authorization\": \"Bearer …\" }, \"autoTools\": [\"search\"] } for a remote one. Each server's tools appear as mcp__<name>__<tool>; names in autoTools run without asking, the rest prompt for approval. Set \"enabled\": false to keep a server configured without connecting it."
+    }
+  }
+}

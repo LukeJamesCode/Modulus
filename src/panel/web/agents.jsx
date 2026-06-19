@@ -155,11 +155,7 @@ function RunCard({ item, selected, onSelect, onOpen, onCancel, onPause, onResume
     >
       <div className="card-header">
         <div className={`card-icon ${item.meta.tone}`}>
-          <window.Icon
-            name="spark"
-            size={20}
-            className={item.meta.spin ? 'spin' : undefined}
-          />
+          <window.Icon name="spark" size={20} className={item.meta.spin ? 'spin' : undefined} />
         </div>
         <div className="card-title">
           <h3 title={item.prompt}>{wfClip(item.title, 30)}</h3>
@@ -861,6 +857,139 @@ function AgentsFleet({ agents, onNew, onHire, onEdit, onDelete, onDispatch, onSc
   );
 }
 
+// Channels — channel→agent bindings (v2.0.0). A bound conversation answers as a
+// chosen agent (its persona, tools, memory) instead of the default assistant.
+// The user sets one here or with /bind on Telegram; an agent rewrites it at
+// runtime via the handoff tool. Self-contained: it owns its own fetch loop.
+function ChannelsCard({ agents }) {
+  const [bindings, setBindings] = useState([]);
+  const [ownerChatId, setOwnerChatId] = useState(null);
+  const [pick, setPick] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = useCallback(async () => {
+    const r = await window.api.get('/api/agents/bindings');
+    if (r.ok) {
+      setBindings(r.data.bindings || []);
+      setOwnerChatId(r.data.ownerChatId == null ? null : r.data.ownerChatId);
+    }
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const dashboardBinding = bindings.find((b) => b.chatId === ownerChatId);
+
+  const bindDashboard = async () => {
+    if (!pick) return;
+    setBusy(true);
+    setErr('');
+    const r = await window.api.post('/api/agents/bindings', { agentName: pick });
+    if (!r.ok) setErr(r.error || 'Could not bind');
+    setPick('');
+    setBusy(false);
+    load();
+  };
+  const unbind = async (chatId) => {
+    setBusy(true);
+    setErr('');
+    const r = await fetchDelete(`/api/agents/bindings/${chatId}`);
+    if (!r.ok) setErr(r.error || 'Could not unbind');
+    setBusy(false);
+    load();
+  };
+
+  const optStyle = { background: 'var(--surface-2)', color: 'var(--text)' };
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <h2 style={{ marginBottom: 6 }}>Channels</h2>
+      <div style={{ color: 'var(--text-3)', fontSize: 12.5, marginBottom: 12 }}>
+        Bind a conversation to an agent so it answers as that agent. Use <strong>/bind</strong> in
+        any Telegram chat, or bind this browser Dashboard below.
+      </div>
+      {err && <div style={{ color: 'var(--danger, #f87171)', marginBottom: 8 }}>{err}</div>}
+      <div className="dash-card" style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <strong>Dashboard chat</strong>
+          {dashboardBinding ? (
+            <>
+              <window.Badge tone="accent">{dashboardBinding.agentName}</window.Badge>
+              <window.Button variant="subtle" disabled={busy} onClick={() => unbind(ownerChatId)}>
+                Unbind
+              </window.Button>
+            </>
+          ) : ownerChatId == null ? (
+            <span style={{ color: 'var(--text-3)' }}>
+              Send a message in the Dashboard first to enable binding.
+            </span>
+          ) : (
+            <>
+              <select
+                className="dash-btn sub"
+                value={pick}
+                onChange={(e) => setPick(e.target.value)}
+                style={{ appearance: 'none', paddingRight: 24, cursor: 'pointer' }}
+              >
+                <option value="" style={optStyle}>
+                  default assistant…
+                </option>
+                {agents.map((a) => (
+                  <option key={a.id} value={a.name} style={optStyle}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+              <window.Button variant="primary" disabled={busy || !pick} onClick={bindDashboard}>
+                Bind
+              </window.Button>
+            </>
+          )}
+        </div>
+      </div>
+      {bindings.length > 0 && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+            gap: 12,
+          }}
+        >
+          {bindings.map((b) => (
+            <div
+              key={b.chatId}
+              className="dash-card"
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 'bold' }}>{b.agentName}</div>
+                <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                  {b.chatId === ownerChatId ? 'Dashboard' : `chat ${b.chatId}`}
+                  {b.setBy && b.setBy.indexOf('handoff:') === 0 ? ' · via handoff' : ''}
+                </div>
+              </div>
+              <window.Button
+                variant="subtle"
+                icon="trash"
+                disabled={busy}
+                onClick={() => unbind(b.chatId)}
+              >
+                Unbind
+              </window.Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // One bar to start work: dispatch a task to an agent. This is what makes "New
 // Run" actually launch something.
 function LaunchComposer({ agents, onDispatchAgent, onDispatchAuto }) {
@@ -874,15 +1003,18 @@ function LaunchComposer({ agents, onDispatchAgent, onDispatchAuto }) {
   const att = window.useAttachments(null);
   const isAuto = agentId === 'auto';
   // Auto routes server-side and doesn't take attachments, so it only needs text.
-  const canLaunch = isAuto
-    ? !!text.trim()
-    : !!agentId && (!!text.trim() || !!att.staged.length);
+  const canLaunch = isAuto ? !!text.trim() : !!agentId && (!!text.trim() || !!att.staged.length);
   const launch = () => {
     if (!canLaunch || att.staging) return;
     if (isAuto) {
       onDispatchAuto(text.trim());
     } else {
-      onDispatchAgent(Number(agentId), text.trim(), think === 'inherit' ? undefined : think, att.token);
+      onDispatchAgent(
+        Number(agentId),
+        text.trim(),
+        think === 'inherit' ? undefined : think,
+        att.token,
+      );
       att.clear();
     }
     setText('');
@@ -951,6 +1083,152 @@ function LaunchComposer({ agents, onDispatchAgent, onDispatchAuto }) {
   );
 }
 
+// A gentle first-run "what do I do now?" card on the Home view. Steps check off
+// from live signals (a module enabled, an agent hired) or from the user clicking
+// them; the whole card auto-hides once everything's done, and can be dismissed.
+// State is local (localStorage) — no server round-trip, mirroring the sidebar's
+// setup-popup dismissal.
+const GS_DONE_KEY = 'modulus_getting_started_done';
+const GS_DISMISS_KEY = 'modulus_getting_started_dismissed';
+function loadGsDone() {
+  try {
+    const v = JSON.parse(localStorage.getItem(GS_DONE_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+function GettingStarted({ liveDone, onNavigate, onHire, onChat }) {
+  const [done, setDone] = useState(loadGsDone);
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(GS_DISMISS_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const steps = [
+    { id: 'chat', label: 'Say hello — ask Modulus anything', icon: 'chat', run: onChat },
+    {
+      id: 'reminder',
+      label: 'Set a reminder — try “remind me to stretch in 30 minutes”',
+      icon: 'clock',
+      run: onChat,
+    },
+    {
+      id: 'module',
+      label: 'Turn on a module — calendar, voice, weather…',
+      icon: 'plug',
+      run: () => onNavigate('modules'),
+    },
+    { id: 'agent', label: 'Hire a ready-made agent', icon: 'spark', run: onHire },
+  ];
+  const isDone = (id) =>
+    done.includes(id) || (id === 'module' && liveDone.module) || (id === 'agent' && liveDone.agent);
+  if (dismissed || steps.every((s) => isDone(s.id))) return null;
+  const click = (s) => {
+    if (!done.includes(s.id)) {
+      const next = [...done, s.id];
+      setDone(next);
+      try {
+        localStorage.setItem(GS_DONE_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+    }
+    s.run && s.run();
+  };
+  const dismiss = () => {
+    setDismissed(true);
+    try {
+      localStorage.setItem(GS_DISMISS_KEY, '1');
+    } catch {
+      /* ignore */
+    }
+  };
+  return (
+    <div
+      style={{
+        flex: 'none',
+        marginBottom: 16,
+        padding: 16,
+        borderRadius: 'var(--radius)',
+        background: 'var(--surface)',
+        border: '1px solid var(--accent-ring, var(--border))',
+        boxShadow: 'var(--shadow-sm)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 10 }}>
+        <window.Icon name="spark" size={16} style={{ color: 'var(--accent-strong)' }} />
+        <span style={{ fontWeight: 700, fontSize: 14.5 }}>Getting started</span>
+        <button
+          onClick={dismiss}
+          aria-label="Dismiss"
+          style={{
+            marginLeft: 'auto',
+            background: 'none',
+            border: 'none',
+            color: 'var(--text-3)',
+            cursor: 'pointer',
+            fontSize: 13,
+            fontWeight: 600,
+          }}
+        >
+          Dismiss
+        </button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        {steps.map((s) => {
+          const ok = isDone(s.id);
+          return (
+            <button
+              key={s.id}
+              onClick={() => click(s)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                textAlign: 'left',
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border)',
+                background: ok ? 'var(--accent-soft)' : 'var(--surface-2)',
+                cursor: 'pointer',
+              }}
+            >
+              <span
+                style={{
+                  width: 20,
+                  height: 20,
+                  flex: 'none',
+                  borderRadius: 99,
+                  display: 'grid',
+                  placeItems: 'center',
+                  background: ok ? 'var(--accent)' : 'transparent',
+                  border: ok ? 'none' : '1px solid var(--border-2)',
+                  color: ok ? 'var(--on-accent)' : 'var(--text-3)',
+                }}
+              >
+                <window.Icon name={ok ? 'check' : s.icon} size={11} />
+              </span>
+              <span
+                style={{
+                  fontSize: 13,
+                  color: ok ? 'var(--text-3)' : 'var(--text)',
+                  textDecoration: ok ? 'line-through' : 'none',
+                }}
+              >
+                {s.label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function AgentsTab({
   state,
   // Daemon + voice wiring for the pinned "Modulus Agent" chat, from App.
@@ -960,8 +1238,14 @@ function AgentsTab({
   voiceEnabled,
   health,
   activeModel,
+  onNavigate,
+  // 'home' = the everyday assistant chat only (the panel's front door).
+  // 'fleet' = the agent ops surface (Activity + Agents). Splitting them across
+  // nav tabs means an everyday person lands on a chat, not a mission-control
+  // console — the fleet is one click away, not in their face.
+  mode = 'home',
 }) {
-  const [view, setView] = useState('chats'); // chats | run | agents
+  const [view, setView] = useState(mode === 'fleet' ? 'run' : 'chats'); // chats | run | agents
   const [agents, setAgents] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [schedules, setSchedules] = useState([]);
@@ -1074,7 +1358,7 @@ function AgentsTab({
       return;
     }
     if (!r.data || !r.data.agent) {
-      setError("No agent fits that task — pick one, or hire a specialist.");
+      setError('No agent fits that task — pick one, or hire a specialist.');
       return;
     }
     setNotice(`Sent to ${r.data.agent.name}.`);
@@ -1162,20 +1446,25 @@ function AgentsTab({
         margin: '0 auto',
         width: '100%',
         // The Chats view is a full-height chat app; the other views scroll.
-        ...(view === 'chats' ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } : {}),
+        ...(view === 'chats'
+          ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
+          : {}),
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18, flex: 'none' }}>
-        <window.Segmented
-          value={view}
-          onChange={setView}
-          options={[
-            { value: 'chats', label: 'Chats' },
-            { value: 'run', label: 'Run' },
-            { value: 'agents', label: 'Agents' },
-          ]}
-        />
-      </div>
+      {mode === 'fleet' && (
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18, flex: 'none' }}
+        >
+          <window.Segmented
+            value={view === 'chats' ? 'run' : view}
+            onChange={setView}
+            options={[
+              { value: 'run', label: 'Activity' },
+              { value: 'agents', label: 'Agents' },
+            ]}
+          />
+        </div>
+      )}
 
       {error && (
         <div style={{ marginBottom: 14 }}>
@@ -1186,6 +1475,18 @@ function AgentsTab({
         <div style={{ marginBottom: 14 }}>
           <window.Badge tone="ok">{notice}</window.Badge>
         </div>
+      )}
+
+      {view === 'chats' && (
+        <GettingStarted
+          liveDone={{
+            module: (state.modules?.enabledNames || []).some((n) => n !== 'modulus-frontend'),
+            agent: agents.length > 0,
+          }}
+          onNavigate={onNavigate}
+          onHire={() => setHiring(true)}
+          onChat={() => setView('chats')}
+        />
       )}
 
       {view === 'chats' && (
@@ -1209,7 +1510,11 @@ function AgentsTab({
 
       {view === 'run' && (
         <>
-          <LaunchComposer agents={agents} onDispatchAgent={dispatchById} onDispatchAuto={dispatchAuto} />
+          <LaunchComposer
+            agents={agents}
+            onDispatchAgent={dispatchById}
+            onDispatchAuto={dispatchAuto}
+          />
 
           <MissionControl
             tasks={tasks}
@@ -1258,15 +1563,18 @@ function AgentsTab({
       )}
 
       {view === 'agents' && (
-        <AgentsFleet
-          agents={agents}
-          onNew={() => setEditing({ ...EMPTY_AGENT })}
-          onHire={() => setHiring(true)}
-          onEdit={(a) => setEditing(a)}
-          onDelete={removeAgent}
-          onDispatch={(a) => setDispatchFor(a)}
-          onSchedule={(a) => setScheduleFor(a)}
-        />
+        <>
+          <AgentsFleet
+            agents={agents}
+            onNew={() => setEditing({ ...EMPTY_AGENT })}
+            onHire={() => setHiring(true)}
+            onEdit={(a) => setEditing(a)}
+            onDelete={removeAgent}
+            onDispatch={(a) => setDispatchFor(a)}
+            onSchedule={(a) => setScheduleFor(a)}
+          />
+          <ChannelsCard agents={agents} />
+        </>
       )}
 
       {hiring && (
@@ -1626,10 +1934,7 @@ function PauseModal({ task, isBulk, onClose, onConfirm }) {
       </div>
 
       {mode === 'until' && (
-        <Field
-          label="Resume At"
-          hint="The system will automatically resume the run at this time."
-        >
+        <Field label="Resume At" hint="The system will automatically resume the run at this time.">
           <input
             type="datetime-local"
             value={until}
@@ -2043,6 +2348,18 @@ function AgentEditor({ initial, agents, onClose, onSave, error }) {
   // Default to Simple, the everyday path. Mapping is pure UI: the saved body
   // shape is unchanged, so the server's normalizeAgentInput needs no edits.
   const [editView, setEditView] = useState('simple');
+  // Tool access as an explicit mode (All / Choose / None) rather than the old
+  // "leave blank for all, type a space for none" input — which never actually
+  // produced "none". null = all tools, [] = none, [names] = just those.
+  const [allowMode, setAllowMode] = useState(
+    d.toolAllowlist === null ? 'all' : d.toolAllowlist.length === 0 ? 'none' : 'choose',
+  );
+  const pickAllowMode = (m) => {
+    setAllowMode(m);
+    if (m === 'all') set('toolAllowlist', null);
+    else if (m === 'none') set('toolAllowlist', []);
+    else set('toolAllowlist', textToList(allowlistText));
+  };
   const taStyle = {
     width: '100%',
     resize: 'vertical',
@@ -2115,7 +2432,9 @@ function AgentEditor({ initial, agents, onClose, onSave, error }) {
             >
               <window.Segmented
                 size="sm"
-                value={d.profile === 'reason' ? 'deep' : d.profile === 'tools' ? 'balanced' : 'quick'}
+                value={
+                  d.profile === 'reason' ? 'deep' : d.profile === 'tools' ? 'balanced' : 'quick'
+                }
                 onChange={(v) =>
                   set('profile', v === 'deep' ? 'reason' : v === 'balanced' ? 'tools' : 'chat')
                 }
@@ -2156,174 +2475,191 @@ function AgentEditor({ initial, agents, onClose, onSave, error }) {
 
         {editView === 'advanced' && (
           <>
-        <Row>
-          <Field label="Name">
-            <window.Input
-              value={d.name}
-              onChange={(e) => set('name', e.target.value)}
-              placeholder="researcher"
-            />
-          </Field>
-          <Field label="Model profile" hint="reason = heavy 9B; chat/tools = tiny">
-            <window.Select value={d.profile} onChange={(e) => set('profile', e.target.value)}>
-              <option value="chat">chat</option>
-              <option value="tools">tools</option>
-              <option value="reason">reason (heavy)</option>
-            </window.Select>
-          </Field>
-        </Row>
-        <Field
-          label="Reasoning"
-          hint="Thinking-capable models (qwen3, gemma4) only; no-op otherwise. Auto = model default."
-        >
-          <window.Segmented
-            size="sm"
-            value={d.thinkMode || 'auto'}
-            onChange={(v) => set('thinkMode', v)}
-            options={[
-              { value: 'auto', label: 'Auto' },
-              { value: 'on', label: 'Think' },
-              { value: 'off', label: 'No-think' },
-            ]}
-          />
-        </Field>
-        <Field
-          label="Run mode"
-          hint="Autonomous = plans and works a multi-step goal over many turns until done."
-        >
-          <window.Segmented
-            size="sm"
-            value={d.mode || 'single'}
-            onChange={(v) => set('mode', v)}
-            options={[
-              { value: 'single', label: 'Single turn' },
-              { value: 'autonomous', label: 'Autonomous' },
-            ]}
-          />
-        </Field>
-        {d.mode === 'autonomous' && (
-          <Row>
+            <Row>
+              <Field label="Name">
+                <window.Input
+                  value={d.name}
+                  onChange={(e) => set('name', e.target.value)}
+                  placeholder="researcher"
+                />
+              </Field>
+              <Field
+                label="Model profile"
+                hint="chat & tools use the small fast model; reason uses the bigger, slower one."
+              >
+                <window.Select value={d.profile} onChange={(e) => set('profile', e.target.value)}>
+                  <option value="chat">chat</option>
+                  <option value="tools">tools</option>
+                  <option value="reason">reason (bigger)</option>
+                </window.Select>
+              </Field>
+            </Row>
             <Field
-              label="Max rounds"
-              hint="Loop turns before it must finish. Blank = default (30)."
+              label="Reasoning"
+              hint="Only affects models that can reason; ignored otherwise. Auto = the model’s default."
             >
-              <window.Input
-                type="number"
-                min={1}
-                max={200}
-                value={d.maxTotalRounds ?? ''}
-                placeholder="30"
-                onChange={(e) =>
-                  set('maxTotalRounds', e.target.value === '' ? null : Number(e.target.value))
-                }
+              <window.Segmented
+                size="sm"
+                value={d.thinkMode || 'auto'}
+                onChange={(v) => set('thinkMode', v)}
+                options={[
+                  { value: 'auto', label: 'Auto' },
+                  { value: 'on', label: 'Think' },
+                  { value: 'off', label: 'No-think' },
+                ]}
               />
             </Field>
-            <Field label="Max minutes" hint="Wall-clock cap. Blank = default (30 min).">
-              <window.Input
-                type="number"
-                min={1}
-                max={360}
-                value={d.maxWallClockMs ? Math.round(d.maxWallClockMs / 60000) : ''}
-                placeholder="30"
-                onChange={(e) =>
-                  set(
-                    'maxWallClockMs',
-                    e.target.value === '' ? null : Number(e.target.value) * 60000,
-                  )
-                }
+            <Field
+              label="Run mode"
+              hint="Autonomous = plans and works a multi-step goal over many turns until done."
+            >
+              <window.Segmented
+                size="sm"
+                value={d.mode || 'single'}
+                onChange={(v) => set('mode', v)}
+                options={[
+                  { value: 'single', label: 'Single turn' },
+                  { value: 'autonomous', label: 'Autonomous' },
+                ]}
               />
             </Field>
-          </Row>
-        )}
-        <Field label="Role" hint="One line; shown on the card.">
-          <window.Input
-            value={d.role}
-            onChange={(e) => set('role', e.target.value)}
-            placeholder="Gathers facts from the web"
-          />
-        </Field>
-        <Field label="System prompt">
-          <textarea
-            value={d.systemPrompt}
-            onChange={(e) => set('systemPrompt', e.target.value)}
-            rows={5}
-            placeholder="You are a focused research agent. …"
-            style={{
-              width: '100%',
-              resize: 'vertical',
-              padding: '10px 12px',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border)',
-              background: 'var(--surface-2)',
-              color: 'var(--text)',
-              font: 'inherit',
-            }}
-          />
-        </Field>
-        <Field
-          label="Tool allowlist"
-          hint="Comma-separated module or tool names. Leave blank for ALL tools; a single space-cleared value means none."
-        >
-          <window.Input
-            value={allowlistText}
-            placeholder="modulus-websearch, modulus-everyday-assistant"
-            onChange={(e) => {
-              const txt = e.target.value;
-              set('toolAllowlist', txt.trim() === '' ? null : textToList(txt));
-            }}
-          />
-        </Field>
-        <Row>
-          <Field label="Execution mode" hint="sequential = one of its tasks at a time">
-            <window.Select
-              value={d.executionMode}
-              onChange={(e) => set('executionMode', e.target.value)}
-            >
-              <option value="sequential">sequential</option>
-              <option value="parallel">parallel</option>
-            </window.Select>
-          </Field>
-          <Field label="Max concurrency" hint="Parallel mode only">
-            <window.Input
-              type="number"
-              min={1}
-              max={8}
-              value={d.maxConcurrency}
-              onChange={(e) => set('maxConcurrency', Number(e.target.value))}
-            />
-          </Field>
-          <Field label="Max tool rounds">
-            <window.Input
-              type="number"
-              min={1}
-              max={12}
-              value={d.maxToolRounds}
-              onChange={(e) => set('maxToolRounds', Number(e.target.value))}
-            />
-          </Field>
-        </Row>
-        <Field
-          label="Delegation"
-          hint="Allow this agent to spawn sub-agents (the spawn_agent tool)."
-        >
-          <window.Toggle
-            checked={!!d.canDelegate}
-            onChange={(v) => set('canDelegate', v)}
-            label="Can delegate"
-          />
-        </Field>
-        {d.canDelegate && (
-          <Field
-            label="May delegate to"
-            hint="Comma-separated agent names. Leave blank to allow any agent."
-          >
-            <window.Input
-              value={listToText(d.delegatableAgents)}
-              placeholder={otherAgents.join(', ')}
-              onChange={(e) => set('delegatableAgents', textToList(e.target.value))}
-            />
-          </Field>
-        )}
+            {d.mode === 'autonomous' && (
+              <Row>
+                <Field
+                  label="Max rounds"
+                  hint="Loop turns before it must finish. Blank = default (30)."
+                >
+                  <window.Input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={d.maxTotalRounds ?? ''}
+                    placeholder="30"
+                    onChange={(e) =>
+                      set('maxTotalRounds', e.target.value === '' ? null : Number(e.target.value))
+                    }
+                  />
+                </Field>
+                <Field label="Max minutes" hint="Wall-clock cap. Blank = default (30 min).">
+                  <window.Input
+                    type="number"
+                    min={1}
+                    max={360}
+                    value={d.maxWallClockMs ? Math.round(d.maxWallClockMs / 60000) : ''}
+                    placeholder="30"
+                    onChange={(e) =>
+                      set(
+                        'maxWallClockMs',
+                        e.target.value === '' ? null : Number(e.target.value) * 60000,
+                      )
+                    }
+                  />
+                </Field>
+              </Row>
+            )}
+            <Field label="Role" hint="One line; shown on the card.">
+              <window.Input
+                value={d.role}
+                onChange={(e) => set('role', e.target.value)}
+                placeholder="Gathers facts from the web"
+              />
+            </Field>
+            <Field label="System prompt">
+              <textarea
+                value={d.systemPrompt}
+                onChange={(e) => set('systemPrompt', e.target.value)}
+                rows={5}
+                placeholder="You are a focused research agent. …"
+                style={{
+                  width: '100%',
+                  resize: 'vertical',
+                  padding: '10px 12px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface-2)',
+                  color: 'var(--text)',
+                  font: 'inherit',
+                }}
+              />
+            </Field>
+            <Field label="Tools it can use" hint="All tools, none, or just the ones you choose.">
+              <window.Segmented
+                size="sm"
+                value={allowMode}
+                onChange={pickAllowMode}
+                options={[
+                  { value: 'all', label: 'All' },
+                  { value: 'choose', label: 'Choose' },
+                  { value: 'none', label: 'None' },
+                ]}
+              />
+              {allowMode === 'choose' && (
+                <div style={{ marginTop: 8 }}>
+                  <window.Input
+                    value={allowlistText}
+                    placeholder="modulus-websearch, modulus-everyday-assistant"
+                    onChange={(e) => set('toolAllowlist', textToList(e.target.value))}
+                  />
+                  <div style={{ fontSize: 12.5, color: 'var(--text-3)', marginTop: 4 }}>
+                    Comma-separated module or tool names.
+                  </div>
+                </div>
+              )}
+            </Field>
+            <Row>
+              <Field
+                label="Execution mode"
+                hint="Sequential = one tool at a time; parallel = several at once."
+              >
+                <window.Select
+                  value={d.executionMode}
+                  onChange={(e) => set('executionMode', e.target.value)}
+                >
+                  <option value="sequential">sequential</option>
+                  <option value="parallel">parallel</option>
+                </window.Select>
+              </Field>
+              <Field label="Max concurrency" hint="Parallel mode only.">
+                <window.Input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={d.maxConcurrency}
+                  onChange={(e) => set('maxConcurrency', Number(e.target.value))}
+                />
+              </Field>
+              <Field
+                label="Max tool rounds"
+                hint="How many times it may use tools before it must answer."
+              >
+                <window.Input
+                  type="number"
+                  min={1}
+                  max={12}
+                  value={d.maxToolRounds}
+                  onChange={(e) => set('maxToolRounds', Number(e.target.value))}
+                />
+              </Field>
+            </Row>
+            <Field label="Delegation" hint="Let this agent hand parts of a job to other agents.">
+              <window.Toggle
+                checked={!!d.canDelegate}
+                onChange={(v) => set('canDelegate', v)}
+                label="Can delegate"
+              />
+            </Field>
+            {d.canDelegate && (
+              <Field
+                label="May delegate to"
+                hint="Comma-separated agent names. Leave blank to allow any agent."
+              >
+                <window.Input
+                  value={listToText(d.delegatableAgents)}
+                  placeholder={otherAgents.join(', ')}
+                  onChange={(e) => set('delegatableAgents', textToList(e.target.value))}
+                />
+              </Field>
+            )}
           </>
         )}
       </div>
@@ -2349,12 +2685,12 @@ function ThinkingPane({ text, running }) {
     const len = text.length;
     const now = Date.now();
     const { len: lastLen, time: lastTime } = metrics.current;
-    
+
     if (lastLen === 0) {
       metrics.current = { len, time: now };
       return;
     }
-    
+
     // Sample every ~2 seconds for stability
     const deltaMs = now - lastTime;
     if (deltaMs >= 2000) {
@@ -2362,7 +2698,7 @@ function ThinkingPane({ text, running }) {
         const deltaChars = len - lastLen;
         const deltaSecs = deltaMs / 1000;
         // ~4 chars per token approximation
-        setTps(Math.round((deltaChars / 4) / deltaSecs));
+        setTps(Math.round(deltaChars / 4 / deltaSecs));
       }
       metrics.current = { len, time: now };
     }
@@ -2377,9 +2713,18 @@ function ThinkingPane({ text, running }) {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-        <window.Label hint="The model's live reasoning for the current step.">Thinking</window.Label>
+        <window.Label hint="The model's live reasoning for the current step.">
+          Thinking
+        </window.Label>
         {tps > 0 && (
-          <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 6 }}>
+          <div
+            style={{
+              fontSize: 11,
+              color: 'var(--text-3)',
+              fontFamily: 'var(--font-mono)',
+              marginBottom: 6,
+            }}
+          >
             ~{tps} t/s
           </div>
         )}
@@ -2445,8 +2790,10 @@ function BudgetGauge({ task, agent, transcript }) {
   const maxRounds = agent.maxTotalRounds || 30;
   const elapsed = task.startedAt ? Date.now() - task.startedAt : 0;
   const maxWall = agent.maxWallClockMs || 30 * 60_000;
-  
-  const ctxLength = (task.prompt?.length || 0) + (transcript || []).reduce((acc, m) => acc + (m.content || '').length, 0);
+
+  const ctxLength =
+    (task.prompt?.length || 0) +
+    (transcript || []).reduce((acc, m) => acc + (m.content || '').length, 0);
   const contextTokens = Math.round(ctxLength / 4);
   const maxTokens = agent.budgetTokens || 4096;
 
@@ -2475,8 +2822,10 @@ function BudgetGauge({ task, agent, transcript }) {
       <window.Label>Budget</window.Label>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         {bar('Context', contextTokens, maxTokens, `~${contextTokens} / ${maxTokens}t`, 'purple')}
-        {agent.mode === 'autonomous' && bar('Rounds', rounds, maxRounds, `${rounds} / ${maxRounds}`, 'blue')}
-        {agent.mode === 'autonomous' && bar('Time', elapsed, maxWall, `${mins(elapsed)} / ${mins(maxWall)}`, 'green')}
+        {agent.mode === 'autonomous' &&
+          bar('Rounds', rounds, maxRounds, `${rounds} / ${maxRounds}`, 'blue')}
+        {agent.mode === 'autonomous' &&
+          bar('Time', elapsed, maxWall, `${mins(elapsed)} / ${mins(maxWall)}`, 'green')}
       </div>
     </div>
   );

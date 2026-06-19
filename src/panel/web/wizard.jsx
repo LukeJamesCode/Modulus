@@ -54,12 +54,12 @@ function Wizard({
   });
   const set = (patch) => setData((d) => ({ ...d, ...patch }));
 
+  // Only the model step can block forward progress (see `gated`). Telegram is
+  // optional, so it isn't gated here.
   const canNext = () => {
     switch (STEPS[step].id) {
       case 'ollama':
         return data.ollamaState === 'ok' && !!data.chatModel;
-      case 'telegram':
-        return data.tokenState === 'ok' && data.allowlist.length > 0;
       default:
         return true;
     }
@@ -68,9 +68,13 @@ function Wizard({
   const finish = async () => {
     setSaving(true);
     setSaveErr(null);
+    // Telegram is optional. Only persist it when it's fully connected (validated
+    // token AND at least one paired person); otherwise save it empty so a
+    // half-typed token never blocks promotion — the install runs panel-only.
+    const useTelegram = data.tokenState === 'ok' && data.allowlist.length > 0;
     const body = {
-      token: data.token,
-      allowlist: data.allowlist,
+      token: useTelegram ? data.token : '',
+      allowlist: useTelegram ? data.allowlist : [],
       ollamaUrl: data.ollamaUrl,
       chatModel: data.chatModel,
       reasoningModel: data.reasoningModel,
@@ -124,8 +128,11 @@ function Wizard({
     return <StartingScreen setupError={setupError} onRetry={retryComplete} />;
   }
 
-  const gated = ['ollama', 'telegram'];
-  const blockedLabel = cur === 'ollama' ? 'Set up a model' : 'Complete this step';
+  // Only the model step blocks forward progress; Telegram is optional, so its
+  // step always lets you continue (a fully-paired bot is saved; anything else
+  // runs panel-only).
+  const gated = ['ollama'];
+  const blockedLabel = 'Set up a model';
 
   return (
     <div style={{ height: '100%', display: 'flex', background: 'var(--bg)', overflow: 'hidden' }}>
@@ -481,8 +488,8 @@ function StepWelcome() {
     },
     {
       icon: 'send',
-      title: 'You chat through Telegram',
-      desc: 'Modulus lives in your Telegram app as a bot — and you can talk to it here too.',
+      title: 'Chat here, or on Telegram',
+      desc: 'Talk to Modulus right in this web panel. Connecting a Telegram bot is optional, for chatting from your phone.',
     },
     {
       icon: 'plug',
@@ -595,27 +602,36 @@ function HelperBox({ open, onToggle, title, children }) {
 
 // ---- Ollama step (server + tier + model, merged) --------------------------
 
+// Direct installer download per OS, so "Download Ollama" hands the user the
+// exact file to run instead of dropping them on a page to hunt for the button.
+// Linux has no single-click installer (the curl|sh script needs a shell), so it
+// returns null and we fall back to the command.
+function ollamaDownloadUrl(isMac, isWin) {
+  if (isWin) return 'https://ollama.com/download/OllamaSetup.exe';
+  if (isMac) return 'https://ollama.com/download/Ollama.dmg';
+  return null;
+}
+
 function OllamaInstallCard({ onRecheck, checking }) {
   const plat = (navigator.platform || '').toLowerCase();
   const isMac = plat.includes('mac');
   const isWin = plat.includes('win');
-  const lines = isMac
-    ? [
-        'Download the macOS app from ollama.com/download',
-        'Open it once so Ollama starts',
-        'Come back and click “Check again”.',
-      ]
-    : isWin
-      ? [
-          'Download the Windows installer from ollama.com/download',
-          'Run it — Ollama starts automatically',
-          'Come back and click “Check again”.',
-        ]
-      : [
-          'Install with: curl -fsSL https://ollama.com/install.sh | sh',
-          'Ollama starts as a service',
-          'Come back and click “Check again”.',
-        ];
+  const downloadUrl = ollamaDownloadUrl(isMac, isWin);
+  const osLabel = isMac ? 'macOS' : isWin ? 'Windows' : 'Linux';
+  // Once the user kicks off a download we poll the probe so the step advances on
+  // its own the moment Ollama comes up — no "click Check again" dance.
+  const [waiting, setWaiting] = useStateWiz(false);
+  useEffectWiz(() => {
+    if (!waiting) return;
+    const id = setInterval(() => onRecheck(), 4000);
+    return () => clearInterval(id);
+  }, [waiting, onRecheck]);
+
+  const startDownload = () => {
+    if (downloadUrl) window.open(downloadUrl, '_blank', 'noopener');
+    setWaiting(true);
+  };
+
   return (
     <div
       className="fade"
@@ -631,32 +647,62 @@ function OllamaInstallCard({ onRecheck, checking }) {
         <window.Icon name="alert" size={16} style={{ color: 'var(--warn)' }} />
         <span style={{ fontWeight: 600, fontSize: 14.5 }}>Ollama isn’t running yet</span>
       </div>
-      <ol
-        style={{
-          paddingLeft: 20,
-          margin: '0 0 12px',
-          lineHeight: 1.7,
-          fontSize: 13.5,
-          color: 'var(--text-2)',
-        }}
-      >
-        {lines.map((l, i) => (
-          <li key={i}>{l}</li>
-        ))}
-      </ol>
+      <p style={{ margin: '0 0 12px', lineHeight: 1.6, fontSize: 13.5, color: 'var(--text-2)' }}>
+        Ollama is the small free program that runs the AI on this machine.{' '}
+        {downloadUrl
+          ? `Download it for ${osLabel} and run the installer — this page checks automatically and moves on once it’s up.`
+          : 'Install it with the command below, then this page will detect it automatically.'}
+      </p>
+      {!downloadUrl && (
+        <pre
+          style={{
+            margin: '0 0 12px',
+            padding: '10px 12px',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-sm)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 12.5,
+            color: 'var(--text-2)',
+            overflow: 'auto',
+          }}
+        >
+          curl -fsSL https://ollama.com/install.sh | sh
+        </pre>
+      )}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        {downloadUrl && (
+          <window.Button variant="primary" icon="download" onClick={startDownload}>
+            Download Ollama for {osLabel}
+          </window.Button>
+        )}
+        <window.Button variant="default" icon="refresh" onClick={onRecheck} disabled={checking}>
+          {checking ? 'Checking…' : waiting ? 'Waiting for Ollama…' : 'Check again'}
+        </window.Button>
         <a
           href="https://ollama.com/download"
           target="_blank"
           rel="noreferrer"
-          style={{ fontSize: 13.5, color: 'var(--accent-strong)', fontWeight: 600 }}
+          style={{ fontSize: 13, color: 'var(--text-3)', fontWeight: 600 }}
         >
-          Open ollama.com/download →
+          Other options →
         </a>
-        <window.Button variant="default" icon="refresh" onClick={onRecheck} disabled={checking}>
-          {checking ? 'Checking…' : 'Check again'}
-        </window.Button>
       </div>
+      {waiting && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            marginTop: 12,
+            fontSize: 13,
+            color: 'var(--text-3)',
+          }}
+        >
+          <window.Icon name="refresh" size={14} className="spin" /> Run the installer if it hasn’t
+          started, then leave this page open — it’ll continue on its own.
+        </div>
+      )}
     </div>
   );
 }
@@ -1175,10 +1221,35 @@ function StepTelegram({ data, set }) {
 
   return (
     <div>
-      <StepHead kicker="Step 2" title="Connect Telegram">
-        Telegram is the chat app you’ll use to talk to Modulus. Paste a <b>bot token</b> from
-        BotFather, then add yourself by sending a code from your phone.
+      <StepHead kicker="Step 2 · optional" title="Connect Telegram">
+        Telegram lets you chat with Modulus from your phone. It’s <b>optional</b> — you can use the
+        web panel’s chat and skip this, then add Telegram any time from Settings. To connect now,
+        paste a <b>bot token</b> from BotFather, then add yourself by sending a code from your
+        phone.
       </StepHead>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: 18,
+          padding: '10px 14px',
+          borderRadius: 'var(--radius-sm)',
+          background: 'var(--surface-2)',
+          border: '1px solid var(--border)',
+          fontSize: 13,
+          color: 'var(--text-2)',
+        }}
+      >
+        <window.Icon
+          name="chat"
+          size={15}
+          style={{ color: 'var(--accent-strong)', flex: 'none' }}
+        />
+        <span>
+          Just want the web panel? <b>Skip</b> with Continue below — nothing here is required.
+        </span>
+      </div>
       <window.Label hint="Paste the token here. It looks like 1234567890:AAH... and stays on this machine.">
         Bot token
       </window.Label>
@@ -1510,8 +1581,8 @@ function StepModules() {
   return (
     <div>
       <StepHead kicker="Step 3" title="Pick your modules">
-        Turn on the capabilities you want now, or skip and add them later from the Modules tab.
-        Codex and Everyday Assistant will walk you through connection on the next step.
+        These capabilities are on by default — turn off anything you don’t want, or skip to keep
+        them all. Codex and Everyday Assistant get a guided connection on the next step.
       </StepHead>
       {mods === null && (
         <div style={{ fontSize: 13.5, color: 'var(--text-3)' }}>Loading modules…</div>
@@ -2162,6 +2233,10 @@ function StepModuleConfig({ saveRef }) {
 }
 
 function StepFinish({ data, goto }) {
+  // Telegram is optional: skipping it is a deliberate, valid choice, so show it
+  // as a settled "using the web panel" row (green) rather than a warning.
+  const useTelegram = data.tokenState === 'ok' && data.allowlist.length > 0;
+  const peopleLabel = `${data.allowlist.length} ${data.allowlist.length > 1 ? 'people' : 'person'}`;
   const rows = [
     {
       label: 'Chat model',
@@ -2171,21 +2246,20 @@ function StepFinish({ data, goto }) {
       mono: true,
     },
     { label: 'Hardware tier', value: data.tier, step: 1, ok: true, cap: true },
-    {
-      label: 'Telegram bot',
-      value: data.botName ? `${data.botName} ${data.botUser}` : 'Not connected',
-      step: 2,
-      ok: data.tokenState === 'ok',
-    },
-    {
-      label: 'Allowed people',
-      value: data.allowlist.length
-        ? `${data.allowlist.length} ${data.allowlist.length > 1 ? 'people' : 'person'}`
-        : 'None',
-      step: 2,
-      ok: data.allowlist.length > 0,
-    },
     { label: 'Ollama', value: data.ollamaUrl, step: 1, ok: data.ollamaState === 'ok', mono: true },
+    useTelegram
+      ? {
+          label: 'Telegram',
+          value: `${data.botName} ${data.botUser} · ${peopleLabel}`,
+          step: 2,
+          ok: true,
+        }
+      : {
+          label: 'Telegram',
+          value: 'Skipped — using the web panel (add it later in Settings)',
+          step: 2,
+          ok: true,
+        },
   ];
   return (
     <div>

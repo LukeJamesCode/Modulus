@@ -29,10 +29,49 @@ export interface AgentChoice {
 // Common words that carry no routing signal. Small on purpose — the keyword
 // overlap is forgiving (prefix match), so we only need to drop true noise.
 const STOPWORDS = new Set([
-  'the', 'and', 'for', 'with', 'that', 'this', 'about', 'into', 'from', 'your', 'you',
-  'can', 'please', 'help', 'need', 'want', 'make', 'get', 'find', 'give', 'tell', 'show',
-  'have', 'has', 'are', 'was', 'will', 'would', 'should', 'could', 'some', 'any', 'how',
-  'what', 'when', 'where', 'who', 'why', 'best', 'good', 'new', 'out', 'all',
+  'the',
+  'and',
+  'for',
+  'with',
+  'that',
+  'this',
+  'about',
+  'into',
+  'from',
+  'your',
+  'you',
+  'can',
+  'please',
+  'help',
+  'need',
+  'want',
+  'make',
+  'get',
+  'find',
+  'give',
+  'tell',
+  'show',
+  'have',
+  'has',
+  'are',
+  'was',
+  'will',
+  'would',
+  'should',
+  'could',
+  'some',
+  'any',
+  'how',
+  'what',
+  'when',
+  'where',
+  'who',
+  'why',
+  'best',
+  'good',
+  'new',
+  'out',
+  'all',
 ]);
 
 function tokenize(text: string): string[] {
@@ -106,7 +145,12 @@ async function complete(llm: LLM, task: string, agents: AgentDefinition[]): Prom
     },
   ];
   let out = '';
-  for await (const chunk of llm.chat({ profile: 'chat', messages, maxTokens: 16, thinkMode: 'off' })) {
+  for await (const chunk of llm.chat({
+    profile: 'chat',
+    messages,
+    maxTokens: 16,
+    thinkMode: 'off',
+  })) {
     out += chunk.delta ?? '';
   }
   return out;
@@ -136,7 +180,8 @@ export async function chooseAgentForTask(input: ChooseAgentInput): Promise<Agent
   try {
     const reply = await complete(llm, task, agents);
     const choice = parseModelChoice(reply, agents);
-    if (!choice) log.warn('agent-router: model returned no usable choice', { reply: reply.slice(0, 60) });
+    if (!choice)
+      log.warn('agent-router: model returned no usable choice', { reply: reply.slice(0, 60) });
     return choice;
   } catch (e) {
     log.warn('agent-router: model classification failed', {

@@ -44,7 +44,11 @@ export interface CreateStandingOrderInput {
 export interface StandingOrderHandlers {
   // Enqueue an agent task for an agentic order; return its task id, or null if
   // the agent no longer exists (the order simply doesn't fire this beat).
-  dispatchAgent: (agentId: number, instruction: string, notifyChatId: number | null) => number | null;
+  dispatchAgent: (
+    agentId: number,
+    instruction: string,
+    notifyChatId: number | null,
+  ) => number | null;
   // Optional state probe for notify_on_change orders. Returns the current
   // observed state; the order fires only when it differs from lastState.
   probe?: (order: StandingOrder) => string | null | undefined;
@@ -120,8 +124,7 @@ export function createStandingOrderStore(db: DB, log?: Logger): StandingOrderSto
   function create(input: CreateStandingOrderInput): StandingOrder {
     const instruction = input.instruction.trim();
     if (!instruction) throw new Error('instruction is required');
-    const agentId =
-      input.agentId != null && Number.isInteger(input.agentId) ? input.agentId : null;
+    const agentId = input.agentId != null && Number.isInteger(input.agentId) ? input.agentId : null;
     const notifyChatId =
       input.notifyChatId != null && Number.isFinite(input.notifyChatId)
         ? Math.trunc(input.notifyChatId)
@@ -151,7 +154,9 @@ export function createStandingOrderStore(db: DB, log?: Logger): StandingOrderSto
     return get(Number(info.lastInsertRowid))!;
   }
 
-  function list(options: { active?: boolean; chatId?: number; limit?: number } = {}): StandingOrder[] {
+  function list(
+    options: { active?: boolean; chatId?: number; limit?: number } = {},
+  ): StandingOrder[] {
     const clauses: string[] = [];
     const params: unknown[] = [];
     if (options.active !== undefined) {
@@ -176,9 +181,8 @@ export function createStandingOrderStore(db: DB, log?: Logger): StandingOrderSto
 
   function removeForChat(chatId: number, id: number): boolean {
     return (
-      db
-        .prepare(`DELETE FROM standing_orders WHERE id = ? AND notify_chat_id = ?`)
-        .run(id, chatId).changes > 0
+      db.prepare(`DELETE FROM standing_orders WHERE id = ? AND notify_chat_id = ?`).run(id, chatId)
+        .changes > 0
     );
   }
 
@@ -201,7 +205,11 @@ export function createStandingOrderStore(db: DB, log?: Logger): StandingOrderSto
         // this order (its creation time on the first beat). Mirrors how
         // agent-schedules advances on next_run_at <= now.
         const anchor = order.lastEvaluatedAt ?? order.createdAt;
-        const next = nextFireAfter(parseCron(order.cron), new Date(anchor), order.timeZone ?? undefined);
+        const next = nextFireAfter(
+          parseCron(order.cron),
+          new Date(anchor),
+          order.timeZone ?? undefined,
+        );
         return next.getTime() <= at.getTime();
       } catch (e) {
         log?.warn('standing-orders: disabling order with bad cron', {

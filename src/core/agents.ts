@@ -1620,6 +1620,17 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
       return { ok: false, text: lastText, error: AGENT_TASK_CANCELLED_MESSAGE, conversationId };
     }
     emit(taskId, { type: 'phase', phase: 'finalizing' });
+    // A /stop landing DURING the summary turn must still resolve the task as
+    // cancelled, not let finalizeDone overwrite its status with 'done'. The
+    // abort surfaces either as a thrown AbortError out of driveTurn (catch) or,
+    // if the turn happens to complete first, as a cancelled row (success path) —
+    // guard both.
+    const cancelledResult = (): RunResult => ({
+      ok: false,
+      text: lastText,
+      error: AGENT_TASK_CANCELLED_MESSAGE,
+      conversationId,
+    });
     try {
       const thinkMode = opts.registry.getTask(taskId)?.thinkMode ?? null;
       const turn = await driveTurn(
@@ -1631,6 +1642,7 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
         onDelta,
       );
       if (turn.conversationId) conversationId = turn.conversationId;
+      if (opts.registry.getTask(taskId)?.status === 'cancelled') return cancelledResult();
       const after = opts.registry.getTask(taskId);
       const summary =
         after?.result != null && after.result !== ''
@@ -1638,6 +1650,7 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
           : (turn.finalText ?? turn.buffer ?? lastText);
       return finalizeDone(summary || lastText || 'Task ended without a final summary.');
     } catch {
+      if (opts.registry.getTask(taskId)?.status === 'cancelled') return cancelledResult();
       return finalizeDone(lastText || 'Task ended without a final summary.');
     }
   }
@@ -1797,9 +1810,7 @@ export function createAgentRuntime(opts: AgentRuntimeOptions): AgentRuntime {
 
   async function shutdown(): Promise<void> {
     for (const [taskId] of active) cancelTask(taskId);
-    await Promise.all(
-      [...cache.values(), ...dmCache.values()].map((c) => c.orch.shutdown()),
-    );
+    await Promise.all([...cache.values(), ...dmCache.values()].map((c) => c.orch.shutdown()));
     cache.clear();
     dmCache.clear();
     active.clear();

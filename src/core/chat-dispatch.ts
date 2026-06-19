@@ -42,6 +42,12 @@ export interface InboundMessage {
 
 export interface ChatDispatcherDeps {
   orchestrator: HostOrchestrator;
+  // Per-chat orchestrator override (channel→agent bindings, v2.0.0). Consulted
+  // once per turn so a chat bound to a fleet agent runs against that agent's
+  // persona orchestrator; returning the default (or omitting this dep) keeps the
+  // main Modulus orchestrator. Surface-neutral, like getThinkMode/getDevmode —
+  // start.ts wires it to ConversationRouter.orchestratorFor.
+  resolveOrchestrator?: (chatId: number) => HostOrchestrator;
   // Live registry accessors — called per message so hot-reload is visible.
   commands: () => ModuleCommandRecord[];
   intercepts: () => ModuleInterceptRecord[];
@@ -156,7 +162,10 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
     let buffer = '';
     const devmode = deps.getDevmode?.(chatId) ?? false;
     const thinkMode = deps.getThinkMode?.(chatId);
-    void orchestrator
+    // A bound chat runs against its agent's persona orchestrator; unbound (or no
+    // resolver) falls back to the default Modulus orchestrator.
+    const orch = deps.resolveOrchestrator?.(chatId) ?? orchestrator;
+    void orch
       .handleUserMessage({
         chatId,
         userId,

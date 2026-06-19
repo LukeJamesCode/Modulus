@@ -79,7 +79,7 @@ export function setupSkillTools(deps: {
   deps.tools.register({
     name: USE_SKILL_TOOL_NAME,
     description:
-      'Load the step-by-step playbook for one of the available skills before doing a task it covers. Returns reference guidance to follow and unlocks that skill\'s tools for this turn. Pass the exact skill name from the available-skills list.',
+      "Load the step-by-step playbook for one of the available skills before doing a task it covers. Returns reference guidance to follow and unlocks that skill's tools for this turn. Pass the exact skill name from the available-skills list.",
     tier: 'auto',
     parameters: {
       type: 'object',

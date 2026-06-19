@@ -8,14 +8,29 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { open, type DB } from '../../storage/db.js';
 import { createLogger } from '../../util/log.js';
 import { createAgentRegistry } from '../../core/agents.js';
+import {
+  createConversationRouter,
+  type ConversationRouter,
+} from '../../core/conversation-routing.js';
+import type { Orchestrator } from '../../core/orchestrator.js';
 import type { PanelDeps } from '../types.js';
 import { createAgentRoutes } from './agents.js';
 
 const log = createLogger({ level: 'error', out: () => {}, err: () => {} });
 
+// A do-nothing orchestrator — binding routes never run a turn.
+const fakeOrchestrator = (): Orchestrator => ({
+  handleUserMessage: async () => {},
+  stop: () => false,
+  newChat: () => {},
+  lastError: () => undefined,
+  shutdown: async () => {},
+});
+
 interface Harness {
   deps: PanelDeps;
   reg: ReturnType<typeof createAgentRegistry>;
+  router?: ConversationRouter;
   db: DB;
   cancelled: number[];
   call: (
@@ -34,7 +49,7 @@ function routingLlm(reply: string) {
   return { chat: () => one(), resolveModel: () => 'fake' };
 }
 
-function harness(llm?: unknown): Harness {
+function harness(llm?: unknown, opts?: { withRouter?: boolean; allowedIds?: number[] }): Harness {
   const home = mkdtempSync(join(tmpdir(), 'modulus-agentroutes-'));
   const db: DB = open({ path: join(home, 'modulus.db'), log });
   const reg = createAgentRegistry(db);
@@ -42,11 +57,27 @@ function harness(llm?: unknown): Harness {
   // both the row flip and the in-flight-turn abort, so the routes must call it
   // (not just write the DB) for Stop to actually halt the model.
   const cancelled: number[] = [];
+  // Channel-binding tests opt in to a real ConversationRouter (a fake
+  // orchestrator factory — the routes only touch the binding state, never run a
+  // turn). Exposed on the harness so a test can assert the router's view.
+  const router = opts?.withRouter
+    ? createConversationRouter({
+        db,
+        registry: reg,
+        log,
+        defaultOrchestrator: fakeOrchestrator(),
+        orchestratorFactory: () => fakeOrchestrator(),
+      })
+    : undefined;
   const deps = {
     db,
     log,
     home,
+    // Bindings routes read config for the owner chat; ownerChat → null unless a
+    // test supplies an allowlist.
+    config: { telegram: { allowedIds: opts?.allowedIds ?? [] } },
     agentRegistry: reg,
+    conversationRouter: router,
     agentQueue: { notify() {} },
     agentRuntime: {
       cancelTask(id: number) {
@@ -85,6 +116,7 @@ function harness(llm?: unknown): Harness {
   return {
     deps,
     reg,
+    router,
     db,
     cancelled,
     call,
@@ -219,7 +251,10 @@ test('POST /api/agents/tasks/cancel_all aborts live turns and marks paused rows 
     assert.equal(r.json['count'], 3);
     // Running + queued go through cancelTask (which aborts any in-flight turn);
     // the paused row is flipped directly because cancelTask refuses paused.
-    assert.deepEqual(h.cancelled.sort((x, y) => x - y), [running.id, queued.id].sort((x, y) => x - y));
+    assert.deepEqual(
+      h.cancelled.sort((x, y) => x - y),
+      [running.id, queued.id].sort((x, y) => x - y),
+    );
     assert.equal(h.reg.getTask(paused.id)!.status, 'cancelled');
     assert.equal(h.reg.getTask(running.id)!.status, 'cancelled');
   } finally {
@@ -239,7 +274,10 @@ test('POST hire: name override, collision 409, unknown 404, bad name 400', async
     assert.equal((named.json['agent'] as Record<string, unknown>)['name'], 'newsbot');
 
     // Default-name hire still works (distinct name).
-    assert.equal((await h.call('POST', '/api/agents/templates/hire', { id: 'researcher' })).status, 200);
+    assert.equal(
+      (await h.call('POST', '/api/agents/templates/hire', { id: 'researcher' })).status,
+      200,
+    );
     // Hiring the same default name again collides.
     const dup = await h.call('POST', '/api/agents/templates/hire', { id: 'researcher' });
     assert.equal(dup.status, 409);
@@ -253,6 +291,82 @@ test('POST hire: name override, collision 409, unknown 404, bad name 400', async
       name: 'My Bot',
     });
     assert.equal(bad.status, 400);
+  } finally {
+    h.cleanup();
+  }
+});
+
+// ---- Channel bindings ------------------------------------------------------
+
+test('GET /api/agents/bindings returns bindings and the owner chat id', async () => {
+  const h = harness(undefined, { withRouter: true, allowedIds: [555] });
+  try {
+    const r = await h.call('GET', '/api/agents/bindings');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json['bindings'], []);
+    assert.equal(r.json['ownerChatId'], 555);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('POST /api/agents/bindings binds a chat to an agent', async () => {
+  const h = harness(undefined, { withRouter: true, allowedIds: [555] });
+  try {
+    const a = h.reg.create({ name: 'coder', systemPrompt: 'x' });
+    const r = await h.call('POST', '/api/agents/bindings', { chatId: 42, agentName: 'coder' });
+    assert.equal(r.status, 200);
+    const binding = r.json['binding'] as Record<string, unknown>;
+    assert.equal(binding['agentId'], a.id);
+    assert.equal(binding['agentName'], 'coder');
+    assert.equal(h.router!.boundAgentId(42), a.id);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('POST /api/agents/bindings without chatId binds the owner chat', async () => {
+  const h = harness(undefined, { withRouter: true, allowedIds: [777] });
+  try {
+    const a = h.reg.create({ name: 'coder', systemPrompt: 'x' });
+    const r = await h.call('POST', '/api/agents/bindings', { agentName: 'coder' });
+    assert.equal(r.status, 200);
+    assert.equal(h.router!.boundAgentId(777), a.id);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('POST /api/agents/bindings to an unknown agent is a 404', async () => {
+  const h = harness(undefined, { withRouter: true, allowedIds: [555] });
+  try {
+    const r = await h.call('POST', '/api/agents/bindings', { chatId: 42, agentName: 'ghost' });
+    assert.equal(r.status, 404);
+    assert.equal(h.router!.boundAgentId(42), null);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('DELETE /api/agents/bindings/:chatId unbinds the chat', async () => {
+  const h = harness(undefined, { withRouter: true, allowedIds: [555] });
+  try {
+    const a = h.reg.create({ name: 'coder', systemPrompt: 'x' });
+    h.router!.bind(42, a.id, 'user');
+    const r = await h.call('DELETE', '/api/agents/bindings/42');
+    assert.equal(r.status, 200);
+    assert.equal(r.json['ok'], true);
+    assert.equal(h.router!.boundAgentId(42), null);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('binding routes report unavailable when no router is wired', async () => {
+  const h = harness(undefined, { allowedIds: [555] });
+  try {
+    const r = await h.call('POST', '/api/agents/bindings', { chatId: 42, agentName: 'x' });
+    assert.equal(r.status, 503);
   } finally {
     h.cleanup();
   }

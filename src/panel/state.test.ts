@@ -112,6 +112,20 @@ test('buildState: a token with no allowed ids stays in the wizard', async () => 
   }
 });
 
+test('buildState: a panel-only install (config saved, no Telegram) is configured', async () => {
+  const { home, db, cleanup } = setup();
+  try {
+    // A finished wizard writes config.json with a chat model but no bot token —
+    // Telegram is optional, so this is configured and the panel opens the hub.
+    saveConfig({ ...effectiveConfig(home), telegram: { token: '', allowedIds: [] } }, home);
+    const s = await state(home, db);
+    assert.equal(s.configured, true);
+    assert.equal(s.allowlistCount, 0);
+  } finally {
+    cleanup();
+  }
+});
+
 test('buildState: setupMode + setupError pass through, recommendations are always present', async () => {
   const { home, db, cleanup } = setup();
   try {

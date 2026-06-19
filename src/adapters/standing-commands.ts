@@ -5,6 +5,7 @@
 
 import type { AgentRegistry } from '../core/agents.js';
 import type { StandingOrderStore, StandingOrder } from '../core/standing-orders.js';
+import { describeCron } from '../core/schedule-parse.js';
 
 export interface StandingDeps {
   store: StandingOrderStore;
@@ -19,7 +20,7 @@ const USAGE = [
 ].join('\n');
 
 function describeOrder(o: StandingOrder, agentName: string): string {
-  const cadence = o.cron ? `\`${o.cron}\`` : 'each beat';
+  const cadence = o.cron ? describeCron(o.cron) : 'each beat';
   return `#${o.id} · ${agentName} (${cadence}) — ${o.instruction}`;
 }
 
@@ -29,7 +30,8 @@ function list(deps: StandingDeps, chatId: number): string {
     return `No standing orders yet.\n\n${USAGE}`;
   }
   const lines = rows.map((o) => {
-    const name = o.agentId != null ? (deps.registry.get(o.agentId)?.name ?? `agent #${o.agentId}`) : 'notify';
+    const name =
+      o.agentId != null ? (deps.registry.get(o.agentId)?.name ?? `agent #${o.agentId}`) : 'notify';
     return describeOrder(o, name);
   });
   return ['🛰️ Standing orders:', ...lines, '', 'Cancel one with /standing cancel <id>.'].join('\n');

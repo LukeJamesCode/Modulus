@@ -288,11 +288,17 @@ export function setupMemory(opts: MemoryOptions): MemoryStore {
   // Prompt recall, namespace-aware: global ∪ one agent's private rows when an
   // agentId is given, else global only (the main chat). Separate from recall(),
   // which scans every namespace for the owner's browser and `forget`.
-  function recallScoped(query: string, agentId: number | undefined, limit = recallLimit): MemoryRow[] {
+  function recallScoped(
+    query: string,
+    agentId: number | undefined,
+    limit = recallLimit,
+  ): MemoryRow[] {
     const match = ftsQueryFromText(query);
     if (!match) return [];
     const scope =
-      agentId === undefined ? 'AND m.agent_id IS NULL' : 'AND (m.agent_id IS NULL OR m.agent_id = ?)';
+      agentId === undefined
+        ? 'AND m.agent_id IS NULL'
+        : 'AND (m.agent_id IS NULL OR m.agent_id = ?)';
     const stmt = db.prepare(
       `SELECT ${FTS_COLS}
        FROM memories_fts f JOIN memories m ON m.id = f.rowid
@@ -300,8 +306,7 @@ export function setupMemory(opts: MemoryOptions): MemoryStore {
        ORDER BY rank
        LIMIT ?`,
     );
-    const rows =
-      agentId === undefined ? stmt.all(match, limit) : stmt.all(match, agentId, limit);
+    const rows = agentId === undefined ? stmt.all(match, limit) : stmt.all(match, agentId, limit);
     return rows as MemoryRow[];
   }
 
@@ -338,7 +343,12 @@ export function setupMemory(opts: MemoryOptions): MemoryStore {
       const content = normalize(note);
       if (!content) continue;
       try {
-        remember({ content, source: `agent:${agentName}`, importance: 2, agentId: agentId ?? null });
+        remember({
+          content,
+          source: `agent:${agentName}`,
+          importance: 2,
+          agentId: agentId ?? null,
+        });
         stored++;
       } catch (e) {
         log.warn('finding promotion failed', {
@@ -358,7 +368,9 @@ export function setupMemory(opts: MemoryOptions): MemoryStore {
     const cutoff = now().getTime() - opts.maxStaleMs;
     const run = db.transaction((): ConsolidateResult => {
       const promoted = db
-        .prepare(`UPDATE memories SET importance = importance + 1 WHERE importance < 3 AND uses >= ?`)
+        .prepare(
+          `UPDATE memories SET importance = importance + 1 WHERE importance < 3 AND uses >= ?`,
+        )
         .run(opts.minUses).changes;
       const decayed = db
         .prepare(

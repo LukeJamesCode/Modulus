@@ -133,9 +133,7 @@ export function describeAgentPlain(agent: AgentDefinition): string {
         ? 'off (answers fast)'
         : 'auto (the model decides)';
   const solo =
-    agent.mode === 'autonomous'
-      ? 'on (works a goal on its own)'
-      : 'off (one turn at a time)';
+    agent.mode === 'autonomous' ? 'on (works a goal on its own)' : 'off (one turn at a time)';
   const tools =
     agent.toolAllowlist === null
       ? 'all tools'

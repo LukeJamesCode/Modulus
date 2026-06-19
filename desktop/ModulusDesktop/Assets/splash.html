@@ -1,40 +1,40 @@
 <!doctype html>
 <html>
-<head>
-<meta charset="utf-8">
-<style>
-  html, body {
-    margin: 0; height: 100%;
-    background: #0c0c10; color: #e7e5ee;
-    font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .wrap { text-align: center; max-width: 720px; padding: 24px; }
-  .orb {
-    width: 56px; height: 56px; margin: 0 auto 20px;
-    border-radius: 50%;
-    border: 3px solid rgba(168, 85, 247, 0.25);
-    border-top-color: #c084fc;
-    animation: spin 1s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  h1 { font-size: 17px; font-weight: 600; margin: 0 0 6px; }
-  p  { font-size: 13px; color: #8b8a96; margin: 0; }
-  pre {
-    display: {{DETAIL_DISPLAY}};
-    text-align: left; margin-top: 20px; padding: 14px;
-    background: #141318; border: 1px solid #26242e; border-radius: 8px;
-    font-size: 11px; line-height: 1.5; color: #a5a3b0;
-    max-height: 320px; overflow: auto; white-space: pre-wrap;
-  }
-</style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="orb"></div>
-    <h1>{{MESSAGE}}</h1>
-    <p>Modulus</p>
-    <pre>{{DETAIL}}</pre>
-  </div>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body {
+        margin: 0; height: 100%;
+        background: #0c0c10; color: #e7e5ee;
+        font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .wrap { text-align: center; max-width: 720px; padding: 24px; }
+      .orb {
+        width: 56px; height: 56px; margin: 0 auto 20px;
+        border-radius: 50%;
+        border: 3px solid rgba(168, 85, 247, 0.25);
+        border-top-color: #c084fc;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      h1 { font-size: 17px; font-weight: 600; margin: 0 0 6px; }
+      p  { font-size: 13px; color: #8b8a96; margin: 0; }
+      pre {
+        display: {{DETAIL_DISPLAY}};
+        text-align: left; margin-top: 20px; padding: 14px;
+        background: #141318; border: 1px solid #26242e; border-radius: 8px;
+        font-size: 11px; line-height: 1.5; color: #a5a3b0;
+        max-height: 320px; overflow: auto; white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="orb"></div>
+      <h1>{{MESSAGE}}</h1>
+      <p>Modulus</p>
+      <pre>{{DETAIL}}</pre>
+    </div>
+  </body>
 </html>

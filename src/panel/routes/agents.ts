@@ -34,6 +34,7 @@ import { readJson, readRawBody, sendJson, sse, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
 import type { PanelDeps } from '../types.js';
 import { createConfirmRegistry } from './confirm-registry.js';
+import { ownerChat } from './chat.js';
 
 const AGENT_PROFILES: readonly ProfileName[] = ['chat', 'reason', 'tools'];
 const THINK_MODES: readonly ThinkMode[] = ['auto', 'on', 'off'];
@@ -118,7 +119,9 @@ function normalizeAgentScheduleInput(body: Record<string, unknown>): {
       : 'once';
   const cron = typeof body['cron'] === 'string' && body['cron'].trim() ? body['cron'].trim() : null;
   const timeZone =
-    typeof body['timeZone'] === 'string' && body['timeZone'].trim() ? body['timeZone'].trim() : null;
+    typeof body['timeZone'] === 'string' && body['timeZone'].trim()
+      ? body['timeZone'].trim()
+      : null;
   return {
     agentIds,
     prompt: String(body['prompt'] ?? '').trim(),
@@ -360,6 +363,50 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
       return true;
     }
 
+    // ---- Channel bindings (channel→agent) -----------------------------------
+    // The Channels card binds a conversation to a fleet agent so its turns run
+    // as that agent's persona. ownerChatId is the Dashboard's own chat — the
+    // common bind target ("chat with this agent in the browser").
+    if (path === '/api/agents/bindings' && method === 'GET') {
+      const owner = ownerChat(deps.db, deps.config);
+      sendJson(res, 200, {
+        bindings: deps.conversationRouter?.list() ?? [],
+        ownerChatId: owner?.chatId ?? null,
+      });
+      return true;
+    }
+    if (path === '/api/agents/bindings' && method === 'POST') {
+      if (!deps.conversationRouter) {
+        sendJson(res, 503, { error: 'channel bindings are not available' });
+        return true;
+      }
+      const body = await readJson<{ chatId?: number; agentName?: string }>(req);
+      const name = String(body.agentName ?? '').trim();
+      const agent = reg.getByName(name);
+      if (!agent) {
+        sendJson(res, 404, { error: `no agent named '${name}'` });
+        return true;
+      }
+      const chatId =
+        typeof body.chatId === 'number' ? body.chatId : ownerChat(deps.db, deps.config)?.chatId;
+      if (chatId === undefined) {
+        sendJson(res, 400, { error: 'no chat to bind (no owner chat configured)' });
+        return true;
+      }
+      sendJson(res, 200, { binding: deps.conversationRouter.bind(chatId, agent.id, 'user') });
+      return true;
+    }
+    const bindingDeleteMatch = /^\/api\/agents\/bindings\/(-?\d+)$/.exec(path);
+    if (bindingDeleteMatch && method === 'DELETE') {
+      if (!deps.conversationRouter) {
+        sendJson(res, 503, { error: 'channel bindings are not available' });
+        return true;
+      }
+      const ok = deps.conversationRouter.unbind(Number(bindingDeleteMatch[1]));
+      sendJson(res, 200, { ok });
+      return true;
+    }
+
     // ---- Templates ("hire an agent") ----------------------------------------
     if (path === '/api/agents/templates' && method === 'GET') {
       // Enabled modules, so we can flag which recommended modules a template
@@ -441,7 +488,9 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
       sendJson(res, 200, {
         spec,
         human: describeSpec(spec, hostTimeZone()),
-        ...(spec.kind === 'once' ? { nextRunAt: spec.at } : { cron: spec.cron, timeZone: spec.timeZone }),
+        ...(spec.kind === 'once'
+          ? { nextRunAt: spec.at }
+          : { cron: spec.cron, timeZone: spec.timeZone }),
       });
       return true;
     }
@@ -513,13 +562,16 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
         sendJson(res, 400, { error: 'instruction is required' });
         return true;
       }
-      const agentId = Number.isInteger(Number(body['agentId'])) && Number(body['agentId']) > 0
-        ? Number(body['agentId'])
-        : null;
-      const notifyChatId = Number.isFinite(Number(body['notifyChatId'])) && Number(body['notifyChatId']) !== 0
-        ? Number(body['notifyChatId'])
-        : null;
-      const cron = typeof body['cron'] === 'string' && body['cron'].trim() ? body['cron'].trim() : null;
+      const agentId =
+        Number.isInteger(Number(body['agentId'])) && Number(body['agentId']) > 0
+          ? Number(body['agentId'])
+          : null;
+      const notifyChatId =
+        Number.isFinite(Number(body['notifyChatId'])) && Number(body['notifyChatId']) !== 0
+          ? Number(body['notifyChatId'])
+          : null;
+      const cron =
+        typeof body['cron'] === 'string' && body['cron'].trim() ? body['cron'].trim() : null;
       try {
         const order = deps.standingOrders.create({
           instruction,

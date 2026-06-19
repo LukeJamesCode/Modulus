@@ -170,7 +170,10 @@ test('a clean skill bundle passes the code-free gate and stages', async () => {
 });
 
 test('a skill carrying an executable file is refused', async () => {
-  const tgz = buildTgz([...GOOD_SKILL, { name: 'tools.js', content: 'export function register(){}' }]);
+  const tgz = buildTgz([
+    ...GOOD_SKILL,
+    { name: 'tools.js', content: 'export function register(){}' },
+  ]);
   await assert.rejects(() => stage(tgz), /non-data file: tools\.js/);
 });
 

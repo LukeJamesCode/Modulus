@@ -29,7 +29,8 @@ function parseThinkMode(v: unknown): ThinkMode {
 // The owner chat/user the browser turn speaks as — the most recently seen chat
 // of an allowlisted user, falling back to the first allowlisted id. Sharing the
 // owner chatId means the panel and Telegram share one conversation history.
-function ownerChat(db: DB, cfg: ModulusConfig): { chatId: number; userId: number } | null {
+// Exported so the Channels-binding route binds the same chat the Dashboard runs.
+export function ownerChat(db: DB, cfg: ModulusConfig): { chatId: number; userId: number } | null {
   const fallback = cfg.telegram.allowedIds[0];
   if (fallback === undefined) return null;
   const placeholders = cfg.telegram.allowedIds.map(() => '?').join(', ');
@@ -122,9 +123,15 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
     let full = '';
     let orchestratorRan = false;
 
+    // A bound owner conversation answers as its agent's persona orchestrator;
+    // unbound (or no router) uses the default. Matches the Telegram dispatch
+    // path. (stop/newChat below stay on the default instance — cancelling a
+    // bound in-flight turn is a known follow-up, not a safety gap.)
+    const turnOrchestrator = deps.conversationRouter?.orchestratorFor(chatId) ?? deps.orchestrator;
+
     const runOrchestrator = async (): Promise<void> => {
       orchestratorRan = true;
-      await deps.orchestrator.handleUserMessage({
+      await turnOrchestrator.handleUserMessage({
         chatId,
         userId,
         text,

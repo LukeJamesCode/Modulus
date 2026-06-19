@@ -59,7 +59,9 @@ export async function createScheduleFromText(
 ): Promise<CreateScheduleResult> {
   const what = String(input.what ?? '').trim();
   if (!what) return { error: 'Tell me what to remind you about.' };
-  const whenText = input.recurringHint ? coerceRecurring(input.when) : String(input.when ?? '').trim();
+  const whenText = input.recurringHint
+    ? coerceRecurring(input.when)
+    : String(input.when ?? '').trim();
   if (!whenText) return { error: 'Say when — e.g. "in 20 minutes" or "every weekday at 8am".' };
 
   let agentId: number | undefined;
@@ -167,7 +169,11 @@ export function setupScheduleTools(deps: SchedulingDeps & { tools: ToolRegistry 
         ...(args['agent'] ? { agentName: String(args['agent']) } : {}),
       });
       if ('error' in result) return `Couldn't schedule that: ${result.error}`;
-      return formatCreatedReply(result, deps.timeZone, args['agent'] ? String(args['agent']) : undefined);
+      return formatCreatedReply(
+        result,
+        deps.timeZone,
+        args['agent'] ? String(args['agent']) : undefined,
+      );
     },
   };
   deps.tools.register(tool);

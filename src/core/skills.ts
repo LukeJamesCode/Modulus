@@ -313,7 +313,8 @@ export function createSkillLoader(opts: SkillLoaderOptions): SkillLoader {
     // Playbook. Cap the bytes that can reach the prompt even for a hand-placed
     // skill the installer never sized; truncate rather than drop so the skill
     // stays usable.
-    const instrFile = typeof manifest.instructions === 'string' ? manifest.instructions : 'SKILL.md';
+    const instrFile =
+      typeof manifest.instructions === 'string' ? manifest.instructions : 'SKILL.md';
     const instrPath = join(folder, instrFile);
     if (!existsSync(instrPath)) {
       recordError(manifest.name, manifest.version, `missing playbook (${instrFile})`);

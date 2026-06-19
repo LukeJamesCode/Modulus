@@ -39,8 +39,8 @@ test('/proactive formats scheduler jobs and quiet state', () => {
 
     assert.match(text, /Proactive scheduler:/);
     assert.match(text, /jobs: 2/);
-    assert.match(text, /modulus-google-calendar:event-reminders — \*\/5 \* \* \* \*/);
-    assert.match(text, /followups:sweep — \* \* \* \* \*/);
+    assert.match(text, /modulus-google-calendar:event-reminders — every 5 minutes/);
+    assert.match(text, /followups:sweep — every minute/);
     assert.match(text, /quiet: off/);
     assert.match(text, /daily window: 22:00-07:00/);
   } finally {

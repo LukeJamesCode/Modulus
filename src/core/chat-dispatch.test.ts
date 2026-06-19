@@ -316,3 +316,44 @@ test('afterReply and afterTurn hooks fire after a completed orchestrator turn', 
   assert.equal(afterTurnSeen[0]!.assistantText, 'final');
   assert.equal(afterTurnSeen[0]!.conversationId, 7);
 });
+
+test('resolveOrchestrator routes a bound chat to its agent orchestrator', async () => {
+  const def = orchestratorEmitting('default agent');
+  const agent = orchestratorEmitting('bound agent');
+  // chat 99 is "bound" to the agent orchestrator; every other chat uses default.
+  const resolveOrchestrator = (chatId: number): HostOrchestrator =>
+    chatId === 99 ? agent.orchestrator : def.orchestrator;
+
+  const d = createChatDispatcher(deps({ orchestrator: def.orchestrator, resolveOrchestrator }));
+
+  const boundReplies: string[] = [];
+  await d.dispatchInbound({
+    chatId: 99,
+    userId: 2,
+    text: 'who are you',
+    reply: async (t) => void boundReplies.push(t),
+  });
+  await flush();
+  assert.deepEqual(agent.calls, ['who are you'], 'bound chat hits the agent orchestrator');
+  assert.deepEqual(def.calls, [], 'and not the default');
+  assert.deepEqual(boundReplies, ['bound agent']);
+
+  const otherReplies: string[] = [];
+  await d.dispatchInbound({
+    chatId: 1,
+    userId: 2,
+    text: 'hello',
+    reply: async (t) => void otherReplies.push(t),
+  });
+  await flush();
+  assert.deepEqual(def.calls, ['hello'], 'unbound chat uses the default orchestrator');
+  assert.deepEqual(otherReplies, ['default agent']);
+});
+
+test('without resolveOrchestrator every chat uses the default orchestrator', async () => {
+  const { orchestrator, calls } = orchestratorEmitting('default');
+  const d = createChatDispatcher(deps({ orchestrator }));
+  await d.dispatchInbound({ chatId: 5, userId: 2, text: 'hi', reply: async () => {} });
+  await flush();
+  assert.deepEqual(calls, ['hi']);
+});

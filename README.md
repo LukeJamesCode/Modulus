@@ -18,30 +18,51 @@ Five feature milestones have landed since the 1.0.0 release. See [CHANGELOG.md](
 - Node.js >= 20
 - Ollama installed and running separately.
 
-### 2. Install from Source
-*(Note: A one-command `npx modulus` install is Planned, but currently you must install from source.)*
+### 2. Install
 
+**Try it instantly — no clone, no build:**
+```bash
+npx modulus-agent start
+```
+This downloads Modulus and opens the setup wizard in your browser. Your config and
+data live in `~/.modulus/` and persist across runs, so you can re-run `npx
+modulus-agent start` anytime. npx is great for a trial; a global install or the
+desktop app is the durable path.
+
+**Install globally:**
+```bash
+npm i -g modulus-agent
+modulus start
+```
+
+**From source (for development):**
 ```bash
 git clone <repo-url> modulus
 cd modulus
 npm install
 npm run build
+modulus start
 ```
-This produces the `modulus` CLI.
+
+> Modulus's database engine (better-sqlite3) ships prebuilt binaries for current
+> Node LTS (20/22) on Windows, macOS, and Linux — including **arm64** (Apple
+> Silicon and Raspberry Pi). If your platform/Node has no prebuilt binary and no
+> C/C++ toolchain, the CLI prints clear, actionable instructions instead of a raw
+> error (or use the Windows desktop app, which bundles its own runtime).
 
 ### 3. Set Up & Run
 Just start Modulus:
 ```bash
 modulus start
 ```
-On a fresh install this opens your browser to a setup wizard — detect your hardware tier, pull a model, connect your Telegram bot, and add yourself by sending a pairing code from your phone. When you finish, Modulus promotes itself to the full daemon automatically; no terminal step needed.
+On a fresh install this opens your browser to a setup wizard — detect your hardware tier, pull a model, and (optionally) connect a Telegram bot by sending a pairing code from your phone. Telegram is optional: you can skip it and just use the web panel's chat, then add Telegram later from Settings. When you finish, Modulus promotes itself to the full daemon automatically; no terminal step needed.
 
 On a headless box (a Pi, a Proxmox VM), add `--lan` so the panel binds to all interfaces and prints a LAN URL you can open from another device; use `--no-open` to suppress the browser launch. Prefer the terminal? `modulus init` still walks you through the same setup at the command line.
 
 Once configured, `modulus start` connects the Telegram bot (via long-poll) and serves the web panel on `127.0.0.1`, printing the tokenized URL.
 
 ### 4. Use It
-Chat with your bot on Telegram, or use the Dashboard chat in the web panel. 
+Chat in the web panel's **Home** tab, or — if you connected a Telegram bot — with your bot on Telegram. 
 You can add capabilities from the **Modules → Browse marketplace** section in the panel, or install them from the terminal:
 ```bash
 modulus mod install <name>
@@ -58,10 +79,9 @@ Setup detects RAM/CPU and suggests a tier. The defaults scale accordingly, but t
 
 ## Web Panel
 The web panel is served in-process by the daemon, binds to `127.0.0.1` only, and is protected by a bearer token. `modulus start` prints the tokenized panel URL. 
-On the first run, the panel shows an onboarding wizard (Telegram token, model pull, hardware-tier detect).
-The panel has five tabs:
-- Dashboard (chat)
-- Agents
+On the first run, the panel shows an onboarding wizard (model pull, optional Telegram, hardware-tier detect).
+The panel has four tabs:
+- Home (the assistant chat, plus an Agents area for the fleet, runs, and schedules)
 - Modules
 - Settings
 - System

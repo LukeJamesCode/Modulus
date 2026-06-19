@@ -1,16 +1,38 @@
 {
-  "name": "modulus",
+  "name": "modulus-agent",
   "version": "1.5.0",
   "description": "The everyday AI orchestrator. CPU-only core, integrated UI, modules turn it into anything.",
   "license": "Apache-2.0",
   "type": "module",
-  "private": true,
+  "keywords": [
+    "ai",
+    "agent",
+    "assistant",
+    "llm",
+    "ollama",
+    "telegram",
+    "orchestrator",
+    "mcp"
+  ],
   "engines": {
     "node": ">=20"
   },
   "bin": {
-    "modulus": "./dist/cli/index.js"
+    "modulus": "./dist/cli/index.js",
+    "modulus-agent": "./dist/cli/index.js"
   },
+  "files": [
+    "dist",
+    "modules",
+    "skills",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "!**/*.test.ts",
+    "!**/*.test.js",
+    "!**/*.map",
+    "!**/tsconfig.json"
+  ],
   "scripts": {
     "build": "tsc && node scripts/copy-migrations.mjs && node scripts/copy-web.mjs",
     "typecheck": "tsc --noEmit",
@@ -20,7 +42,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "node scripts/run-tests.mjs",
-    "bench:spec-decode": "node scripts/bench-spec-decode.mjs"
+    "bench:spec-decode": "node scripts/bench-spec-decode.mjs",
+    "pack-smoke": "node scripts/pack-smoke.mjs",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
@@ -39,7 +63,7 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^8.4.2",
-    "better-sqlite3": "^12.9.0",
+    "better-sqlite3": "12.9.0",
     "commander": "^14.0.3",
     "grammy": "^1.42.0",
     "tsx": "^4.19.2",

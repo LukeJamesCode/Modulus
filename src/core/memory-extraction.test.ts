@@ -33,7 +33,11 @@ function fakeLlm(reply: string): LLM & { calls: ChatOptions[] } {
       return { ok: true, models: ['fake'] };
     },
     listProfiles() {
-      return { chat: { model: 'fake', contextTokens: 4096, heavy: false }, reason: null, tools: null };
+      return {
+        chat: { model: 'fake', contextTokens: 4096, heavy: false },
+        reason: null,
+        tools: null,
+      };
     },
     resolveModel: () => 'fake',
     breakerSnapshot: () => ({
@@ -127,7 +131,7 @@ test('the same fact extracted twice stays one row (store dedup, none of its own)
     const extract = createMemoryExtractor({ llm, memory: store, log, enabled: true });
     await extract(turn('I really prefer tea over coffee these days'));
     await extract(turn('just so you know, tea over coffee for me'));
-    assert.equal(store.count(), 1, 'dedup is the store\'s job; the extractor adds none');
+    assert.equal(store.count(), 1, "dedup is the store's job; the extractor adds none");
   } finally {
     cleanup();
   }

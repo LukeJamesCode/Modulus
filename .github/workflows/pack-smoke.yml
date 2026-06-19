@@ -1,0 +1,34 @@
+name: pack-smoke
+
+# Proves the PUBLISHED tarball boots on every supported platform/Node — the
+# `npx modulus-agent` story. macos-latest is Apple-Silicon (arm64), so it covers
+# darwin-arm64 prebuilds. The Pi's linux-arm64 is the one gap GitHub's standard
+# runners don't cover; the `linux-arm64` leg below uses an arm runner when the
+# account has one (drop it if not available).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pack-smoke:
+    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['20', '22']
+        include:
+          # Raspberry Pi proxy. Remove if your account has no arm Linux runner.
+          - os: ubuntu-24.04-arm
+            node: '22'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run pack-smoke

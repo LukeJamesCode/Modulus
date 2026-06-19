@@ -83,7 +83,11 @@ test('memory toggles: env tri-state wins; unset leaves enabled undefined for the
   const home = mkHome();
   try {
     saveConfig(
-      { telegram: { token: 't', allowedIds: [1] }, ollama: { url: 'http://x:11434' }, models: { chat: 'c' } },
+      {
+        telegram: { token: 't', allowedIds: [1] },
+        ollama: { url: 'http://x:11434' },
+        models: { chat: 'c' },
+      },
       home,
     );
     // No env and no file memory block → enabled stays undefined so start.ts can

@@ -91,7 +91,7 @@ function schemaToFields(schema: SettingsSchema | null, current: Map<string, stri
     }
     return {
       key,
-      label: humanize(key),
+      label: decl.title ?? humanize(key),
       type,
       value,
       ...(decl.format ? { format: decl.format } : {}),

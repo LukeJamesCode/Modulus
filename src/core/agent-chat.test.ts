@@ -84,7 +84,13 @@ function gatedStream(): { stream: AsyncIterable<ChatChunk>; release: () => void 
   });
   async function* stream(): AsyncIterable<ChatChunk> {
     await gate;
-    yield { delta: 'done waiting', done: true, model: 'fake', promptTokens: 1, completionTokens: 1 };
+    yield {
+      delta: 'done waiting',
+      done: true,
+      model: 'fake',
+      promptTokens: 1,
+      completionTokens: 1,
+    };
   }
   return { stream: stream(), release };
 }

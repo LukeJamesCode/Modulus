@@ -573,13 +573,19 @@ export function createOllama(opts: OllamaOptions): LLM {
     checkBreaker();
     ensureIdleSweep();
     const target = resolveProfile(o.profile);
-    await evictIfNeeded(target);
-    // Mark a heavy inference in flight the moment the model becomes resident, so
-    // releaseHeavy() can't unload it during the (possibly multi-second on a Pi)
-    // capability probe below. Balanced by a decrement on every exit path further
-    // down (fetch failure, non-2xx, and the streaming finally).
+    // Mark a heavy inference in flight BEFORE eviction, not after. evictIfNeeded
+    // and releaseHeavy both serialize on evictionLock; a releaseHeavy queued
+    // behind THIS call's eviction otherwise runs in the microtask gap between
+    // `await evictIfNeeded` resolving and this increment — it would see
+    // residentHeavy already set but heavyInFlight still 0, and unload the model
+    // we just made resident (a wasted unload + cold reload on the next fetch).
+    // Incrementing first closes that gap: releaseHeavy then sees heavyInFlight > 0
+    // and defers. evictIfNeeded never throws (unloadModel swallows its own
+    // errors), so this can't leak; balanced by a decrement on every exit path
+    // further down (fetch failure, non-2xx, and the streaming finally).
     const isHeavy = target.cfg?.heavy === true;
     if (isHeavy) heavyInFlight++;
+    await evictIfNeeded(target);
     lastCallAt.set(target.profileName, now());
 
     // /no_think for thinking-capable families (qwen3). qwen3 is a thinking

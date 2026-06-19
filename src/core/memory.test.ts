@@ -247,13 +247,19 @@ test('recallScoped returns global ∪ one agent, never another agent private', (
 
     // Agent-scoped search surfaces the global row too (the browser bug), and
     // keeps another agent's namespace out.
-    const a7 = store.recallScoped('lisbon widgets gadgets', 7).map((r) => r.content).join(' | ');
+    const a7 = store
+      .recallScoped('lisbon widgets gadgets', 7)
+      .map((r) => r.content)
+      .join(' | ');
     assert.match(a7, /Lisbon/, 'global rows must surface in an agent-scoped search');
     assert.match(a7, /widgets/);
     assert.doesNotMatch(a7, /gadgets/);
 
     // No agentId → global only.
-    const global = store.recallScoped('lisbon widgets gadgets', undefined).map((r) => r.content).join(' | ');
+    const global = store
+      .recallScoped('lisbon widgets gadgets', undefined)
+      .map((r) => r.content)
+      .join(' | ');
     assert.match(global, /Lisbon/);
     assert.doesNotMatch(global, /widgets/);
   } finally {

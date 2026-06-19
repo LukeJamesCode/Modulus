@@ -238,7 +238,9 @@ export function createAgentScheduleStore(
     return get(Number(info.lastInsertRowid))!;
   }
 
-  function list(options: { active?: boolean; limit?: number; chatId?: number } = {}): AgentSchedule[] {
+  function list(
+    options: { active?: boolean; limit?: number; chatId?: number } = {},
+  ): AgentSchedule[] {
     const clauses: string[] = [];
     const params: unknown[] = [];
     if (options.active !== undefined) {
@@ -267,9 +269,8 @@ export function createAgentScheduleStore(
   // that belongs to the same chat — never another chat's schedule by id.
   function removeForChat(chatId: number, id: number): boolean {
     return (
-      db
-        .prepare(`DELETE FROM agent_schedules WHERE id = ? AND notify_chat_id = ?`)
-        .run(id, chatId).changes > 0
+      db.prepare(`DELETE FROM agent_schedules WHERE id = ? AND notify_chat_id = ?`).run(id, chatId)
+        .changes > 0
     );
   }
 
@@ -277,10 +278,7 @@ export function createAgentScheduleStore(
   // nextFireAfter and stay active; legacy 'once' rows deactivate; legacy
   // recurring rows step their fixed interval. A cron that somehow fails to
   // advance (corrupt row) is deactivated rather than allowed to throw the sweep.
-  function advanceRow(
-    schedule: AgentSchedule,
-    now: number,
-  ): { active: number; nextRunAt: number } {
+  function advanceRow(schedule: AgentSchedule, now: number): { active: number; nextRunAt: number } {
     if (schedule.cron) {
       try {
         const next = nextFireAfter(

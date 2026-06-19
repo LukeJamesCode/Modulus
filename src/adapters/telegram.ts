@@ -32,6 +32,7 @@ import type { Followups, FollowupRow } from '../core/followups.js';
 import type { AgentRegistry } from '../core/agents.js';
 import type { AgentQueue } from '../core/agent-queue.js';
 import type { AgentApproval } from '../core/agent-approvals.js';
+import type { SkillProposal } from '../core/skill-improve.js';
 import {
   formatAgentList,
   findEditableAgent,
@@ -50,9 +51,11 @@ import {
 } from './schedule-commands.js';
 import { handleStanding, type StandingDeps } from './standing-commands.js';
 import { handleSkills, handleSkill, type SkillDeps } from './skill-commands.js';
+import { handleBind, handleUnbind, type BindingDeps } from './binding-commands.js';
 import type { SchedulingDeps } from '../core/schedule-tools.js';
 import type { HeartbeatStats } from '../core/heartbeat.js';
 import { formatWindow, parseDuration, parseWindow } from '../core/prefs.js';
+import { describeCron } from '../core/schedule-parse.js';
 import type { Nudge, NudgeAction, SchedulerStats } from '../core/scheduler.js';
 import {
   formatModuleReadinessForTelegram,
@@ -60,6 +63,7 @@ import {
 } from '../core/module-readiness.js';
 import type {
   AfterTurnContext,
+  HostOrchestrator,
   ModuleAfterReplyRecord,
   ModuleAfterTurnRecord,
   ModuleCallbackRecord,
@@ -81,6 +85,11 @@ export interface TelegramOptions {
   ownerId?: number;
   log: Logger;
   orchestrator: Orchestrator;
+  // Per-chat orchestrator override for channel→agent bindings (v2.0.0). When a
+  // chat is bound to a fleet agent, this returns that agent's persona
+  // orchestrator; unbound chats get the default. Omitted in tests → default
+  // orchestrator for every chat. Wired in start.ts to ConversationRouter.
+  resolveOrchestrator?: (chatId: number) => HostOrchestrator;
   llm: LLM;
   tools: ToolRegistry;
   db: DB;
@@ -98,6 +107,9 @@ export interface TelegramOptions {
   // playbooks the assistant loads on its own. Read-only; nothing here grants a
   // tool. Optional in tests; the commands report unavailable when omitted.
   skills?: SkillDeps;
+  // Channel→agent bindings (/bind, /unbind). Optional in tests; the commands
+  // report unavailable when omitted.
+  binding?: BindingDeps;
   // Heartbeat stats for /status (last beat, cadence). Optional.
   heartbeatStats?: () => HeartbeatStats;
   // Multi-agent engine, for /agents and /dispatch. Optional in tests.
@@ -136,6 +148,11 @@ export interface TelegramOptions {
   // Resolve a Yes/No press on an agent-approval prompt. Wired to the
   // ApprovalManager; the allowlist middleware has already vetted the presser.
   onAgentApproval?: (id: number, approved: boolean, fromUserId: number) => void;
+  // Self-improving-skill proposals: `/proposals` lists pending ones, and a
+  // Yes/No press resolves via onSkillProposal (approve → commit + hot-load).
+  // Optional in tests.
+  proposals?: { listPending: () => SkillProposal[] };
+  onSkillProposal?: (id: number, approved: boolean, fromUserId: number) => void;
   // Core instant responses, when `instantResponses.enabled` is on. Created in
   // start.ts and shared with the panel so both surfaces share anti-repeat
   // history; omitted (undefined) when the setting is off.
@@ -178,6 +195,9 @@ export interface TelegramAdapter {
   // Push an agent-approval prompt (with ✅/❌ buttons) to a chat. The button
   // press comes back as an `agentapprove:<id>:<yes|no>` callback.
   sendApprovalRequest(chatId: number, approval: AgentApproval): Promise<void>;
+  // Push a self-improving-skill proposal (with ✅/❌ buttons) to a chat. The
+  // press comes back as a `skillpropose:<id>:<yes|no>` callback.
+  sendSkillProposal(chatId: number, proposal: SkillProposal): Promise<void>;
 }
 
 // How long a confirm-tier prompt waits for a Yes/No before giving up and
@@ -186,8 +206,9 @@ export interface TelegramAdapter {
 const CONFIRM_TIMEOUT_MS = 2 * 60_000;
 
 // Single source of truth for core slash commands. `argsHint` is rendered next
-// to the name in /help; `advertised` is what gets sent to setMyCommands so it
-// shows up in Telegram's slash-suggestion popup (which doesn't show args).
+// to the name in /help; `advertised` is the short description shown in
+// Telegram's slash-suggestion popup (which doesn't show args) for the curated
+// everyday subset (EVERYDAY_COMMANDS). The full set is always in /help.
 interface CoreCommandDef {
   name: string;
   argsHint?: string;
@@ -299,6 +320,22 @@ const CORE_COMMAND_DEFS: readonly CoreCommandDef[] = [
     advertised: 'Delete a user-created agent',
   },
   {
+    name: 'bind',
+    argsHint: '[<agent>]',
+    help: 'talk to a specific agent in this chat (no arg shows the current one)',
+    advertised: 'Bind this chat to a fleet agent',
+  },
+  {
+    name: 'unbind',
+    help: 'return this chat to the default Modulus assistant',
+    advertised: 'Restore the default assistant',
+  },
+  {
+    name: 'proposals',
+    help: 'review skills the assistant has proposed (approve/reject)',
+    advertised: 'Review proposed skills',
+  },
+  {
     name: 'model',
     help: 'show the active model + profile',
     advertised: 'Show active model and profile',
@@ -357,12 +394,63 @@ const CORE_COMMAND_DEFS: readonly CoreCommandDef[] = [
   },
 ];
 
-const CORE_COMMAND_HELP = CORE_COMMAND_DEFS.map((c) => ({
-  command: c.argsHint ? `${c.name} ${c.argsHint}` : c.name,
-  description: c.help,
-}));
+// /help is grouped by theme so the ~35 core commands scan instead of arriving
+// as one wall of text. Any command not listed here still shows under "More",
+// so a newly added command is never silently dropped from help.
+const HELP_GROUPS: readonly { title: string; names: readonly string[] }[] = [
+  { title: 'Chatting', names: ['start', 'help', 'newchat', 'stop', 'think', 'fast', 'model'] },
+  { title: 'Reminders', names: ['remind', 'every', 'schedules', 'schedule', 'standing'] },
+  {
+    title: 'Agents & skills',
+    names: [
+      'agents',
+      'dispatch',
+      'hire',
+      'newagent',
+      'agent',
+      'fire',
+      'bind',
+      'unbind',
+      'skills',
+      'skill',
+      'proposals',
+    ],
+  },
+  {
+    title: 'Proactive nudges',
+    names: [
+      'followups',
+      'followup_cancel',
+      'followup_clear',
+      'quiet',
+      'proactive',
+      'nudges',
+      'why',
+    ],
+  },
+  { title: 'System', names: ['status', 'modules', 'doctor', 'logs', 'lasterror', 'devmode'] },
+];
+
+function formatCoreCommand(c: CoreCommandDef): string {
+  return `/${c.argsHint ? `${c.name} ${c.argsHint}` : c.name} — ${c.help}`;
+}
 
 const CORE_COMMANDS = new Set(CORE_COMMAND_DEFS.map((c) => c.name));
+
+// The curated subset advertised in Telegram's native "/" command menu. Kept
+// short on purpose: the everyday verbs an ordinary person reaches for, not the
+// ~35 power/diagnostic commands. Showing all of them in the popup reads as
+// "this is for engineers"; /help still lists everything, grouped. The order
+// here is the order Telegram renders them.
+const EVERYDAY_COMMANDS = [
+  'help',
+  'newchat',
+  'remind',
+  'every',
+  'status',
+  'modules',
+  'stop',
+] as const;
 
 export interface TelegramHelpOptions {
   modules?: Array<Pick<ModuleReadiness, 'name' | 'enabled'> & { status?: string }>;
@@ -498,10 +586,26 @@ export function handleFollowupClear(followups: Followups, chatId: number): strin
 }
 
 export function buildTelegramHelp(opts: TelegramHelpOptions = {}): string {
-  const lines = [
-    'Core commands:',
-    ...CORE_COMMAND_HELP.map((c) => `/${c.command} — ${c.description}`),
-  ];
+  const byName = new Map(CORE_COMMAND_DEFS.map((c) => [c.name, c]));
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const g of HELP_GROUPS) {
+    const defs = g.names
+      .map((n) => byName.get(n))
+      .filter((c): c is CoreCommandDef => c !== undefined);
+    if (defs.length === 0) continue;
+    if (lines.length > 0) lines.push('');
+    lines.push(`${g.title}:`);
+    for (const c of defs) {
+      lines.push(formatCoreCommand(c));
+      seen.add(c.name);
+    }
+  }
+  const ungrouped = CORE_COMMAND_DEFS.filter((c) => !seen.has(c.name));
+  if (ungrouped.length > 0) {
+    lines.push('', 'More:');
+    for (const c of ungrouped) lines.push(formatCoreCommand(c));
+  }
   const mods = opts.modules ?? [];
   const cmds = opts.moduleCommands ?? [];
   if (mods.length > 0) {
@@ -537,7 +641,15 @@ function quietStateLines(
   const lines = [`quiet: ${check.quiet ? 'on' : 'off'}`];
   if (window) lines.push(`daily window: ${window}`);
   if (check.quiet && check.reason) lines.push(`quiet reason: ${check.reason}`);
-  if (check.until) lines.push(`quiet until: ${new Date(check.until).toISOString()}`);
+  if (check.until) {
+    const until = new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(new Date(check.until));
+    lines.push(`quiet until: ${until}`);
+  }
   return lines;
 }
 
@@ -552,7 +664,7 @@ export function formatProactiveText(
     lines.push('jobs: none');
   } else {
     lines.push(`jobs: ${jobs.length}`);
-    for (const j of jobs) lines.push(`• ${j.module}:${j.name} — ${j.cron}`);
+    for (const j of jobs) lines.push(`• ${j.module}:${j.name} — ${describeCron(j.cron)}`);
   }
   lines.push('', 'Quiet state:', ...quietStateLines(prefs, chatId, now));
   return lines.join('\n');
@@ -827,7 +939,9 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     }
     const hb = opts.heartbeatStats?.();
     if (hb) {
-      const last = hb.lastBeatAt ? `${Math.round((Date.now() - hb.lastBeatAt) / 1000)}s ago` : 'not yet';
+      const last = hb.lastBeatAt
+        ? `${Math.round((Date.now() - hb.lastBeatAt) / 1000)}s ago`
+        : 'not yet';
       lines.push(`heartbeat: ${hb.cron} · last beat ${last} (${hb.beats} total)`);
     }
     return lines.join('\n');
@@ -907,7 +1021,9 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
           ctx.chat.id,
         );
         if (matched) {
-          await ctx.reply("✅ You're connected to Modulus. Restart Modulus to finish.").catch(() => {});
+          await ctx
+            .reply("✅ You're connected to Modulus. Restart Modulus to finish.")
+            .catch(() => {});
           return;
         }
       }
@@ -926,6 +1042,7 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
   // reply renderer (splitForTelegram), the core-command guard, and devmode.
   const chatDispatcher = createChatDispatcher({
     orchestrator: opts.orchestrator,
+    ...(opts.resolveOrchestrator ? { resolveOrchestrator: opts.resolveOrchestrator } : {}),
     commands: () => opts.moduleCommands?.() ?? [],
     intercepts: () => opts.moduleIntercepts?.() ?? [],
     afterReplies: () => opts.moduleAfterReplies?.() ?? [],
@@ -1002,7 +1119,9 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
       await ctx.reply('Reminders are not available.');
       return;
     }
-    await ctx.reply(handleScheduleCommand(opts.scheduling, ctx.chat.id, (ctx.match ?? '').toString()));
+    await ctx.reply(
+      handleScheduleCommand(opts.scheduling, ctx.chat.id, (ctx.match ?? '').toString()),
+    );
   });
 
   bot.command('standing', async (ctx) => {
@@ -1028,6 +1147,64 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
       return;
     }
     await ctx.reply(handleSkill(opts.skills, (ctx.match ?? '').toString()));
+  });
+
+  bot.command('bind', async (ctx) => {
+    if (!opts.binding) {
+      await ctx.reply('Agent binding is not available.');
+      return;
+    }
+    await ctx.reply(handleBind(opts.binding, (ctx.match ?? '').toString(), ctx.chat.id));
+  });
+
+  bot.command('unbind', async (ctx) => {
+    if (!opts.binding) {
+      await ctx.reply('Agent binding is not available.');
+      return;
+    }
+    await ctx.reply(handleUnbind(opts.binding, ctx.chat.id));
+  });
+
+  // Push one skill proposal as a Yes/No card. Hoisted so both the notifier
+  // (sendSkillProposal) and `/proposals` use one definition.
+  async function pushSkillProposal(chatId: number, proposal: SkillProposal): Promise<void> {
+    const keyboard = new InlineKeyboard()
+      .text('✅ Approve', `skillpropose:${proposal.id}:yes`)
+      .text('❌ Reject', `skillpropose:${proposal.id}:no`);
+    const action = proposal.baseVersion ? 'update' : 'new skill';
+    const tools = Array.isArray(proposal.manifest['tools'])
+      ? (proposal.manifest['tools'] as unknown[]).map(String)
+      : [];
+    const text =
+      `🧩 Skill proposal (${action})\n\n` +
+      `${proposal.proposedBy} proposes '${proposal.skillName}'.\n` +
+      `Why: ${proposal.rationale}\n` +
+      `Uses tools: ${tools.length ? tools.join(', ') : 'none'}\n\n` +
+      `Approve to add it (it runs no code, and grants no tool you haven't already permitted).`;
+    try {
+      await bot.api.sendMessage(chatId, text, { reply_markup: keyboard });
+    } catch (e) {
+      log.warn('sendSkillProposal failed', {
+        chatId,
+        id: proposal.id,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  bot.command('proposals', async (ctx) => {
+    if (!opts.proposals) {
+      await ctx.reply('Skill proposals are not available.');
+      return;
+    }
+    const pending = opts.proposals.listPending();
+    if (pending.length === 0) {
+      await ctx.reply('No skill proposals are waiting for review.');
+      return;
+    }
+    // Re-send each as its own Yes/No card so they can be acted on inline.
+    await ctx.reply(`🧩 ${pending.length} skill proposal(s) awaiting review:`);
+    for (const p of pending) await pushSkillProposal(ctx.chat.id, p);
   });
 
   bot.command('newchat', async (ctx) => {
@@ -1113,9 +1290,12 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     const keyboard = new InlineKeyboard()
       .text('🔥 Fire', `fire:yes:${editable.agent.name}`)
       .text('Cancel', 'fire:no');
-    await ctx.reply(`Fire '${editable.agent.name}'? This deletes the agent (its task history stays).`, {
-      reply_markup: keyboard,
-    });
+    await ctx.reply(
+      `Fire '${editable.agent.name}'? This deletes the agent (its task history stays).`,
+      {
+        reply_markup: keyboard,
+      },
+    );
   });
 
   bot.command('model', async (ctx) => {
@@ -1257,6 +1437,23 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
       .catch(() => {});
   });
 
+  // Skill-proposal Yes/No (propose_skill). Same shape as agent approvals: global
+  // id, any allowlisted user may answer, idempotent (a stale press no-ops in the
+  // manager). Approve → the daemon commits the skill and hot-loads it.
+  bot.callbackQuery(/^skillpropose:(\d+):(yes|no)$/, async (ctx) => {
+    if (!ctx.from) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const id = Number(ctx.match[1]);
+    const approved = ctx.match[2] === 'yes';
+    opts.onSkillProposal?.(id, approved, ctx.from.id);
+    await ctx.answerCallbackQuery({ text: approved ? 'Approving…' : 'Rejected' });
+    await ctx
+      .editMessageText(`${approved ? '✅ Approved' : '❌ Rejected'} · skill proposal #${id}`)
+      .catch(() => {});
+  });
+
   bot.on('callback_query:data', async (ctx) => {
     if (!ctx.chat || !ctx.from) {
       await answerCallback(ctx);
@@ -1267,8 +1464,12 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     if (data.startsWith('module:')) {
       const command = data.slice('module:'.length);
       await answerCallback(ctx, `Running /${command}`);
-      const handled = await chatDispatcher.invokeCommand(command, '', ctx.chat.id, ctx.from.id, (t) =>
-        ctx.reply(t, { reply_markup: keyboardFor('modules') }),
+      const handled = await chatDispatcher.invokeCommand(
+        command,
+        '',
+        ctx.chat.id,
+        ctx.from.id,
+        (t) => ctx.reply(t, { reply_markup: keyboardFor('modules') }),
       );
       if (!handled)
         await replyWithButtons(ctx, `Module command /${command} is not loaded.`, 'modules');
@@ -1573,11 +1774,11 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
   });
 
   function buildAdvertisedCommands(): Array<{ command: string; description: string }> {
-    return [
-      { command: 'help', description: 'Show available commands' },
-      { command: 'newchat', description: 'Start a new conversation' },
-      { command: 'stop', description: 'Cancel an in-flight reply' },
-    ];
+    const byName = new Map(CORE_COMMAND_DEFS.map((c) => [c.name, c]));
+    return EVERYDAY_COMMANDS.map((name) => ({
+      command: name,
+      description: byName.get(name)?.advertised ?? name,
+    }));
   }
 
   return {
@@ -1654,6 +1855,7 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
         });
       }
     },
+    sendSkillProposal: pushSkillProposal,
     async sendVoice(chatId, voice) {
       try {
         const file = voice.path
@@ -1752,6 +1954,7 @@ export function handleQuiet(
     if (p.pausedUntilMs && p.pausedUntilMs > now().getTime()) {
       lines.push(`snoozed until: ${new Date(p.pausedUntilMs).toLocaleString()}`);
     }
+    lines.push('', 'Quiet hours: /quiet 22:00-07:00 · snooze: /quiet 1h · /quiet on|off');
     return lines.join('\n');
   }
   if (a === 'on') {

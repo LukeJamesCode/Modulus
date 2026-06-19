@@ -63,7 +63,10 @@ export function hostMatchesAllowlist(host: string, allow: readonly string[]): bo
 // its basename (sans a Windows .exe) equals an allowlisted entry's basename.
 // '*' = any binary.
 export function binaryAllowed(command: string, allow: readonly string[]): boolean {
-  const norm = (s: string): string => basename(s).toLowerCase().replace(/\.exe$/, '');
+  const norm = (s: string): string =>
+    basename(s)
+      .toLowerCase()
+      .replace(/\.exe$/, '');
   const cmd = norm(command);
   for (const raw of allow) {
     if (raw.trim() === '*') return true;

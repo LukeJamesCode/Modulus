@@ -14,6 +14,9 @@ function SettingsTab({ onReRunWizard, onSaved }) {
   const [saving, setSaving] = useStateSet(false);
   const [saved, setSaved] = useStateSet(false);
   const [models, setModels] = useStateSet([]);
+  // Everyday users only need Telegram + models; the rest folds away so the page
+  // isn't a wall of knobs on first open.
+  const [showAdvanced, setShowAdvanced] = useStateSet(false);
 
   const load = async () => {
     const r = await window.api.get('/api/config');
@@ -118,11 +121,38 @@ function SettingsTab({ onReRunWizard, onSaved }) {
             models={models}
             onReRun={onReRunWizard}
           />
-          <HardwareSection cfg={cfg} set={set} locks={locks} />
-          <BehaviourSection cfg={cfg} set={set} />
-          <LoggingSection cfg={cfg} set={set} locks={locks} />
-          <MemoryBrowserSection />
-          <FrontendSection onSaved={onSaved} />
+          <button
+            onClick={() => setShowAdvanced((s) => !s)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              alignSelf: 'flex-start',
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-2)',
+              fontSize: 13.5,
+              fontWeight: 600,
+              cursor: 'pointer',
+              padding: '4px 0',
+            }}
+          >
+            <window.Icon
+              name="fwd"
+              size={14}
+              style={{ transform: showAdvanced ? 'rotate(90deg)' : 'none', transition: 'transform .2s' }}
+            />
+            {showAdvanced ? 'Hide advanced settings' : 'Advanced settings'}
+          </button>
+          {showAdvanced && (
+            <>
+              <HardwareSection cfg={cfg} set={set} locks={locks} />
+              <BehaviourSection cfg={cfg} set={set} />
+              <LoggingSection cfg={cfg} set={set} locks={locks} />
+              <MemoryBrowserSection />
+              <FrontendSection onSaved={onSaved} />
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -540,6 +570,31 @@ function LoggingSection({ cfg, set, locks }) {
   );
 }
 
+// A lightweight "Learn more" disclosure for the mechanism detail behind a
+// plain-language setting — keeps the everyday hint short while leaving the full
+// story one click away. Native <details> mirrors the ThinkingBlock pattern.
+function MoreInfo({ children }) {
+  return (
+    <details style={{ marginTop: 6 }}>
+      <summary
+        style={{
+          cursor: 'pointer',
+          fontSize: 12.5,
+          fontWeight: 600,
+          color: 'var(--text-3)',
+          userSelect: 'none',
+          width: 'fit-content',
+        }}
+      >
+        Learn more
+      </summary>
+      <p style={{ fontSize: 12.5, color: 'var(--text-3)', lineHeight: 1.5, marginTop: 6 }}>
+        {children}
+      </p>
+    </details>
+  );
+}
+
 function BehaviourSection({ cfg, set }) {
   // cfg.instantResponses arrives from /api/config as a plain boolean and is
   // saved back through the shared config save() with the other fields. The two
@@ -548,9 +603,13 @@ function BehaviourSection({ cfg, set }) {
   const extraction = cfg.memoryExtraction !== false;
   const dreaming = cfg.memoryDreaming !== false;
   return (
-    <Group icon="spark" title="Behaviour" desc="How Modulus replies, learns, and tidies its memory.">
+    <Group
+      icon="spark"
+      title="Behaviour"
+      desc="How Modulus replies, learns, and tidies its memory."
+    >
       <div>
-        <window.Label hint="Acknowledge instantly when a reply is predicted slow (reasoning, delegation), then stream the real answer when it’s ready — no extra model call for the ack.">
+        <window.Label hint="When a reply will take a moment, Modulus says it’s working right away, then sends the full answer once it’s ready.">
           Instant responses
         </window.Label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -561,9 +620,13 @@ function BehaviourSection({ cfg, set }) {
           />
           <span style={{ fontSize: 13.5, color: 'var(--text-2)' }}>{on ? 'On' : 'Off'}</span>
         </div>
+        <MoreInfo>
+          The acknowledgement uses no extra model call. It mostly shows up when a reply needs
+          deeper reasoning or several steps to put together.
+        </MoreInfo>
       </div>
       <div>
-        <window.Label hint="After each chat turn, quietly note 0–2 durable facts about you (preferences, names, recurring context) so later turns recall them. Runs on the small model after the reply ships — never on the reply path. Off by default on Small-tier hardware. Takes effect on next restart.">
+        <window.Label hint="Modulus quietly remembers a few useful facts about you — names, preferences, recurring details — so you don’t have to repeat yourself.">
           Memory extraction
         </window.Label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -572,11 +635,18 @@ function BehaviourSection({ cfg, set }) {
             onChange={(v) => set({ memoryExtraction: v })}
             label="Memory extraction"
           />
-          <span style={{ fontSize: 13.5, color: 'var(--text-2)' }}>{extraction ? 'On' : 'Off'}</span>
+          <span style={{ fontSize: 13.5, color: 'var(--text-2)' }}>
+            {extraction ? 'On' : 'Off'}
+          </span>
         </div>
+        <MoreInfo>
+          Notes 0–2 facts per chat. It runs on the small model after your reply has been sent —
+          never on the reply itself — and is off by default on small hardware. Takes effect after
+          the next restart.
+        </MoreInfo>
       </div>
       <div>
-        <window.Label hint="A nightly housekeeping pass that consolidates memory — promotes facts that keep proving useful and forgets stale notes that never were. Deterministic, no model call. Takes effect on next restart.">
+        <window.Label hint="Each night Modulus tidies its memory — keeping what keeps proving useful and forgetting what doesn’t.">
           Memory dreaming
         </window.Label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -587,6 +657,9 @@ function BehaviourSection({ cfg, set }) {
           />
           <span style={{ fontSize: 13.5, color: 'var(--text-2)' }}>{dreaming ? 'On' : 'Off'}</span>
         </div>
+        <MoreInfo>
+          A fixed housekeeping pass with no model call. Takes effect after the next restart.
+        </MoreInfo>
       </div>
     </Group>
   );

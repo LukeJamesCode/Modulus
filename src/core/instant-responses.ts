@@ -31,6 +31,14 @@ export interface InstantResponder {
   respond(text: string, chatId: number, now?: Date): InstantResponse | null;
 }
 
+export interface InstantResponderOptions {
+  // Resolver for the active chat model tag, so "what model are you running"
+  // answers truthfully (and provider-neutrally — the chat model may be a routed
+  // cloud tag in Power Mode) instead of a hardcoded guess. Omit, or let it
+  // throw / return empty, to fall back to a generic but still-accurate phrasing.
+  modelName?: () => string;
+}
+
 type ReplyPool = string[] | ((hour: number) => string[]);
 
 // ── Trivial replies — message IS the answer, no orchestrator follow-up ────
@@ -93,7 +101,7 @@ const TOOL_INTENT_RE =
 const QUERY_ACKS = ['Checking.', 'Looking now.', 'One sec.', 'On it — checking.'];
 const ACTION_ACKS = ['On it.', 'Got it.', 'Doing that now.', 'Sure thing.', 'Yeah, on it.'];
 
-export function createInstantResponder(): InstantResponder {
+export function createInstantResponder(opts: InstantResponderOptions = {}): InstantResponder {
   // Per-chat memory of the last reply we sent, so a user who sends "hi" twice
   // in a row doesn't get the same variant verbatim. Keyed by chatId so chats
   // don't bleed into each other; instance-scoped so the daemon's two surfaces
@@ -150,9 +158,19 @@ export function createInstantResponder(): InstantResponder {
       t.setDate(t.getDate() + 1);
       return t.toLocaleDateString('en-US', { weekday: 'long' });
     }
-    // "what model are you running" / "which model are you on"
+    // "what model are you running" / "which model are you on". Answer from the
+    // live config — a hardcoded family name goes stale the moment the user
+    // points a profile at a different model (or a cloud provider in Power Mode).
     if (/^(what|which)\s+model\s+(are\s+you|you'?re)\s+(running|using|on)$/.test(m)) {
-      return 'I run on Modulus with the qwen3.5 family — use /model to see the active profile.';
+      let tag: string | undefined;
+      try {
+        tag = opts.modelName?.().trim() || undefined;
+      } catch {
+        tag = undefined;
+      }
+      return tag
+        ? `I'm running on the ${tag} model — use /model to see or change the active profile.`
+        : 'Use /model to see the model I’m currently running.';
     }
     // "what time is it (right now)" / "what's the time" — the small model
     // hallucinates GMT offsets and clock times, so answer deterministically.

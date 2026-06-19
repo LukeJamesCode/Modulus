@@ -9,7 +9,8 @@ const { useState, useEffect, useCallback, useRef } = React;
 // conversational home (chat + voice + fleet control). Daemon health/controls
 // live under System › Status.
 const NAV = [
-  { id: 'agents', label: 'Agents', icon: 'spark' },
+  { id: 'agents', label: 'Home', icon: 'spark' },
+  { id: 'fleet', label: 'Agents', icon: 'user' },
   { id: 'modules', label: 'Modules', icon: 'plug' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
   { id: 'system', label: 'System', icon: 'pulse' },
@@ -204,6 +205,8 @@ function App() {
         enabledModules={enabledModules}
         needsSetup={needsSetup}
         onOpenModules={() => setRoute('modules')}
+        version={state.version}
+        health={healthFlags}
       />
 
       <main className="main-panel">
@@ -211,8 +214,10 @@ function App() {
         {offline && <OfflineBar onRetry={refresh} />}
         {state.cfgError && <ConfigErrorBar message={state.cfgError} />}
         <div className="content-shell">
-          {route === 'agents' && (
+          {(route === 'agents' || route === 'fleet') && (
             <window.AgentsTab
+              // Remount when switching Home<->Agents so `view` re-derives from `mode`.
+              key={route}
               state={state}
               agentStatus={agentStatus}
               onStart={() => agentAction('start')}
@@ -220,6 +225,8 @@ function App() {
               voiceEnabled={voiceEnabled}
               health={healthFlags}
               activeModel={activeModel}
+              onNavigate={setRoute}
+              mode={route === 'fleet' ? 'fleet' : 'home'}
             />
           )}
           {route === 'modules' && <window.ModulesTab />}
@@ -317,7 +324,7 @@ function Topbar({ state, setRoute, offline }) {
       tone: t.status === 'error' ? 'err' : 'accent',
       title: t.status === 'error' ? 'Task Error' : 'Active Run',
       desc: t.agentName || `Task #${t.id}`,
-      action: () => setRoute('agents'),
+      action: () => setRoute('fleet'),
     })),
   ];
 
@@ -338,7 +345,7 @@ function Topbar({ state, setRoute, offline }) {
           <window.StatusDot state={offline ? 'error' : 'running'} size={7} pulse={!offline} />
           {offline ? 'Offline' : 'Connected'}
         </span>
-        <button className="dash-btn green" onClick={() => setRoute('agents')}>
+        <button className="dash-btn green" onClick={() => setRoute('fleet')}>
           <window.Icon name="play" size={14} /> New Run
         </button>
         <div className="icon-action" style={{ position: 'relative' }} ref={dropdownRef}>
@@ -578,7 +585,17 @@ function Wordmark() {
 Object.assign(window, { HelixMark });
 
 /* ---------------- sidebar ---------------- */
-function Sidebar({ route, setRoute, moduleCount, enabledModules, needsSetup, onOpenModules }) {
+function Sidebar({
+  route,
+  setRoute,
+  moduleCount,
+  enabledModules,
+  needsSetup,
+  onOpenModules,
+  agentStatus,
+  version,
+  health,
+}) {
   const items = NAV.filter(
     (n) => !n.requiresModule || (enabledModules || []).indexOf(n.requiresModule) !== -1,
   );
@@ -713,24 +730,43 @@ function Sidebar({ route, setRoute, moduleCount, enabledModules, needsSetup, onO
       )}
       <div style={{ flex: 1 }} />
 
-      <div
-        style={{
-          padding: '0 12px 12px',
-          fontSize: '10px',
-          color: 'var(--text-3)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '4px',
-          margin: '0 10px',
-        }}
-      >
-        <span>CONTROL CENTER v1.2.3</span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <span className="dot green" style={{ width: '6px', height: '6px' }}></span> All systems
-          operational
-        </span>
-      </div>
+      <SidebarFooter version={version} agentStatus={agentStatus} health={health} />
     </aside>
+  );
+}
+
+// Live footer: the real version from /api/state, and a one-line health summary
+// driven by the agent + Ollama status rather than a hardcoded "operational".
+function SidebarFooter({ version, agentStatus, health }) {
+  const ollamaOk = !health || health.ollama;
+  const systemsOk = agentStatus === 'running' && ollamaOk;
+  const tone = systemsOk ? 'green' : 'yellow';
+  const label = systemsOk
+    ? 'All systems operational'
+    : agentStatus === 'starting'
+      ? 'Starting…'
+      : agentStatus === 'stopping'
+        ? 'Stopping…'
+        : agentStatus !== 'running'
+          ? 'Agent stopped'
+          : 'Model server unreachable';
+  return (
+    <div
+      style={{
+        padding: '0 12px 12px',
+        fontSize: '10px',
+        color: 'var(--text-3)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '4px',
+        margin: '0 10px',
+      }}
+    >
+      <span>CONTROL CENTER{version ? ` v${version}` : ''}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+        <span className={`dot ${tone}`} style={{ width: '6px', height: '6px' }}></span> {label}
+      </span>
+    </div>
   );
 }
 

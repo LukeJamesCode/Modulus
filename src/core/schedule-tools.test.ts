@@ -24,7 +24,16 @@ function setup() {
   const registry = createAgentRegistry(db);
   const store = createAgentScheduleStore(db, registry);
   const deps: SchedulingDeps = { store, registry, log, timeZone: 'UTC', now: () => NOW };
-  return { db, registry, store, deps, cleanup: () => { db.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return {
+    db,
+    registry,
+    store,
+    deps,
+    cleanup: () => {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 test('create_schedule tool creates a notify-only reminder from chat context', async () => {

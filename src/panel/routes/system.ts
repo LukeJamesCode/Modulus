@@ -19,6 +19,7 @@ import type { ModulusConfig } from '../../cli/config-store.js';
 import { logFilePath, metricsFilePath } from '../../cli/daemon.js';
 import { collectDoctorChecks } from '../../cli/doctor.js';
 import { parseCron, nextFireAfter } from '../../core/cron.js';
+import { describeCron } from '../../core/schedule-parse.js';
 import { readMetrics } from '../../core/metrics.js';
 import { createPrefsStore, formatWindow } from '../../core/prefs.js';
 import { readJson, sendJson, sse, writeSseHead } from '../http.js';
@@ -54,7 +55,13 @@ interface SchedulerView {
   configured: boolean;
   proactive?: boolean;
   nowMs?: number;
-  jobs?: Array<{ module: string; name: string; cron: string; nextFireMs: number | null }>;
+  jobs?: Array<{
+    module: string;
+    name: string;
+    cron: string;
+    human: string;
+    nextFireMs: number | null;
+  }>;
   quietWindow?: string | null;
   pausedUntilMs?: number | null;
   quiet?: { quiet: boolean; reason: string | null; until: number | null };
@@ -78,7 +85,7 @@ function schedulerView(deps: PanelDeps, runtime: PanelRuntime): SchedulerView {
       } catch {
         nextFireMs = null; // unparseable cron — surface the job without a time
       }
-      return { module: j.module, name: j.name, cron: j.cron, nextFireMs };
+      return { module: j.module, name: j.name, cron: j.cron, human: describeCron(j.cron), nextFireMs };
     })
     .sort((a, b) => (a.nextFireMs ?? Infinity) - (b.nextFireMs ?? Infinity));
   const prefs = createPrefsStore(deps.db);

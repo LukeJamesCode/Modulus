@@ -43,11 +43,11 @@ zone, consistent with how the orchestrator anchors the prompt date).
 [0030](../src/storage/migrations/0030_agent_schedules_cron.sql)) with `cron`,
 `time_zone`, `notify_chat_id`. One table now covers:
 
-| Row shape | Behaviour |
-| --- | --- |
-| agents set, `cron` set | dispatch those agents on the cron; ping `notify_chat_id` on task finish |
-| agents set, legacy `recurrence` | unchanged (`once/daily/weekly/monthly/yearly`) |
-| no agents, `notify_chat_id` set | **notify-only reminder** — the sweep emits a nudge of `prompt` |
+| Row shape                       | Behaviour                                                               |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| agents set, `cron` set          | dispatch those agents on the cron; ping `notify_chat_id` on task finish |
+| agents set, legacy `recurrence` | unchanged (`once/daily/weekly/monthly/yearly`)                          |
+| no agents, `notify_chat_id` set | **notify-only reminder** — the sweep emits a nudge of `prompt`          |
 
 The per-minute sweep ([agent-schedules.ts](../src/core/agent-schedules.ts))
 advances a cron row via `nextFireAfter`; legacy rows keep `advanceNextRun`. A
@@ -79,7 +79,7 @@ cadence surface in `/status`.
 
 Migration [0031](../src/storage/migrations/0031_standing_orders.sql) +
 [standing-orders.ts](../src/core/standing-orders.ts). Where a schedule fires at a
-fixed time, a standing order is *evaluated* each beat:
+fixed time, a standing order is _evaluated_ each beat:
 
 - **Agentic** (`agent_id` set): enqueue that agent with `instruction` and a
   notify target; the existing task-done pipeline delivers the answer.

@@ -19,18 +19,28 @@ function setup(existingAgents: number[] = []) {
   const orders = createStandingOrderStore(db);
 
   let registered: ScheduledJob | null = null;
-  const scheduler = { register: (j: ScheduledJob) => { registered = j; } } as unknown as Scheduler;
+  const scheduler = {
+    register: (j: ScheduledJob) => {
+      registered = j;
+    },
+  } as unknown as Scheduler;
 
   const dispatched: Array<{ agentId: number; prompt: string; notifyChatId: number | null }> = [];
   const queue = {
     dispatch: (input: { agentId: number; prompt: string; notifyChatId?: number | null }) => {
-      dispatched.push({ agentId: input.agentId, prompt: input.prompt, notifyChatId: input.notifyChatId ?? null });
+      dispatched.push({
+        agentId: input.agentId,
+        prompt: input.prompt,
+        notifyChatId: input.notifyChatId ?? null,
+      });
       return { id: dispatched.length };
     },
   } as unknown as AgentQueue;
 
   const agents = new Set(existingAgents);
-  const registry = { get: (id: number) => (agents.has(id) ? { id } : undefined) } as unknown as AgentRegistry;
+  const registry = {
+    get: (id: number) => (agents.has(id) ? { id } : undefined),
+  } as unknown as AgentRegistry;
 
   return {
     orders,
@@ -38,8 +48,12 @@ function setup(existingAgents: number[] = []) {
     registry,
     dispatched,
     getJob: () => registered,
-    make: (cron?: string) => setupHeartbeat({ scheduler, orders, queue, registry, log, ...(cron ? { cron } : {}) }),
-    cleanup: () => { db.close(); rmSync(dir, { recursive: true, force: true }); },
+    make: (cron?: string) =>
+      setupHeartbeat({ scheduler, orders, queue, registry, log, ...(cron ? { cron } : {}) }),
+    cleanup: () => {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
   };
 }
 
@@ -94,7 +108,13 @@ test('the registered handler runs a beat and yields the nudges', async () => {
     const result = await h.getJob()!.handler({
       firedAt: new Date('2026-06-15T12:00:00Z'),
       log,
-      cache: { get: () => undefined, set: () => {}, delete: () => {}, clear: () => {}, stats: () => ({ hits: 0, misses: 0, size: 0 }) },
+      cache: {
+        get: () => undefined,
+        set: () => {},
+        delete: () => {},
+        clear: () => {},
+        stats: () => ({ hits: 0, misses: 0, size: 0 }),
+      },
     });
     assert.ok(Array.isArray(result));
     assert.equal((result as unknown[]).length, 1);

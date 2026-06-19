@@ -1,0 +1,15 @@
+{
+  "name": "modulus-mcp",
+  "version": "1.0.0",
+  "description": "Connect Model Context Protocol (MCP) servers and use their tools in Modulus. Configure stdio or HTTP servers in settings; each server's tools appear as mcp__<server>__<tool>. New tools are confirm-tier (you approve each run) until you promote trusted ones to automatic.",
+  "modulus": ">=0.1.0",
+  "deps": [],
+  "capabilities": ["network", "storage"],
+  "permissions": {
+    "network": ["*"],
+    "subprocess": ["*"]
+  },
+  "entrypoints": {
+    "tools": "./tools.ts"
+  }
+}

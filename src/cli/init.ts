@@ -1,9 +1,9 @@
 // `modulus init` — first-run wizard.
 //
-// Walks the user through the bare minimum needed to launch the bot:
+// Walks the user through the bare minimum needed to launch:
 //   1. Where to put the config dir
-//   2. Telegram bot token (validated against /getMe)
-//   3. Allowed Telegram user IDs
+//   2. Telegram bot token (optional — blank runs panel-only; validated against /getMe)
+//   3. Allowed Telegram user IDs (only when a token was given)
 //   4. Ollama URL (validated by listing models)
 //   5. Pick chat / reasoning profile models from the live model list
 //   6. Hardware tier (auto-suggested from RAM, overridable)
@@ -207,40 +207,54 @@ export async function run(): Promise<void> {
     process.stdout.write('Continuing setup in the terminal.\n\n');
   }
 
-  // -- Telegram ----------------------------------------------------------
+  // -- Telegram (optional) ----------------------------------------------
+  // Leaving the token blank runs panel-only — you chat in the web panel and can
+  // add Telegram later by re-running `modulus init` or from the panel Settings.
   let token = existing.telegram.token;
   let botUsername: string | undefined;
+  let allowedIds = existing.telegram.allowedIds;
+  process.stdout.write('Telegram is optional — leave the token blank to use the web panel only.\n');
   for (;;) {
-    token = await password({
-      message: 'Telegram bot token (from @BotFather):',
+    const entered = await password({
+      message: 'Telegram bot token (from @BotFather, blank to skip):',
       mask: '*',
-      validate: (v) => (v.trim().length > 0 ? true : 'Required.'),
     });
+    if (!entered.trim()) {
+      token = '';
+      allowedIds = [];
+      process.stdout.write('Skipping Telegram — using the web panel only.\n');
+      break;
+    }
     process.stdout.write('Validating with Telegram… ');
-    const info = await validateBotToken(token.trim());
+    const info = await validateBotToken(entered.trim());
     if (info.ok) {
+      token = entered.trim();
       botUsername = info.username;
       process.stdout.write(`✓ Connected as @${botUsername ?? '<unknown>'}.\n`);
+      const allowedRaw = await input({
+        message: 'Allowed Telegram user IDs (comma-separated):',
+        default: existing.telegram.allowedIds.join(','),
+        validate: (v) => {
+          try {
+            const ids = parseAllowedIds(v);
+            return ids.length > 0 ? true : 'Need at least one numeric Telegram user id.';
+          } catch (e) {
+            return (e as Error).message;
+          }
+        },
+      });
+      allowedIds = parseAllowedIds(allowedRaw);
       break;
     }
     process.stdout.write('✗ token rejected.\n');
     const retry = await confirm({ message: 'Try a different token?', default: true });
-    if (!retry) break;
+    if (!retry) {
+      token = '';
+      allowedIds = [];
+      process.stdout.write('Skipping Telegram — using the web panel only.\n');
+      break;
+    }
   }
-
-  const allowedRaw = await input({
-    message: 'Allowed Telegram user IDs (comma-separated):',
-    default: existing.telegram.allowedIds.join(','),
-    validate: (v) => {
-      try {
-        const ids = parseAllowedIds(v);
-        return ids.length > 0 ? true : 'Need at least one numeric Telegram user id.';
-      } catch (e) {
-        return (e as Error).message;
-      }
-    },
-  });
-  const allowedIds = parseAllowedIds(allowedRaw);
 
   // -- Ollama ------------------------------------------------------------
   const ollamaUrl = await input({
@@ -393,7 +407,8 @@ export async function run(): Promise<void> {
   }
 
   await setupModules(home, selected);
-  printTelegramCommandsGuide(selected, botUsername);
+  // Only relevant when a Telegram bot is configured; panel-only installs skip it.
+  if (token) printTelegramCommandsGuide(selected, botUsername);
 
   process.stdout.write('\nAll done. Run `modulus start` to launch.\n');
 }

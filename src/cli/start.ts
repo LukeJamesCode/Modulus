@@ -33,6 +33,7 @@ import { createMemoryExtractor } from '../core/memory-extraction.js';
 import {
   createAgentRegistry,
   createAgentRuntime,
+  agentToolPredicate,
   filterToolRegistry,
   isAgentChatId,
   isAgentDmChatId,
@@ -41,12 +42,20 @@ import {
   SPAWN_AGENT_TOOL_NAME,
   SPAWN_AGENTS_TOOL_NAME,
   REQUEST_APPROVAL_TOOL_NAME,
+  type AgentDefinition,
 } from '../core/agents.js';
+import { createConversationRouter, type ConversationRouter } from '../core/conversation-routing.js';
 import { createAgentQueue } from '../core/agent-queue.js';
 import { formatTaskNotification } from '../adapters/agent-commands.js';
 import { setupAgentApprovals } from '../core/agent-approvals.js';
 import { setupAgentDelegation } from '../core/agent-delegation.js';
 import { setupAgentEscalation, ESCALATE_TOOL_NAME } from '../core/agent-escalation.js';
+import {
+  setupAgentHandoff,
+  setupTaskHandoff,
+  HANDOFF_TOOL_NAME,
+  HANDOFF_TASK_TOOL_NAME,
+} from '../core/agent-handoff.js';
 import { setupAgentFleetTools, FLEET_TOOL_NAMES } from '../core/agent-fleet-tools.js';
 import { setupAgentPlanning } from '../core/agent-planning.js';
 import { setupFilesystemTools } from '../core/fs-tools.js';
@@ -64,6 +73,7 @@ import { setupDreaming } from '../core/dreaming.js';
 import type { Tier } from './profiles.js';
 import { createModuleLoader, type HostOrchestrator, type VoicePayload } from '../core/modules.js';
 import { createSkillLoader } from '../core/skills.js';
+import { setupSkillImprove } from '../core/skill-improve.js';
 import {
   setupSkillTools,
   createSkillActivation,
@@ -78,7 +88,13 @@ import { createPrefsStore } from '../core/prefs.js';
 import { createMetricsWriter } from '../core/metrics.js';
 import { createTelegram } from '../adapters/telegram.js';
 import { createInstantResponder } from '../core/instant-responses.js';
-import { effectiveConfig, ensurePrivateDir, homeDir, type ModulusConfig } from './config-store.js';
+import {
+  configFileExists,
+  effectiveConfig,
+  ensurePrivateDir,
+  homeDir,
+  type ModulusConfig,
+} from './config-store.js';
 import { startSetupServer } from './setup-mode.js';
 import { openBrowser } from './open-browser.js';
 import {
@@ -187,10 +203,16 @@ export async function run(options: StartRunOptions = {}): Promise<void> {
   if (existing) clearPid(home);
 
   const cfg = effectiveConfig(home);
-  // A fresh or half-configured install (no valid token, or no one allowlisted)
-  // boots into web-first setup instead of failing: we serve the wizard in the
-  // browser and promote to the full daemon once it's finished.
-  const configured = TOKEN_SHAPE.test(cfg.telegram.token) && cfg.telegram.allowedIds.length > 0;
+  // A fresh install boots into web-first setup instead of failing: we serve the
+  // wizard in the browser and promote to the full daemon once it's finished.
+  // Telegram is optional — a panel-only install (config.json written, no bot
+  // token) is configured, and an env-only Telegram deployment counts too. A
+  // HALF-set Telegram (token with no one allowlisted) is a misconfiguration, so
+  // it bounces back to the wizard rather than booting a bot nobody can talk to.
+  const hasToken = !!cfg.telegram.token;
+  const telegramHalfSet = hasToken && cfg.telegram.allowedIds.length === 0;
+  const hasTelegram = TOKEN_SHAPE.test(cfg.telegram.token) && cfg.telegram.allowedIds.length > 0;
+  const configured = !telegramHalfSet && (hasTelegram || configFileExists(home));
 
   if (!configured) {
     if (options.detach) {
@@ -366,15 +388,32 @@ async function bootDaemon(
     // the fleet during loadAll. Only needs the DB, so the early construction is
     // free; all the run-time machinery (runtime, queue) still wires up below.
     const agentRegistry = createAgentRegistry(db);
+    // Channel→agent bindings (v2.0.0). Late-bound: the router is built once the
+    // main orchestrator + module loader exist (below), but the registry's
+    // remove/update wrappers — set here, where the registry is created — must
+    // reach it so every delete/edit path cleans up its bindings. Null until then.
+    let conversationRouter: ConversationRouter | null = null;
     // Deleting an agent also drops its private memory namespace (migration 0032
-    // adds no FK cascade). Wrap remove() once here — the same registry object is
-    // shared with the loader, runtime, queue, and panel, so every delete path
-    // (panel, fleet tools) inherits the cleanup.
+    // adds no FK cascade) and any channel bindings to it (migration 0034). Wrap
+    // remove() once here — the same registry object is shared with the loader,
+    // runtime, queue, and panel, so every delete path (panel, fleet tools)
+    // inherits the cleanup.
     const removeAgentRow = agentRegistry.remove.bind(agentRegistry);
     agentRegistry.remove = (id: number): boolean => {
       const ok = removeAgentRow(id);
-      if (ok) memory.forgetAgent(id);
+      if (ok) {
+        memory.forgetAgent(id);
+        conversationRouter?.onAgentRemoved(id);
+      }
       return ok;
+    };
+    // Editing an agent's persona/tools must invalidate its memoized bound-chat
+    // orchestrator so the next turn rebuilds with the new definition.
+    const updateAgentRow = agentRegistry.update.bind(agentRegistry);
+    agentRegistry.update = (id, patch) => {
+      const next = updateAgentRow(id, patch);
+      if (next) conversationRouter?.onAgentUpdated(id);
+      return next;
     };
     const loader = createModuleLoader({
       roots: modulesRoots,
@@ -386,7 +425,9 @@ async function bootDaemon(
       tools,
       agents: agentRegistry,
       hostVersion: HOST_VERSION,
-      chatId: cfg.telegram.allowedIds[0]!,
+      // 0 = "no owner chat" (panel-only install with no Telegram allowlist).
+      // Proactive nudges have nowhere to go in that case and no-op safely.
+      chatId: cfg.telegram.allowedIds[0] ?? 0,
       allowedUserIds: cfg.telegram.allowedIds,
       watch: true,
       orchestrator: orchestratorBridge,
@@ -437,12 +478,31 @@ async function bootDaemon(
       (h) =>
         h.name !== SPAWN_AGENT_TOOL_NAME &&
         h.name !== SPAWN_AGENTS_TOOL_NAME &&
-        h.name !== REQUEST_APPROVAL_TOOL_NAME,
+        h.name !== REQUEST_APPROVAL_TOOL_NAME &&
+        // handoff_task transfers a background task to a peer — agent-run only; the
+        // main chat (and bound agents, which share chatTools) escalate or use the
+        // live `handoff` instead.
+        h.name !== HANDOFF_TASK_TOOL_NAME,
     );
     // Declarative-skill activation: register the use_skill tool, then build the
     // orchestrator's skill surface against chatTools (the same registry the
     // orchestrator runs on, so the grant intersection matches what's permitted).
     setupSkillTools({ tools, skills, log });
+    // Approval-gated self-improving skills: the propose_skill tool (registered on
+    // the base registry → visible to chat AND agents) parks a proposal; the owner
+    // approves on Telegram/panel and the manager commits + hot-loads it. Registered
+    // after the skill loader so commit can hot-reload, and after the agent registry
+    // so an agent proposer resolves to its name.
+    const skillImprove = setupSkillImprove({
+      db,
+      tools,
+      skills,
+      log,
+      hostVersion: HOST_VERSION,
+      skillsRoot: skillRoots[0]!,
+      stagingRoot: join(home, 'staging'),
+      registry: agentRegistry,
+    });
     const skillActivation = createSkillActivation(skills, chatTools);
     const orchestrator = createOrchestrator({
       db,
@@ -461,8 +521,59 @@ async function bootDaemon(
     });
     orchestratorImpl = orchestrator;
 
-    const ownerId = cfg.telegram.allowedIds[0]!;
-    log.info('telegram owner identified', { ownerId });
+    // Channel→agent bindings (v2.0.0). A chat bound to a fleet agent runs against
+    // that agent's *interactive* persona orchestrator instead of the default
+    // Modulus one. It mirrors the main orchestrator's wiring (module fragments,
+    // intent filter, guards, skills, budgets) but swaps in the agent's system
+    // prompt, profile, namespace-scoped memory, and a tool view narrowed to the
+    // agent's allowlist ∩ chatTools (so still no agent-only control-plane tools).
+    // autoRoute is off — a configured persona must not be hijacked by a global
+    // auto-route the way the tiny default chat model is helped along. One
+    // orchestrator per agent is memoized inside the router; each persona keeps
+    // its own stable deterministic prefix for the KV cache.
+    const buildBoundChatOrchestrator = (agent: AgentDefinition) => {
+      // The agent's own grant (allowlist ∩ chatTools), plus the handoff tool —
+      // the one chat-surface control-plane verb a bound agent always keeps, so it
+      // can pass the conversation on regardless of its tool allowlist.
+      const own = agentToolPredicate(agent.toolAllowlist);
+      return createOrchestrator({
+        db,
+        llm,
+        tools: filterToolRegistry(chatTools, (h) => h.name === HANDOFF_TOOL_NAME || own(h)),
+        log: log.child({ boundAgent: agent.name }),
+        systemPrompt: agent.systemPrompt,
+        defaultProfile: agent.profile,
+        toolProfile: agent.profile,
+        autoRouteEnabled: false,
+        promptFragmentProvider: (filter) => loader.promptFragment(filter),
+        toolIntentFilter: (message) => loader.relevantModules(message),
+        turnGuards: () => loader.turnGuards().map((r) => r.guard),
+        memoryProvider: (m: string) => memoryProvider(m, agent.id),
+        budgetTokens: agent.budgetTokens ?? budgetTokens,
+        toolResultMaxChars,
+        ...(agent.thinkMode !== 'auto' ? { defaultThinkMode: agent.thinkMode } : {}),
+        maxToolRounds: agent.maxToolRounds,
+        ...(skillActivation ? { skills: skillActivation } : {}),
+      });
+    };
+    conversationRouter = createConversationRouter({
+      db,
+      registry: agentRegistry,
+      log,
+      defaultOrchestrator: orchestrator,
+      orchestratorFactory: buildBoundChatOrchestrator,
+    });
+    // The handoff tool reads/writes the same binding state. Registered on the
+    // base `tools` registry so it appears in chatTools (main chat) and the bound
+    // factory's view; agentTools (below) excludes it so a background task can't.
+    setupAgentHandoff({ tools, router: conversationRouter, registry: agentRegistry, log });
+
+    // 0 when no one is allowlisted (panel-only install). Owner-tier tools in
+    // agent runs fail closed against a 0 owner, which is the safe default.
+    const ownerId = cfg.telegram.allowedIds[0] ?? 0;
+    const telegramEnabled =
+      TOKEN_SHAPE.test(cfg.telegram.token) && cfg.telegram.allowedIds.length > 0;
+    log.info('telegram owner identified', { ownerId, telegramEnabled });
 
     // Multi-agent engine. Personas run headlessly through their own per-agent
     // orchestrators (sharing this db/llm/tool registry); the queue governs WHEN
@@ -502,6 +613,9 @@ async function bootDaemon(
       tools,
       (h) =>
         h.name !== ESCALATE_TOOL_NAME &&
+        // handoff transfers a live chat-surface conversation; meaningless (and
+        // refused) inside a background task run, which delegates with spawn_agent.
+        h.name !== HANDOFF_TOOL_NAME &&
         !FLEET_TOOL_NAMES.includes(h.name) &&
         // create_schedule notifies a real chat; an agent run's chat id is a
         // pseudo id, so reminders are a chat-surface feature only.
@@ -566,6 +680,10 @@ async function bootDaemon(
       queue: agentQueue,
       log,
     });
+    // handoff_task: an agent hands its whole task to a peer on the queue and
+    // stops. Registered on the full registry; agentTools exposes it to agents,
+    // while chatTools (above) hides it from the main chat.
+    setupTaskHandoff({ tools, registry: agentRegistry, queue: agentQueue, log });
     // The Modulus Agent's fleet controls (dispatch_agent / agent_fleet_status /
     // manage_agent_tasks). Chat-only: agentTools above hides them from agents.
     setupAgentFleetTools({
@@ -607,11 +725,7 @@ async function bootDaemon(
       log,
       resolveRoot: (ctx: ToolContext) => {
         // DM chats have no task, so no pinned attachment root — global only.
-        if (
-          ctx.chatId !== undefined &&
-          isAgentChatId(ctx.chatId) &&
-          !isAgentDmChatId(ctx.chatId)
-        ) {
+        if (ctx.chatId !== undefined && isAgentChatId(ctx.chatId) && !isAgentDmChatId(ctx.chatId)) {
           const pinned = pinnedFilesRoot(attachmentsDir, ctx.chatId - AGENT_CHAT_ID_BASE);
           if (pinned) return pinned;
         }
@@ -679,7 +793,9 @@ async function bootDaemon(
     // their anti-repeat variant history is shared. Off entirely when the setting
     // is disabled. Config changes take effect on the next restart.
     const instantResponder =
-      cfg.instantResponses?.enabled !== false ? createInstantResponder() : undefined;
+      cfg.instantResponses?.enabled !== false
+        ? createInstantResponder({ modelName: () => llm.resolveModel('chat') })
+        : undefined;
 
     // Shared pairing bus for a live re-run of the setup wizard. pollUpdates:false
     // because the adapter below owns the only getUpdates consumer — pairing is
@@ -698,53 +814,79 @@ async function bootDaemon(
       enabled: cfg.memory?.extraction?.enabled ?? cfg.tier !== 'small',
     });
 
-    const telegram = createTelegram({
-      token: cfg.telegram.token,
-      allowedUserIds: cfg.telegram.allowedIds,
-      ownerId,
-      log,
-      orchestrator,
-      llm,
-      tools,
-      db,
-      instantResponder,
-      memoryExtractor,
-      pairing,
-      prefs,
-      followups,
-      scheduling,
-      standing: { store: standingOrders, registry: agentRegistry },
-      // Skill discovery surface; tiers resolve against chatTools, the same
-      // registry the use_skill activation intersects against.
-      skills: { skills, tools: chatTools },
-      heartbeatStats: () => heartbeat.stats(),
-      agentRegistry,
-      agentQueue,
-      agentAttachmentsDir: attachmentsDir,
-      logFilePath: logFilePath(home),
-      schedulerStats: () => scheduler.stats(),
-      schedulerList: () => [...scheduler.list()],
-      modules: () => collectModuleReadiness(modulesRoots, db),
-      moduleCommands: () => loader.commands(),
-      moduleIntercepts: () => loader.intercepts(),
-      moduleAfterReplies: () => loader.afterReplies(),
-      moduleAfterTurns: () => loader.afterTurns(),
-      moduleCallbacks: () => loader.callbacks(),
-      moduleVoiceMessages: () => loader.voiceMessages(),
-      // Yes/No on an agent-approval prompt arrives here as a callback; resolve the
-      // parked tool call. The allowlist middleware already gated the press.
-      onAgentApproval: (id, approved, fromUserId) =>
-        approvalManager.resolveFromTelegram(id, approved, fromUserId),
-    });
-    cleanups.push(() => telegram.stop());
-    // Now that the adapter exists, push approval prompts to the owner(s) over
-    // Telegram. Best-effort per chat — a send failure leaves the row pending and
-    // still answerable from the panel.
-    approvalManager.setNotifier(async (approval) => {
-      for (const chatId of cfg.telegram.allowedIds) {
-        await telegram.sendApprovalRequest(chatId, approval);
-      }
-    });
+    // Telegram is optional. A panel-only install (no bot token / no allowlist)
+    // skips the adapter entirely; the panel is the chat surface, and the nudge /
+    // voice / task-notification thunks keep their safe defaults. Everything else
+    // (engine, scheduler, panel, modules) runs identically either way.
+    const telegram = telegramEnabled
+      ? createTelegram({
+          token: cfg.telegram.token,
+          allowedUserIds: cfg.telegram.allowedIds,
+          ownerId,
+          log,
+          orchestrator,
+          // Route a bound chat to its agent's persona orchestrator; unbound → default.
+          resolveOrchestrator: (chatId) => conversationRouter!.orchestratorFor(chatId),
+          llm,
+          tools,
+          db,
+          instantResponder,
+          memoryExtractor,
+          pairing,
+          prefs,
+          followups,
+          scheduling,
+          standing: { store: standingOrders, registry: agentRegistry },
+          // Skill discovery surface; tiers resolve against chatTools, the same
+          // registry the use_skill activation intersects against.
+          skills: { skills, tools: chatTools },
+          // /bind · /unbind — the user-driven writer of the channel→agent binding
+          // state the handoff tool rewrites at runtime.
+          binding: { router: conversationRouter, registry: agentRegistry },
+          heartbeatStats: () => heartbeat.stats(),
+          agentRegistry,
+          agentQueue,
+          agentAttachmentsDir: attachmentsDir,
+          logFilePath: logFilePath(home),
+          schedulerStats: () => scheduler.stats(),
+          schedulerList: () => [...scheduler.list()],
+          modules: () => collectModuleReadiness(modulesRoots, db),
+          moduleCommands: () => loader.commands(),
+          moduleIntercepts: () => loader.intercepts(),
+          moduleAfterReplies: () => loader.afterReplies(),
+          moduleAfterTurns: () => loader.afterTurns(),
+          moduleCallbacks: () => loader.callbacks(),
+          moduleVoiceMessages: () => loader.voiceMessages(),
+          // Yes/No on an agent-approval prompt arrives here as a callback; resolve the
+          // parked tool call. The allowlist middleware already gated the press.
+          onAgentApproval: (id, approved, fromUserId) =>
+            approvalManager.resolveFromTelegram(id, approved, fromUserId),
+          // Self-improving-skill review: /proposals lists pending; a Yes/No press
+          // approves (commit + hot-load) or rejects. Owner-only by the allowlist gate.
+          proposals: { listPending: () => skillImprove.store.listPending() },
+          onSkillProposal: (id, approved) => {
+            if (approved) void skillImprove.manager.approve(id, 'telegram');
+            else skillImprove.manager.reject(id, 'telegram');
+          },
+        })
+      : null;
+    if (telegram) {
+      cleanups.push(() => telegram.stop());
+      // Now that the adapter exists, push approval prompts to the owner(s) over
+      // Telegram. Best-effort per chat — a send failure leaves the row pending and
+      // still answerable from the panel.
+      approvalManager.setNotifier(async (approval) => {
+        for (const chatId of cfg.telegram.allowedIds) {
+          await telegram.sendApprovalRequest(chatId, approval);
+        }
+      });
+      // Push a new skill proposal to the owner(s) for review. Best-effort per chat.
+      skillImprove.manager.setNotifier(async (proposal) => {
+        for (const chatId of cfg.telegram.allowedIds) {
+          await telegram.sendSkillProposal(chatId, proposal);
+        }
+      });
+    }
     // Mirror a proactive nudge to every registered chat surface other than
     // Telegram (e.g. Discord) so briefings/nudges/reminders land wherever the
     // user is. Best-effort: a surface failure must not break the Telegram path.
@@ -762,14 +904,17 @@ async function bootDaemon(
       }
     };
     // Wire the scheduler -> Telegram nudge path, then fan out to other surfaces.
+    // Without Telegram, nudges still reach any other chat surface (e.g. Discord).
     dispatchNudge = async (nudge) => {
-      await telegram.sendNudge(nudge);
+      if (telegram) await telegram.sendNudge(nudge);
       await mirrorNudgeToSurfaces(nudge);
     };
-    // And the voice-note path now that the adapter exists.
-    sendVoiceImpl = (chatId, voice) => telegram.sendVoice(chatId, voice);
-    // And the task-done notification path (queue → Telegram), now reachable.
-    sendTaskNotification = (chatId, text) => telegram.sendMessage(chatId, text);
+    // Voice notes and task-done pings are Telegram-only paths; left at their
+    // safe defaults (warn-noop / noop) on a panel-only install.
+    if (telegram) {
+      sendVoiceImpl = (chatId, voice) => telegram.sendVoice(chatId, voice);
+      sendTaskNotification = (chatId, text) => telegram.sendMessage(chatId, text);
+    }
     // Point the tool registry's confirm hook at a surface router. Modules
     // that own a chat surface (e.g. modulus-discord) register a renderer via
     // host.chat.registerConfirm, scoped to their own chatId namespace; the
@@ -853,7 +998,10 @@ async function bootDaemon(
           }
         }
       }
-      return telegram.confirmToolCall(handler, args, ctx);
+      // Last resort: ask over Telegram. With no Telegram adapter and no panel /
+      // chat-surface renderer that claimed the prompt, fail closed — a confirm-
+      // tier tool must never run when its prompt couldn't be delivered.
+      return telegram ? telegram.confirmToolCall(handler, args, ctx) : false;
     };
     let lastSetupIssueSignature = '';
     notifySetupIssues = async () => {
@@ -866,11 +1014,13 @@ async function bootDaemon(
         return;
       }
       if (signature === lastSetupIssueSignature) return;
-      const chats = knownAllowedChats(db, cfg.telegram.allowedIds);
+      const chats = telegram ? knownAllowedChats(db, cfg.telegram.allowedIds) : [];
       if (chats.length === 0) return;
       lastSetupIssueSignature = signature;
       const text = formatSetupIssuesNudge(issues);
-      for (const chatId of chats) await telegram.sendMessage(chatId, text);
+      // `chats` is only non-empty when `telegram` is set (guarded above), but the
+      // optional call keeps the type-checker happy across the closure boundary.
+      for (const chatId of chats) await telegram?.sendMessage(chatId, text);
       // Mirror the alert to other chat surfaces (e.g. Discord) as a nudge.
       await mirrorNudgeToSurfaces({
         chatId: ownerId,
@@ -880,7 +1030,8 @@ async function bootDaemon(
       });
     };
 
-    await telegram.start();
+    if (telegram) await telegram.start();
+    else log.info('telegram disabled — panel-only install (no bot token configured)');
     await notifySetupIssues();
     scheduler.start();
 
@@ -920,10 +1071,13 @@ async function bootDaemon(
           llm,
           memory,
           orchestrator,
+          conversationRouter,
           loader,
           // Skills section of the Modules tab; tiers resolve against chatTools,
           // the same registry the use_skill activation intersects against.
           skills: { loader: skills, tools: chatTools },
+          // Self-improving-skill proposals: list + approve/reject in the panel.
+          skillProposals: { store: skillImprove.store, manager: skillImprove.manager },
           standingOrders,
           heartbeat,
           confirmBus: panelConfirmBus,
@@ -1030,7 +1184,7 @@ async function bootDaemon(
         });
       }
       try {
-        await telegram.stop();
+        await telegram?.stop();
       } catch (e) {
         log.warn('telegram stop failed', { error: e instanceof Error ? e.message : String(e) });
       }

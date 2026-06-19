@@ -90,7 +90,8 @@ const indexJson = (entries: unknown[]): Buffer => Buffer.from(JSON.stringify(ent
 // Fake tool registry: only tiers matter for the consent lines.
 function tools(tiers: Record<string, ToolHandler['tier']>): ToolRegistry {
   return {
-    get: (name: string) => (name in tiers ? ({ name, tier: tiers[name] } as ToolHandler) : undefined),
+    get: (name: string) =>
+      name in tiers ? ({ name, tier: tiers[name] } as ToolHandler) : undefined,
     list: () => [],
   } as unknown as ToolRegistry;
 }
@@ -144,8 +145,16 @@ test('browse lists only kind:skill entries with per-tool consent lines', async (
       sha256: sha(tgz),
       tools: ['web_search', 'add_event'],
     };
-    const mod = { name: 'modulus-demo', version: '1.0.0', tarball: 'https://reg.test/m.tgz', sha256: sha(tgz) };
-    const opts = { fetchImpl: fakeFetch({ [INDEX_URL]: indexJson([skill, mod]) }), registryUrl: INDEX_URL };
+    const mod = {
+      name: 'modulus-demo',
+      version: '1.0.0',
+      tarball: 'https://reg.test/m.tgz',
+      sha256: sha(tgz),
+    };
+    const opts = {
+      fetchImpl: fakeFetch({ [INDEX_URL]: indexJson([skill, mod]) }),
+      registryUrl: INDEX_URL,
+    };
 
     const r = await browseSkillRegistry(h.deps, opts);
     assert.equal(r.skills.length, 1, 'the module entry is filtered out');
@@ -189,7 +198,11 @@ test('install is blocked until tool consent (409), then loads the skill', async 
     assert.equal(existsSync(join(h.home, 'skills', 'trip-planner')), false);
     assert.equal(listInstalledSkills(h.deps).length, 0);
 
-    const ok = await installSkillFromRegistry(h.deps, { name: 'trip-planner', acceptAdded: true }, opts);
+    const ok = await installSkillFromRegistry(
+      h.deps,
+      { name: 'trip-planner', acceptAdded: true },
+      opts,
+    );
     assert.equal(ok.status, 200);
     const installed = listInstalledSkills(h.deps);
     assert.equal(installed.length, 1);
@@ -227,7 +240,13 @@ test('enable/disable flips skill_state and the loader reflects it', async () => 
   try {
     const tgz = buildSkillTgz('trip-planner', '1.0.0', { tools: [] });
     const tarball = 'https://reg.test/trip-planner.tgz';
-    const entry = { name: 'trip-planner', kind: 'skill', version: '1.0.0', tarball, sha256: sha(tgz) };
+    const entry = {
+      name: 'trip-planner',
+      kind: 'skill',
+      version: '1.0.0',
+      tarball,
+      sha256: sha(tgz),
+    };
     const opts = {
       fetchImpl: fakeFetch({ [INDEX_URL]: indexJson([entry]), [tarball]: tgz }),
       registryUrl: INDEX_URL,
@@ -256,7 +275,13 @@ test('uninstall removes the bundle, drops state, and unloads', async () => {
   try {
     const tgz = buildSkillTgz('trip-planner', '1.0.0', { tools: [] });
     const tarball = 'https://reg.test/trip-planner.tgz';
-    const entry = { name: 'trip-planner', kind: 'skill', version: '1.0.0', tarball, sha256: sha(tgz) };
+    const entry = {
+      name: 'trip-planner',
+      kind: 'skill',
+      version: '1.0.0',
+      tarball,
+      sha256: sha(tgz),
+    };
     const opts = {
       fetchImpl: fakeFetch({ [INDEX_URL]: indexJson([entry]), [tarball]: tgz }),
       registryUrl: INDEX_URL,
@@ -276,5 +301,119 @@ test('uninstall removes the bundle, drops state, and unloads', async () => {
     assert.equal((await uninstallSkill(h.deps, 'not-there')).status, 404);
   } finally {
     await h.cleanup();
+  }
+});
+
+// -- proposals routes (self-improving skills) --------------------------------
+
+import { Readable } from 'node:stream';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createSkillRoutes } from './skills.js';
+import { createSkillProposalStore, type ProposalManager } from '../../core/skill-improve.js';
+
+function proposalsHarness(withProposals = true) {
+  const home = mkdtempSync(join(tmpdir(), 'modulus-skillprop-'));
+  const db: DB = open({ path: join(home, 'modulus.db'), log });
+  const store = createSkillProposalStore(db);
+  const approved: number[] = [];
+  const rejected: number[] = [];
+  const manager: ProposalManager = {
+    approve: async (id) => {
+      approved.push(id);
+      store.decide(id, true, 'panel');
+      return { ok: true, name: 'x' };
+    },
+    reject: (id) => {
+      rejected.push(id);
+      store.decide(id, false, 'panel');
+      return { ok: true, name: 'x' };
+    },
+    setNotifier: () => {},
+  };
+  const deps = {
+    db,
+    log,
+    home,
+    ...(withProposals ? { skillProposals: { store, manager } } : {}),
+  } as unknown as PanelDeps;
+  const route = createSkillRoutes(deps);
+  async function call(method: string, path: string) {
+    const req = Readable.from(['']) as unknown as IncomingMessage;
+    let status = 0;
+    let payload = '';
+    const res = {
+      writeHead: (s: number) => void (status = s),
+      end: (c?: string) => void (c && (payload = c)),
+      write: () => true,
+    } as unknown as ServerResponse;
+    await route({ req, res, path, method } as Parameters<typeof route>[0]);
+    return { status, json: payload ? (JSON.parse(payload) as Record<string, unknown>) : {} };
+  }
+  const seed = () =>
+    store.create({
+      skillName: 'expense-report',
+      baseVersion: null,
+      manifest: { kind: 'skill', name: 'expense-report', summary: 's', tools: ['web_search'] },
+      instructions: '# body',
+      rationale: 'why',
+      proposedBy: 'assistant',
+    });
+  return {
+    store,
+    approved,
+    rejected,
+    call,
+    seed,
+    cleanup: () => {
+      db.close();
+      rmSync(home, { recursive: true, force: true });
+    },
+  };
+}
+
+test('GET /api/skills/proposals returns pending + recent', async () => {
+  const h = proposalsHarness();
+  try {
+    h.seed();
+    const r = await h.call('GET', '/api/skills/proposals');
+    assert.equal(r.status, 200);
+    const pending = r.json['pending'] as Array<Record<string, unknown>>;
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!['skillName'], 'expense-report');
+    assert.deepEqual(pending[0]!['tools'], ['web_search']);
+    assert.equal(pending[0]!['rationale'], 'why');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('POST approve/reject route to the manager and clear pending', async () => {
+  const h = proposalsHarness();
+  try {
+    const p1 = h.seed();
+    const p2 = h.seed();
+    const a = await h.call('POST', `/api/skills/proposals/${p1.id}/approve`);
+    assert.equal(a.status, 200);
+    assert.deepEqual(h.approved, [p1.id]);
+
+    const r = await h.call('POST', `/api/skills/proposals/${p2.id}/reject`);
+    assert.equal(r.status, 200);
+    assert.deepEqual(h.rejected, [p2.id]);
+
+    assert.equal(h.store.listPending().length, 0);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('proposals routes report unavailable when not wired', async () => {
+  const h = proposalsHarness(false);
+  try {
+    const g = await h.call('GET', '/api/skills/proposals');
+    assert.deepEqual(g.json['pending'], []); // GET degrades to empty
+    const p = await h.call('POST', '/api/skills/proposals/1/approve');
+    assert.equal(p.status, 503);
+  } finally {
+    h.cleanup();
   }
 });

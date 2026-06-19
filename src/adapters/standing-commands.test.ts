@@ -16,7 +16,16 @@ function setup() {
   const registry = createAgentRegistry(db);
   const store = createStandingOrderStore(db);
   const deps: StandingDeps = { store, registry };
-  return { db, registry, store, deps, cleanup: () => { db.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return {
+    db,
+    registry,
+    store,
+    deps,
+    cleanup: () => {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 test('/standing add creates an agentic order for a known agent', () => {

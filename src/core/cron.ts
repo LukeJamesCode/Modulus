@@ -2,6 +2,11 @@
 // for nudges and sweeps: `*`, `*/N`, `N`, `N-M`, `N,M,P`. No `@daily` aliases,
 // no seconds field. Day-of-week 0-6 with 0 = Sunday.
 //
+// Day-field semantics follow Vixie cron: when BOTH day-of-month and day-of-week
+// are restricted (neither is `*`), a day matches if EITHER field matches —
+// `0 9 13 * 5` is "9am on the 13th OR any Friday", not "Friday the 13th". When
+// at most one is restricted they AND as usual (a `*` field matches every day).
+//
 // We roll our own instead of pulling node-cron because (a) the parsing surface
 // is tiny, (b) we want next-fire computation that matches our tick model
 // exactly without touching `setInterval`, and (c) shipping zero extra
@@ -13,9 +18,19 @@ export interface ParsedCron {
   dayOfMonth: Set<number>;
   month: Set<number>;
   dayOfWeek: Set<number>;
+  // Whether each day field was restricted (the raw field was not `*`). The two
+  // day fields combine with OR instead of AND when both are restricted, so the
+  // matcher needs to know which were pinned vs left open.
+  dayOfMonthRestricted: boolean;
+  dayOfWeekRestricted: boolean;
 }
 
-const RANGES: Array<[keyof ParsedCron, number, number]> = [
+// Only the Set-valued fields participate in the range-parse loop (the two
+// boolean `*Restricted` flags are derived separately), so the key type is
+// narrowed to those — a bare `keyof ParsedCron` would break the indexed write.
+type CronSetField = 'minute' | 'hour' | 'dayOfMonth' | 'month' | 'dayOfWeek';
+
+const RANGES: Array<[CronSetField, number, number]> = [
   ['minute', 0, 59],
   ['hour', 0, 23],
   ['dayOfMonth', 1, 31],
@@ -33,6 +48,9 @@ export function parseCron(expr: string): ParsedCron {
     const [key, lo, hi] = RANGES[i]!;
     out[key] = parseField(fields[i]!, lo, hi);
   }
+  // Track which day fields were pinned (raw field not `*`) for the OR rule.
+  out.dayOfMonthRestricted = fields[2]!.trim() !== '*';
+  out.dayOfWeekRestricted = fields[4]!.trim() !== '*';
   return out as ParsedCron;
 }
 
@@ -96,12 +114,19 @@ export function matchesCron(parsed: ParsedCron, date: Date, timeZone?: string): 
 }
 
 function matchesCronParts(parsed: ParsedCron, parts: CronDateParts): boolean {
+  const domMatch = parsed.dayOfMonth.has(parts.dayOfMonth);
+  const dowMatch = parsed.dayOfWeek.has(parts.dayOfWeek);
+  // OR the day fields when both are pinned; AND otherwise. A `*` day field
+  // always matches, so the AND branch reduces to the single restricted field.
+  const dayMatch =
+    parsed.dayOfMonthRestricted && parsed.dayOfWeekRestricted
+      ? domMatch || dowMatch
+      : domMatch && dowMatch;
   return (
     parsed.minute.has(parts.minute) &&
     parsed.hour.has(parts.hour) &&
-    parsed.dayOfMonth.has(parts.dayOfMonth) &&
     parsed.month.has(parts.month) &&
-    parsed.dayOfWeek.has(parts.dayOfWeek)
+    dayMatch
   );
 }
 

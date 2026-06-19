@@ -11,8 +11,10 @@ import type { MemoryStore } from '../core/memory.js';
 import type { StandingOrderStore } from '../core/standing-orders.js';
 import type { Heartbeat } from '../core/heartbeat.js';
 import type { Orchestrator } from '../core/orchestrator.js';
+import type { ConversationRouter } from '../core/conversation-routing.js';
 import type { ModuleLoader } from '../core/modules.js';
 import type { SkillLoader } from '../core/skills.js';
+import type { SkillProposalStore, ProposalManager } from '../core/skill-improve.js';
 import type { ToolRegistry } from '../core/tools.js';
 import type { InstantResponder } from '../core/instant-responses.js';
 import type { ModulusConfig } from '../cli/config-store.js';
@@ -46,6 +48,11 @@ export interface PanelDeps {
   // The daemon's live orchestrator + module loader: browser chat runs through
   // the exact same pipeline as Telegram (intercepts → orchestrator → SSE).
   orchestrator: Orchestrator;
+  // Channel→agent bindings (v2.0.0). The Channels card (Agents tab) does
+  // bind/unbind, and the Dashboard chat routes its turn through this so a bound
+  // owner conversation answers as the chosen agent. Absent in tests that don't
+  // exercise bindings (the Dashboard then always uses the default orchestrator).
+  conversationRouter?: ConversationRouter;
   loader: ModuleLoader;
   // The declarative-skill loader plus the chat tool registry its tiers resolve
   // against, so the Skills section can list/enable/disable/install skills and
@@ -54,6 +61,13 @@ export interface PanelDeps {
   skills?: {
     loader: SkillLoader;
     tools: ToolRegistry;
+  };
+  // Approval-gated self-improving skills (v2.0.0): the Skills view's Proposals
+  // subsection lists pending proposals and approves/rejects them. Absent in tests
+  // that don't exercise proposals.
+  skillProposals?: {
+    store: SkillProposalStore;
+    manager: ProposalManager;
   };
   // Standing orders store + the heartbeat that evaluates them. The panel does
   // CRUD on the orders and reads heartbeat stats for the System tab.

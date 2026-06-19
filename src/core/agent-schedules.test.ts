@@ -150,7 +150,10 @@ test('agent schedules: a cron row advances via nextFireAfter and stays active', 
     });
     // Thursday 2026-06-04 09:00 UTC — past today's 08:00, so the next fire is
     // Friday 08:00.
-    store.sweepDue((agentId, prompt) => reg.enqueue({ agentId, prompt }), new Date('2026-06-04T09:00:00Z'));
+    store.sweepDue(
+      (agentId, prompt) => reg.enqueue({ agentId, prompt }),
+      new Date('2026-06-04T09:00:00Z'),
+    );
 
     const updated = store.get(schedule.id)!;
     assert.equal(updated.active, true);
@@ -183,7 +186,11 @@ test('agent schedules: a notify-only reminder emits a nudge instead of a task', 
     );
 
     assert.equal(fired.length, 1);
-    assert.equal(reg.listTasks({ status: 'queued' }).length, 0, 'no agent task for a notify-only row');
+    assert.equal(
+      reg.listTasks({ status: 'queued' }).length,
+      0,
+      'no agent task for a notify-only row',
+    );
     assert.equal(nudges.length, 1);
     assert.equal(nudges[0]!.chatId, 4242);
     assert.equal(nudges[0]!.text, 'Take your pills');

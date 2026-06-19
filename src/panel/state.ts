@@ -8,7 +8,7 @@
 
 import { cpus, freemem, networkInterfaces, totalmem } from 'node:os';
 import type { DB } from '../storage/db.js';
-import { effectiveConfig, type ModulusConfig } from '../cli/config-store.js';
+import { configFileExists, effectiveConfig, type ModulusConfig } from '../cli/config-store.js';
 import { metricsFilePath } from '../cli/daemon.js';
 import { classifyProbeError, probeOllama } from '../cli/ollama-probe.js';
 import { collectModuleReadiness } from '../core/module-readiness.js';
@@ -122,8 +122,19 @@ export async function buildState(deps: BuildStateDeps): Promise<unknown> {
       }
     : null;
 
+  // Configured = the user finished setup. Telegram is optional: a panel-only
+  // install (config.json written, no bot token) is configured, and an env-only
+  // Telegram deployment (token + allowlist, no file) counts too. The one case we
+  // still bounce back to the wizard is a HALF-set Telegram — a token with no one
+  // allowlisted — because that's a misconfiguration, not a panel-only choice.
+  const hasToken = !!cfg && !!cfg.telegram.token;
+  const hasAllowlist = !!cfg && cfg.telegram.allowedIds.length > 0;
+  const telegramHalfSet = hasToken && !hasAllowlist;
+  const configured =
+    !!cfg && !telegramHalfSet && (configFileExists(home) || (hasToken && hasAllowlist));
+
   return {
-    configured: !!cfg && !!cfg.telegram.token && cfg.telegram.allowedIds.length > 0,
+    configured,
     cfgError,
     // The daemon serving this panel is the agent; it is by definition running.
     agent: { running: true, pid: process.pid, starting: false },
@@ -132,7 +143,9 @@ export async function buildState(deps: BuildStateDeps): Promise<unknown> {
       ollamaUrl: cfg?.ollama.url ?? null,
       ollamaError: probe.error ?? null,
       ollamaErrorKind: classifyProbeError(probe.error),
-      telegram: true,
+      // Whether a Telegram bot is configured at all (false on a panel-only
+      // install). Not a liveness probe — the long-poll has no cheap health ping.
+      telegram: hasToken && hasAllowlist,
       modelCount: probe.models.length,
     },
     models: {

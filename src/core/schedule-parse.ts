@@ -32,21 +32,42 @@ export type ScheduleSpec =
   | { error: string };
 
 const WEEKDAYS: Record<string, number> = {
-  sunday: 0, sun: 0,
-  monday: 1, mon: 1,
-  tuesday: 2, tue: 2, tues: 2,
-  wednesday: 3, wed: 3,
-  thursday: 4, thu: 4, thur: 4, thurs: 4,
-  friday: 5, fri: 5,
-  saturday: 6, sat: 6,
+  sunday: 0,
+  sun: 0,
+  monday: 1,
+  mon: 1,
+  tuesday: 2,
+  tue: 2,
+  tues: 2,
+  wednesday: 3,
+  wed: 3,
+  thursday: 4,
+  thu: 4,
+  thur: 4,
+  thurs: 4,
+  friday: 5,
+  fri: 5,
+  saturday: 6,
+  sat: 6,
 };
 
 const UNIT_MS: Record<string, number> = {
-  second: 1000, sec: 1000, secs: 1000, seconds: 1000,
-  minute: 60_000, min: 60_000, mins: 60_000, minutes: 60_000,
-  hour: 3_600_000, hr: 3_600_000, hrs: 3_600_000, hours: 3_600_000,
-  day: 86_400_000, days: 86_400_000,
-  week: 604_800_000, weeks: 604_800_000,
+  second: 1000,
+  sec: 1000,
+  secs: 1000,
+  seconds: 1000,
+  minute: 60_000,
+  min: 60_000,
+  mins: 60_000,
+  minutes: 60_000,
+  hour: 3_600_000,
+  hr: 3_600_000,
+  hrs: 3_600_000,
+  hours: 3_600_000,
+  day: 86_400_000,
+  days: 86_400_000,
+  week: 604_800_000,
+  weeks: 604_800_000,
 };
 
 const ONE_YEAR_MS = 365 * 86_400_000;
@@ -71,7 +92,14 @@ function offsetMsAt(timeZone: string, at: Date): number {
   }).formatToParts(at);
   const get = (t: Intl.DateTimeFormatPartTypes): number =>
     Number(parts.find((p) => p.type === t)?.value ?? '0');
-  const asUTC = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  const asUTC = Date.UTC(
+    get('year'),
+    get('month') - 1,
+    get('day'),
+    get('hour'),
+    get('minute'),
+    get('second'),
+  );
   return asUTC - at.getTime();
 }
 
@@ -161,10 +189,13 @@ function extractTime(text: string): { time: TimeOfDay | null; rest: string } {
   const at = /\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|a|p)?|noon|midday|midnight)\b/i.exec(text);
   if (at) {
     const time = parseTimeOfDay(at[1]!);
-    if (time) return { time, rest: (text.slice(0, at.index) + text.slice(at.index + at[0].length)).trim() };
+    if (time)
+      return { time, rest: (text.slice(0, at.index) + text.slice(at.index + at[0].length)).trim() };
   }
   // A trailing bare clock with no "at" — "tomorrow 5pm", "every monday 9am".
-  const bare = /\b(\d{1,2}(?::\d{2})\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm)|noon|midnight)\s*$/i.exec(text);
+  const bare = /\b(\d{1,2}(?::\d{2})\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm)|noon|midnight)\s*$/i.exec(
+    text,
+  );
   if (bare) {
     const time = parseTimeOfDay(bare[1]!);
     if (time) return { time, rest: text.slice(0, bare.index).trim() };
@@ -201,8 +232,10 @@ function ruleParse(text: string, ctx: ParseScheduleContext): ScheduleSpec | null
   if (!raw) return null;
 
   // "in N <unit>" — one-shot relative. Zone-independent.
-  const rel = /^in\s+(?:(an?|a)\s+)?(\d+)?\s*(second|seconds|sec|secs|minute|minutes|min|mins|hour|hours|hr|hrs|day|days|week|weeks)$/.exec(raw)
-    ?? /^in\s+(an?|a)\s+(second|minute|hour|day|week)$/.exec(raw);
+  const rel =
+    /^in\s+(?:(an?|a)\s+)?(\d+)?\s*(second|seconds|sec|secs|minute|minutes|min|mins|hour|hours|hr|hrs|day|days|week|weeks)$/.exec(
+      raw,
+    ) ?? /^in\s+(an?|a)\s+(second|minute|hour|day|week)$/.exec(raw);
   if (rel) {
     // Forms: "in 20 minutes", "in an hour", "in a day".
     const n = rel[2] && /^\d+$/.test(rel[2]) ? Number(rel[2]) : 1;
@@ -308,7 +341,10 @@ function ruleRecurring(raw: string, ctx: ParseScheduleContext): ScheduleSpec | n
   if (/^(every\s+month|monthly)$/.test(rest)) {
     return mk(cron(String(min), String(h), '1', '*', '*'));
   }
-  const monthDay = /^(?:every\s+month\s+on\s+the|monthly\s+on\s+the|on\s+the)\s+(\d{1,2})(?:st|nd|rd|th)?$/.exec(rest);
+  const monthDay =
+    /^(?:every\s+month\s+on\s+the|monthly\s+on\s+the|on\s+the)\s+(\d{1,2})(?:st|nd|rd|th)?$/.exec(
+      rest,
+    );
   if (monthDay) {
     const dom = Number(monthDay[1]);
     if (dom >= 1 && dom <= 31) return mk(cron(String(min), String(h), String(dom), '*', '*'));
@@ -317,7 +353,10 @@ function ruleRecurring(raw: string, ctx: ParseScheduleContext): ScheduleSpec | n
 }
 
 function parseWeekdayList(text: string): number[] {
-  const tokens = text.split(/[\s,]+|\band\b/).map((t) => t.trim()).filter(Boolean);
+  const tokens = text
+    .split(/[\s,]+|\band\b/)
+    .map((t) => t.trim())
+    .filter(Boolean);
   const out = new Set<number>();
   for (const tok of tokens) {
     const d = WEEKDAYS[tok];
@@ -343,8 +382,8 @@ function ruleOnce(raw: string, ctx: ParseScheduleContext): ScheduleSpec | null {
     return onceOnDayOffset(ctx, 0, time?.hour ?? 20, time?.minute ?? 0, false);
   }
   // "(this|next) <weekday> [at TIME]" / "on <weekday> [at TIME]".
-  const dow = /^(?:this|next|on|on\s+the\s+coming|coming)\s+([a-z]+)$/.exec(rest)
-    ?? /^([a-z]+)$/.exec(rest);
+  const dow =
+    /^(?:this|next|on|on\s+the\s+coming|coming)\s+([a-z]+)$/.exec(rest) ?? /^([a-z]+)$/.exec(rest);
   if (dow) {
     const target = WEEKDAYS[dow[1]!];
     if (target !== undefined) {
@@ -377,7 +416,8 @@ function onceOnDayOffset(
     at = zonedWallToEpoch(shifted.year, shifted.month, shifted.day, hour, minute, ctx.timeZone);
   }
   if (at <= ctx.now.getTime()) {
-    if (!rollIfPast) return { error: 'That time has already passed today. Try "tomorrow" or a later time.' };
+    if (!rollIfPast)
+      return { error: 'That time has already passed today. Try "tomorrow" or a later time.' };
     const next = wallPartsInZone(new Date(at + 86_400_000), ctx.timeZone);
     at = zonedWallToEpoch(next.year, next.month, next.day, hour, minute, ctx.timeZone);
   }
@@ -440,7 +480,12 @@ async function modelParse(text: string, ctx: ParseScheduleContext): Promise<Sche
   ];
   let out = '';
   try {
-    for await (const chunk of ctx.llm.chat({ profile, messages, maxTokens: 64, thinkMode: 'off' })) {
+    for await (const chunk of ctx.llm.chat({
+      profile,
+      messages,
+      maxTokens: 64,
+      thinkMode: 'off',
+    })) {
       out += chunk.delta ?? '';
     }
   } catch (e) {
@@ -487,7 +532,10 @@ function pad(n: number): string {
 // Entry point.
 // ---------------------------------------------------------------------------
 
-export async function parseSchedule(text: string, ctx: ParseScheduleContext): Promise<ScheduleSpec> {
+export async function parseSchedule(
+  text: string,
+  ctx: ParseScheduleContext,
+): Promise<ScheduleSpec> {
   const trimmed = String(text ?? '').trim();
   if (!trimmed) return { error: 'Say when — e.g. "in 20 minutes", "every weekday at 8am".' };
 
@@ -505,6 +553,68 @@ export async function parseSchedule(text: string, ctx: ParseScheduleContext): Pr
   };
 }
 
+const DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// 24h hour + minute (literal cron fields, already in the schedule's zone) → "8:00 AM".
+function clockPhrase(hour: number, minute: number): string {
+  const h12 = hour % 12 === 0 ? 12 : hour % 12;
+  const ampm = hour < 12 ? 'AM' : 'PM';
+  return `${h12}:${String(minute).padStart(2, '0')} ${ampm}`;
+}
+
+// Day-of-week field → "every weekday" / "every weekend" / "every Mon and Wed".
+// Returns null for anything we can't phrase cleanly, so the caller can fall back.
+function dowPhrase(dow: string): string | null {
+  if (dow === '1-5') return 'every weekday';
+  if (dow === '0,6' || dow === '6,0') return 'every weekend';
+  const nums = dow.split(',').map((p) => Number(p));
+  if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 7)) return null;
+  const names = nums.map((n) => DOW_NAMES[n === 7 ? 0 : n]);
+  if (names.length === 1) return `every ${names[0]}`;
+  return `every ${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+// Turn a standard 5-field cron into a plain phrase ("every weekday at 8:00 AM").
+// Covers the shapes our parser emits plus common model outputs; falls back to a
+// neutral phrase for anything exotic so a raw cron string never reaches a user.
+export function describeCron(cron: string): string {
+  const f = cron.trim().split(/\s+/);
+  if (f.length !== 5) return 'on a custom schedule';
+  const [minute, hour, dom, month, dow] = f as [string, string, string, string, string];
+  const min = Number(minute);
+  const hr = Number(hour);
+
+  if (minute === '*' && hour === '*' && dom === '*' && month === '*' && dow === '*') {
+    return 'every minute';
+  }
+  const minStep = /^\*\/(\d+)$/.exec(minute);
+  if (minStep && hour === '*' && dom === '*' && month === '*' && dow === '*') {
+    return `every ${minStep[1]} minutes`;
+  }
+  const hrStep = /^\*\/(\d+)$/.exec(hour);
+  if (hrStep && Number.isInteger(min) && dom === '*' && month === '*' && dow === '*') {
+    return min === 0
+      ? `every ${hrStep[1]} hours`
+      : `every ${hrStep[1]} hours at :${String(min).padStart(2, '0')}`;
+  }
+  if (hour === '*' && Number.isInteger(min) && dom === '*' && month === '*' && dow === '*') {
+    return min === 0 ? 'every hour' : `every hour at :${String(min).padStart(2, '0')}`;
+  }
+  if (Number.isInteger(min) && Number.isInteger(hr) && hr >= 0 && hr <= 23) {
+    const at = `at ${clockPhrase(hr, min)}`;
+    if (dom !== '*' && month === '*' && dow === '*') {
+      const d = Number(dom);
+      if (Number.isInteger(d)) return `on day ${d} of every month ${at}`;
+    }
+    if (dom === '*' && month === '*') {
+      if (dow === '*') return `every day ${at}`;
+      const dp = dowPhrase(dow);
+      if (dp) return `${dp} ${at}`;
+    }
+  }
+  return 'on a custom schedule';
+}
+
 // Render a spec back to a short human phrase for previews / confirmations.
 export function describeSpec(spec: ScheduleSpec, timeZone: string): string {
   if ('error' in spec) return spec.error;
@@ -518,7 +628,7 @@ export function describeSpec(spec: ScheduleSpec, timeZone: string): string {
       minute: '2-digit',
     }).format(new Date(spec.at));
   }
-  return `repeats on cron \`${spec.cron}\` (${timeZone})`;
+  return describeCron(spec.cron);
 }
 
 // Resolve the host's IANA time zone — the default callers pass when the user

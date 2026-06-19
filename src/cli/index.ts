@@ -16,6 +16,7 @@ import { Command } from 'commander';
 // Lightweight (reads package.json, no heavy transitive deps) — safe to pull in
 // at the top so `modulus --version` reports the real host version.
 import { HOST_VERSION } from '../core/version.js';
+import { betterSqliteHint } from './native-hint.js';
 
 // Subcommands are pulled in lazily. Keeping the top of the CLI free of heavy
 // transitive imports (grammY, better-sqlite3, the LLM client) means `modulus
@@ -25,6 +26,10 @@ import { HOST_VERSION } from '../core/version.js';
 function fail(prefix: string, e: unknown): never {
   const msg = e instanceof Error ? e.message : String(e);
   process.stderr.write(`${prefix}: ${msg}\n`);
+  // The one error worth explaining: a native better-sqlite3 load failure (the
+  // common npx wall) gets actionable guidance instead of a raw node stack.
+  const hint = betterSqliteHint(msg);
+  if (hint) process.stderr.write(`${hint}\n`);
   process.exit(1);
 }
 
@@ -52,6 +57,20 @@ program
   .description('Small, terminal-first AI agent. CPU-only. Modules turn it into anything.')
   .version(HOST_VERSION);
 
+// Quick-start footer on `modulus` / `modulus --help`. The first run opens a
+// browser setup wizard, so a new user needs only one command.
+program.addHelpText(
+  'after',
+  [
+    '',
+    'Quick start:',
+    '  $ modulus start              run the bot + web panel (first run opens setup in your browser)',
+    '  $ npx modulus-agent start    try it without installing',
+    '',
+    'npx is great for a trial; `npm i -g modulus-agent` (or the desktop app) is the durable install.',
+  ].join('\n'),
+);
+
 program
   .command('start')
   .description('Run the bot (Telegram long-poll + Ollama) and the web panel if enabled')
@@ -59,15 +78,17 @@ program
   .option('--agent-only', 'Do not also start the in-process web panel')
   .option('--no-open', "Don't auto-open the browser when first-run setup is needed")
   .option('--lan', 'Bind the panel to all interfaces (0.0.0.0) for this run — Pi / headless')
-  .action(async (opts: { detach?: boolean; agentOnly?: boolean; open?: boolean; lan?: boolean }) => {
-    const { run } = await import('./start.js');
-    await call('start', run, {
-      detach: !!opts.detach,
-      agentOnly: !!opts.agentOnly,
-      noOpen: opts.open === false,
-      lan: !!opts.lan,
-    });
-  });
+  .action(
+    async (opts: { detach?: boolean; agentOnly?: boolean; open?: boolean; lan?: boolean }) => {
+      const { run } = await import('./start.js');
+      await call('start', run, {
+        detach: !!opts.detach,
+        agentOnly: !!opts.agentOnly,
+        noOpen: opts.open === false,
+        lan: !!opts.lan,
+      });
+    },
+  );
 
 program
   .command('init')

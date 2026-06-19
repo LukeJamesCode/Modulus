@@ -539,7 +539,11 @@ function MainChatPane({
           </window.Button>
         )}
         <div ref={menuRef} style={{ position: 'relative' }}>
-          <window.IconButton name="menu" label="Chat options" onClick={() => setMenuOpen(!menuOpen)} />
+          <window.IconButton
+            name="menu"
+            label="Chat options"
+            onClick={() => setMenuOpen(!menuOpen)}
+          />
           {menuOpen && (
             <div
               style={{
@@ -595,169 +599,164 @@ function MainChatPane({
       </div>
 
       <div
-            ref={scrollRef}
-            style={{
-              flex: 1,
-              overflowY: 'auto',
-              padding: 14,
-              minHeight: 120,
-              display: 'flex',
-              flexDirection: 'column',
-            }}
-          >
-            {messages.length === 0 && phase === 'idle' && (
-              <EmptyChat running={running} onPrompt={setDraft} />
-            )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 'auto' }}>
-              {messages.map((m) => (
-                <Bubble key={m.id} m={m} devmode={devmode} />
-              ))}
-              {phase === 'streaming' && !streamText && !streamThink && !confirmReq && (
-                <Thinking label="Thinking…" />
-              )}
-              {phase === 'command' && <Thinking label="Running command…" />}
-              {phase === 'streaming' && streamThink && (
-                <ThinkingBlock text={streamThink} live={!streamText} />
-              )}
-              {phase === 'streaming' && streamText && (
-                <Bubble m={{ role: 'assistant', text: streamText, time: now() }} streaming />
-              )}
-              {confirmReq && <ConfirmCard req={confirmReq} onAnswer={answerConfirm} />}
-            </div>
-          </div>
+        ref={scrollRef}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: 14,
+          minHeight: 120,
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        {messages.length === 0 && phase === 'idle' && (
+          <EmptyChat running={running} onPrompt={setDraft} commands={commands} />
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 'auto' }}>
+          {messages.map((m) => (
+            <Bubble key={m.id} m={m} devmode={devmode} />
+          ))}
+          {phase === 'streaming' && !streamText && !streamThink && !confirmReq && (
+            <Thinking label="Thinking…" />
+          )}
+          {phase === 'command' && <Thinking label="Running command…" />}
+          {phase === 'streaming' && streamThink && (
+            <ThinkingBlock text={streamThink} live={!streamText} />
+          )}
+          {phase === 'streaming' && streamText && (
+            <Bubble m={{ role: 'assistant', text: streamText, time: now() }} streaming />
+          )}
+          {confirmReq && <ConfirmCard req={confirmReq} onAnswer={answerConfirm} />}
+        </div>
+      </div>
 
+      <div
+        style={{
+          padding: 14,
+          borderTop: '1px solid var(--border)',
+          flex: 'none',
+          background: 'var(--surface)',
+        }}
+      >
+        {!running && (
           <div
             style={{
-              padding: 14,
-              borderTop: '1px solid var(--border)',
-              flex: 'none',
-              background: 'var(--surface)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 10,
+              color: 'var(--text-3)',
+              fontSize: 13,
             }}
           >
-            {!running && (
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  marginBottom: 10,
-                  color: 'var(--text-3)',
-                  fontSize: 13,
-                }}
-              >
-                <window.StatusDot state="stopped" /> Agent is stopped — start it to send messages.
-              </div>
-            )}
-            {running && (
-              <CommandBar
-                commands={commands}
-                disabled={phase !== 'idle'}
-                onCommand={runCommandButton}
-              />
-            )}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                marginBottom: 8,
-                fontSize: 12,
-                color: 'var(--text-dim)',
-              }}
-              title="Reasoning mode for thinking-capable models (qwen3, gemma4). No-op on models without a thinking mode."
-            >
-              <span>Reasoning</span>
-              <window.Segmented
-                size="sm"
-                value={thinkMode}
-                onChange={setThinkMode}
-                options={[
-                  { value: 'auto', label: 'Auto' },
-                  { value: 'on', label: 'Think' },
-                  { value: 'off', label: 'No-think' },
-                ]}
-              />
-            </div>
-            {att.files.length > 0 && (
-              <div style={{ marginBottom: 8 }}>
-                <window.AttachChips files={att.files} onRemove={att.remove} />
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
-              <window.AttachButton
-                onPick={att.addFiles}
-                openUp
-                disabled={!running}
-                title="Attach files, a folder, images, or PDFs"
-              />
-              <textarea
-                ref={inputRef}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                rows={1}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-                placeholder={
-                  running ? 'Message Modulus…  (try /help or /codex)' : 'Start the agent to chat'
-                }
-                disabled={!running}
-                onFocus={(e) => {
-                  e.target.style.borderColor = 'var(--accent)';
-                  e.target.style.boxShadow = '0 0 0 3px var(--accent-ring)';
-                }}
-                onBlur={(e) => {
-                  e.target.style.borderColor = 'var(--border-2)';
-                  e.target.style.boxShadow = 'none';
-                }}
-                style={{
-                  flex: 1,
-                  resize: 'none',
-                  fontFamily: 'var(--font-ui)',
-                  fontSize: 14.5,
-                  lineHeight: 1.5,
-                  color: 'var(--text)',
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border-2)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '11px 14px',
-                  outline: 'none',
-                  maxHeight: 140,
-                  minHeight: 44,
-                  transition: 'border-color .15s, box-shadow .15s',
-                  opacity: running ? 1 : 0.6,
-                }}
-              />
-              <MicButton
-                running={running}
-                disabled={phase !== 'idle'}
-                onTranscript={onTranscript}
-              />
-              {streaming ? (
-                <window.Button variant="subtle" icon="stop" onClick={abort} style={{ height: 44 }}>
-                  Stop
-                </window.Button>
-              ) : (
-                <window.Button
-                  variant="primary"
-                  icon="send"
-                  onClick={send}
-                  disabled={!running || att.staging || (!draft.trim() && !att.staged.length)}
-                  style={{
-                    height: 44,
-                    opacity:
-                      !running || att.staging || (!draft.trim() && !att.staged.length) ? 0.5 : 1,
-                  }}
-                >
-                  Send
-                </window.Button>
-              )}
-            </div>
+            <window.StatusDot state="stopped" /> Agent is stopped — start it to send messages.
           </div>
+        )}
+        {running && (
+          <CommandBar
+            commands={commands}
+            disabled={phase !== 'idle'}
+            onCommand={runCommandButton}
+          />
+        )}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 8,
+            fontSize: 12,
+            color: 'var(--text-dim)',
+          }}
+          title="Reasoning mode for thinking-capable models (qwen3, gemma4). No-op on models without a thinking mode."
+        >
+          <span>Reasoning</span>
+          <window.Segmented
+            size="sm"
+            value={thinkMode}
+            onChange={setThinkMode}
+            options={[
+              { value: 'auto', label: 'Auto' },
+              { value: 'on', label: 'Think' },
+              { value: 'off', label: 'No-think' },
+            ]}
+          />
         </div>
+        {att.files.length > 0 && (
+          <div style={{ marginBottom: 8 }}>
+            <window.AttachChips files={att.files} onRemove={att.remove} />
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+          <window.AttachButton
+            onPick={att.addFiles}
+            openUp
+            disabled={!running}
+            title="Attach files, a folder, images, or PDFs"
+          />
+          <textarea
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={1}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            placeholder={
+              running ? 'Message Modulus…  (try /help or /codex)' : 'Start the agent to chat'
+            }
+            disabled={!running}
+            onFocus={(e) => {
+              e.target.style.borderColor = 'var(--accent)';
+              e.target.style.boxShadow = '0 0 0 3px var(--accent-ring)';
+            }}
+            onBlur={(e) => {
+              e.target.style.borderColor = 'var(--border-2)';
+              e.target.style.boxShadow = 'none';
+            }}
+            style={{
+              flex: 1,
+              resize: 'none',
+              fontFamily: 'var(--font-ui)',
+              fontSize: 14.5,
+              lineHeight: 1.5,
+              color: 'var(--text)',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--border-2)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '11px 14px',
+              outline: 'none',
+              maxHeight: 140,
+              minHeight: 44,
+              transition: 'border-color .15s, box-shadow .15s',
+              opacity: running ? 1 : 0.6,
+            }}
+          />
+          <MicButton running={running} disabled={phase !== 'idle'} onTranscript={onTranscript} />
+          {streaming ? (
+            <window.Button variant="subtle" icon="stop" onClick={abort} style={{ height: 44 }}>
+              Stop
+            </window.Button>
+          ) : (
+            <window.Button
+              variant="primary"
+              icon="send"
+              onClick={send}
+              disabled={!running || att.staging || (!draft.trim() && !att.staged.length)}
+              style={{
+                height: 44,
+                opacity: !running || att.staging || (!draft.trim() && !att.staged.length) ? 0.5 : 1,
+              }}
+            >
+              Send
+            </window.Button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1169,13 +1168,28 @@ function Thinking({ label, tool }) {
   );
 }
 
-function EmptyChat({ running, onPrompt }) {
-  const prompts = [
-    'What should I focus on today?',
-    'Check my upcoming reminders.',
-    '/codex refactor this function for clarity',
-    '/help',
-  ];
+// Suggestions that reflect what's actually installed, so the first thing a new
+// user sees points at capabilities they really have. Falls back to friendly
+// generics, and always surfaces one real module command for discoverability.
+function buildEmptyPrompts(commands) {
+  const out = ['What should I focus on today?'];
+  const mods = (commands && commands.modules) || [];
+  const hay = mods
+    .map((c) => `${c.cmd || ''} ${c.desc || ''}`)
+    .join(' ')
+    .toLowerCase();
+  if (hay.includes('calendar') || hay.includes('event')) out.push("What's on my calendar today?");
+  if (hay.includes('weather')) out.push("What's the weather this weekend?");
+  if (hay.includes('search') || hay.includes('web'))
+    out.push('Look up the latest news on a topic I care about.');
+  out.push('Remind me to stretch in 30 minutes.');
+  if (mods[0] && mods[0].cmd) out.push(mods[0].cmd);
+  out.push('/help');
+  return [...new Set(out)].slice(0, 5);
+}
+
+function EmptyChat({ running, onPrompt, commands }) {
+  const prompts = buildEmptyPrompts(commands);
   return (
     <div
       style={{

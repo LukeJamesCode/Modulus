@@ -19,12 +19,32 @@ test('deterministic day/date questions bypass the model with a computed answer',
   assert.equal(tomorrow?.text, 'Thursday');
 });
 
-test('the model-name question answers as Modulus, not Gurney', () => {
-  const r = createInstantResponder();
+test('the model-name question answers from the live config, never a stale guess', () => {
+  // With a resolver wired, the reply names the actual configured model tag.
+  const r = createInstantResponder({ modelName: () => 'llama3.2:3b' });
   const ans = r.respond('what model are you running?', 1, WED_2PM);
   assert.equal(ans?.mode, 'reply');
-  assert.match(ans?.text ?? '', /Modulus/);
+  assert.match(ans?.text ?? '', /llama3\.2:3b/);
+  // No hardcoded family name that goes stale, and never the old project name.
+  assert.doesNotMatch(ans?.text ?? '', /qwen/i);
   assert.doesNotMatch(ans?.text ?? '', /Gurney/);
+});
+
+test('the model-name question falls back gracefully without a resolver', () => {
+  // No resolver (or one that throws): still a deterministic reply pointing at
+  // /model rather than letting the small model hallucinate a model name.
+  for (const r of [
+    createInstantResponder(),
+    createInstantResponder({
+      modelName: () => {
+        throw new Error('not configured');
+      },
+    }),
+  ]) {
+    const ans = r.respond('which model are you on', 1, WED_2PM);
+    assert.equal(ans?.mode, 'reply');
+    assert.match(ans?.text ?? '', /\/model/);
+  }
 });
 
 test('trivial chatter gets a terminal templated reply (no model turn)', () => {

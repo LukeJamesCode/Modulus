@@ -96,7 +96,8 @@ function extractTextToolCalls(text: string, allowedTools: ReadonlySet<string>): 
   while ((match = xmlRegex.exec(t)) !== null) pushEnvelope(match[1]!);
 
   // Format 3: Markdown JSON block ```json {"name": "tool_name", "arguments": {...}} ```
-  const jsonRegex = /```(?:json)?\s*\n?\s*(\{[\s\S]{0,1000}?"(?:type|name)"\s*:\s*"[a-z_][a-z0-9_]*"[\s\S]*?\})\s*```/ig;
+  const jsonRegex =
+    /```(?:json)?\s*\n?\s*(\{[\s\S]{0,1000}?"(?:type|name)"\s*:\s*"[a-z_][a-z0-9_]*"[\s\S]*?\})\s*```/gi;
   while ((match = jsonRegex.exec(t)) !== null) pushEnvelope(match[1]!);
 
   // Format 4: Raw JSON object payload
@@ -842,7 +843,7 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
         ) {
           const allowed = new Set(toolSchemas.map((s) => s.function.name));
           const extracted = extractTextToolCalls(assistantText, allowed);
-          
+
           if (extracted.length > 0) {
             cl.info('extracted tool calls from plain text', { count: extracted.length });
             lastChunk = { ...lastChunk!, toolCalls: extracted };
@@ -872,16 +873,18 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
           names: lastChunk.toolCalls.map((c) => c.name),
         });
         const allowedToolNames = new Set(toolSchemas.map((s) => s.function.name));
-        const willShortCircuit = lastChunk.toolCalls.every((call) => {
-          if (!allowedToolNames.has(call.name)) return false;
-          return opts.tools.get(call.name)?.selfReplying === true;
-        });
 
-        // Persist the assistant turn that requested the tool calls.
-        if (!willShortCircuit) {
-          if (assistantText || lastChunk.toolCalls.length > 0) {
-            trackingAppend('assistant', assistantText || '', { tool_calls: lastChunk.toolCalls });
-          }
+        // Persist the assistant turn that requested the tool calls — always,
+        // including ahead of a self-replying short-circuit. Skipping it there
+        // orphaned the tool-result rows (a `tool` message with no preceding
+        // assistant `tool_calls`): it duplicated the output in the next turn's
+        // context and is rejected outright by strict OpenAI-compatible routed
+        // providers, which require every tool message to answer a prior
+        // tool_calls. The post-loop block still writes the final text reply on
+        // its own, so the persisted turn matches the non-short-circuit shape:
+        // assistant(tool_calls) → tool → assistant(text).
+        if (assistantText || lastChunk.toolCalls.length > 0) {
+          trackingAppend('assistant', assistantText || '', { tool_calls: lastChunk.toolCalls });
         }
         // Track whether every tool in this round is self-replying. When all
         // are, the orchestrator can ship the concatenated tool outputs as
@@ -1000,10 +1003,11 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
           assistantText = text;
           await msg.send({ delta: text, done: false });
           // Synthesize a "done with no tool calls" chunk so the outer while
-          // loop exits cleanly; the post-loop block then persists the
-          // assistant turn once with the carried-over completion tokens. (We
-          // intentionally do NOT persist here — earlier versions did, which
-          // double-wrote the row and re-fed it to the model on the next turn.)
+          // loop exits cleanly; the post-loop block then persists the final
+          // text reply once with the carried-over completion tokens (the
+          // tool_calls request row is already written above). We intentionally
+          // do NOT persist the text here — earlier versions did, which
+          // double-wrote it and re-fed the duplicate to the model next turn.
           lastChunk = {
             delta: '',
             done: true,

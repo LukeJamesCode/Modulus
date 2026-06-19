@@ -55,7 +55,12 @@ test('rules pick an obvious match without calling the model', async () => {
   try {
     const db = open({ path: join(dir, 'g.db') });
     const reg = createAgentRegistry(db);
-    reg.create({ name: 'researcher', role: 'Looks things up and reports the facts', systemPrompt: 'x', profile: 'tools' });
+    reg.create({
+      name: 'researcher',
+      role: 'Looks things up and reports the facts',
+      systemPrompt: 'x',
+      profile: 'tools',
+    });
     reg.create({ name: 'writer', role: 'Drafts clear prose', systemPrompt: 'x', profile: 'chat' });
     const llm = fakeLlm('NONE');
 

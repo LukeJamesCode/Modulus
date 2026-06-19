@@ -460,18 +460,27 @@ test('self-replying tool short-circuit persists the assistant turn exactly once'
 
     const rows = db
       .prepare(
-        `SELECT role, content FROM messages WHERE conversation_id = (
+        `SELECT role, content, tool_calls_json FROM messages WHERE conversation_id = (
           SELECT current_conversation_id FROM telegram_chats WHERE chat_id = 42
         ) ORDER BY id`,
       )
-      .all() as Array<{ role: string; content: string }>;
-    // Expected: user, tool, assistant — exactly one assistant row carrying
-    // the self-replying output. Earlier versions wrote the assistant row
-    // twice (once in the short-circuit, once in the post-loop block), which
-    // re-fed the duplicate to the model on the next turn.
-    const assistantRows = rows.filter((r) => r.role === 'assistant');
-    assert.equal(assistantRows.length, 1, 'self-replying short-circuit must persist once');
-    assert.equal(assistantRows[0]!.content, 'Added: lunch');
+      .all() as Array<{ role: string; content: string; tool_calls_json: string | null }>;
+    // Well-formed turn, same shape as the non-short-circuit path:
+    //   user → assistant(tool_calls) → tool → assistant(text)
+    // The tool-call request row must be persisted so the tool result isn't
+    // orphaned — a `tool` with no preceding assistant `tool_calls` duplicates
+    // the output in next-turn context and is rejected by strict OpenAI-
+    // compatible routed providers.
+    assert.deepEqual(
+      rows.map((r) => r.role),
+      ['user', 'assistant', 'tool', 'assistant'],
+    );
+    assert.ok(rows[1]!.tool_calls_json, 'assistant tool-call request must carry tool_calls');
+    assert.equal(rows[1]!.content, '');
+    // The self-replying output is written exactly once as the final text reply.
+    // Earlier versions double-wrote it (short-circuit + post-loop block).
+    const textRows = rows.filter((r) => r.role === 'assistant' && r.content === 'Added: lunch');
+    assert.equal(textRows.length, 1, 'self-replying reply text persisted once');
     db.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

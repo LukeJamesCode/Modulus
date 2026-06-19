@@ -46,8 +46,7 @@ export async function probeOllama(
     // Node's fetch wraps network failures as TypeError("fetch failed") with the
     // real ECONNREFUSED/ENOTFOUND code on `cause` — surface that, not the wrapper.
     const cause = (e as { cause?: { code?: string; message?: string } }).cause;
-    const msg =
-      cause?.code ?? cause?.message ?? (e instanceof Error ? e.message : String(e));
+    const msg = cause?.code ?? cause?.message ?? (e instanceof Error ? e.message : String(e));
     return { ok: false, models: [], error: msg };
   }
 }

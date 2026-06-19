@@ -39,8 +39,7 @@ export interface AgentFleetToolsDeps {
   log: Logger;
 }
 
-const AGENT_ONLY_REFUSAL =
-  'is for the main chat; agents delegate with spawn_agent instead.';
+const AGENT_ONLY_REFUSAL = 'is for the main chat; agents delegate with spawn_agent instead.';
 
 function rosterNames(registry: AgentRegistry): string {
   const names = registry.list().map((a) => a.name);

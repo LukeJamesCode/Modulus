@@ -58,9 +58,23 @@ if (!existsSync(esbuildBin)) {
 }
 
 console.log('4/6 copying the proven better-sqlite3 binary …');
-const sqliteSrc = join(repoRoot, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
+const sqliteSrc = join(
+  repoRoot,
+  'node_modules',
+  'better-sqlite3',
+  'build',
+  'Release',
+  'better_sqlite3.node',
+);
 if (!existsSync(sqliteSrc)) throw new Error(`missing ${sqliteSrc} — see CLAUDE.md`);
-const sqliteDest = join(stagingApp, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
+const sqliteDest = join(
+  stagingApp,
+  'node_modules',
+  'better-sqlite3',
+  'build',
+  'Release',
+  'better_sqlite3.node',
+);
 mkdirSync(dirname(sqliteDest), { recursive: true });
 cpSync(sqliteSrc, sqliteDest);
 
@@ -70,7 +84,10 @@ execFileSync(process.execPath, [join(here, 'fetch-node.mjs'), stagingNode], { st
 console.log('6/6 smoke test: staged node.exe + staged better-sqlite3 …');
 const smoke = spawnSync(
   join(stagingNode, 'node.exe'),
-  ['-e', "const db=require('better-sqlite3')(':memory:');console.log(JSON.stringify(db.prepare('select 1 as x').get()))"],
+  [
+    '-e',
+    "const db=require('better-sqlite3')(':memory:');console.log(JSON.stringify(db.prepare('select 1 as x').get()))",
+  ],
   { cwd: stagingApp, encoding: 'utf8' },
 );
 if (smoke.status !== 0 || !smoke.stdout.includes('"x":1')) {

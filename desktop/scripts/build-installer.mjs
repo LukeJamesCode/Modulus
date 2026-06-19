@@ -40,12 +40,16 @@ if (!process.argv.includes('--skip-stage')) {
 console.log('publishing shell …');
 rmSync(publishDir, { recursive: true, force: true });
 run('dotnet', [
-  'publish', project,
-  '-c', 'Release',
-  '-r', 'win-x64',
+  'publish',
+  project,
+  '-c',
+  'Release',
+  '-r',
+  'win-x64',
   '-p:Platform=x64',
   '--self-contained',
-  '-o', publishDir,
+  '-o',
+  publishDir,
 ]);
 
 console.log('copying daemon payload into publish …');
@@ -58,15 +62,25 @@ console.log('packing installer …');
 // produces the unsigned build (SmartScreen: "More info → Run anyway").
 const signParams = process.env.MODULUS_SIGN_PARAMS;
 run('dotnet', [
-  'tool', 'run', 'vpk', '--',
+  'tool',
+  'run',
+  'vpk',
+  '--',
   'pack',
-  '--packId', 'Modulus',
-  '--packVersion', VERSION,
-  '--packDir', publishDir,
-  '--mainExe', 'ModulusDesktop.exe',
-  '--packTitle', 'Modulus',
-  '--icon', join(desktop, 'ModulusDesktop', 'Assets', 'icon.ico'),
-  '--outputDir', releases,
+  '--packId',
+  'Modulus',
+  '--packVersion',
+  VERSION,
+  '--packDir',
+  publishDir,
+  '--mainExe',
+  'ModulusDesktop.exe',
+  '--packTitle',
+  'Modulus',
+  '--icon',
+  join(desktop, 'ModulusDesktop', 'Assets', 'icon.ico'),
+  '--outputDir',
+  releases,
   ...(signParams ? ['--signParams', signParams] : []),
 ]);
 

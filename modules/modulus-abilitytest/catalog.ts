@@ -92,6 +92,28 @@ const addEvent: ToolSpec = {
   result: 'event added',
 };
 
+// The self-improving-skill proposal tool. The real one stages the proposed
+// bundle, runs the code-free gate, parks a pending row, and returns immediately
+// without touching the live skill — here it's a stub returning that same
+// "waiting for approval" acknowledgement so the probe stays deterministic.
+const proposeSkill: ToolSpec = {
+  name: 'propose_skill',
+  description: 'Propose a new skill or an edit to an existing one for owner approval',
+  parameters: {
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      summary: { type: 'string' },
+      instructions: { type: 'string' },
+      tools: { type: 'array', items: { type: 'string' } },
+      rationale: { type: 'string' },
+      mode: { type: 'string' },
+    },
+    required: ['name', 'summary', 'instructions', 'tools', 'rationale', 'mode'],
+  },
+  result: "Proposed skill 'trip-planner' — waiting for your approval.",
+};
+
 export const CATALOG: AbilityTest[] = [
   // --- tool-selection: the model picks a tool and the pipeline dispatches it ---
   {
@@ -132,6 +154,35 @@ export const CATALOG: AbilityTest[] = [
       { text: 'Loaded the trip-planner playbook and added your Lisbon trip to the calendar.' },
     ],
     expect: { toolsInvoked: ['use_skill', 'add_event'], replyIncludes: ['trip'] },
+  },
+
+  {
+    // Self-improvement: the owner asks to refine an existing skill, the model
+    // calls propose_skill, and the pipeline parks a pending proposal awaiting
+    // approval — the skill on disk is untouched until the owner says yes.
+    id: 'skill-propose-refinement',
+    ability: 'skills',
+    tier: 'standard',
+    dimension: 'tool-selection',
+    message: 'the trip-planner skill should also book a hotel — tighten its playbook',
+    tools: [proposeSkill],
+    script: [
+      {
+        tool: 'propose_skill',
+        args: {
+          name: 'trip-planner',
+          summary: 'Plan a multi-stop trip and book lodging',
+          instructions: 'Search options, add the booking to the calendar, then arrange a hotel.',
+          tools: ['add_event'],
+          rationale: 'Owner asked the skill to also cover booking a hotel.',
+          mode: 'edit',
+        },
+      },
+      {
+        text: "I've proposed a refinement to trip-planner — approve it on Telegram or the panel to apply it.",
+      },
+    ],
+    expect: { toolsInvoked: ['propose_skill'], replyIncludes: ['propos', 'approve'] },
   },
 
   // --- delegation: long-horizon work routes to the operator agent ---

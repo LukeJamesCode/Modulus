@@ -104,10 +104,9 @@ export function createSetupRoutes(deps: PanelDeps): RouteModule {
 
 // Config-shape preflight for promotion. We deliberately do NOT do a live getMe
 // here: the wizard already validated the token live (POST /api/telegram/validate
-// and the pairing getMe), and a getMe at this point would mostly catch the
-// offline-after-pairing case — which we explicitly don't want to block on. So we
-// check only what a malformed env/file edit could break: token shape, at least
-// one allowlisted id, and that the config still loads.
+// and the pairing getMe). We check only what a malformed env/file edit could
+// break: a chat model is set, the config loads, and — if Telegram was set up at
+// all — that it's well-formed. Telegram itself is optional (panel-only installs).
 function preflightSetup(deps: PanelDeps): { ok: true } | { ok: false; error: string } {
   let cfg;
   try {
@@ -115,11 +114,26 @@ function preflightSetup(deps: PanelDeps): { ok: true } | { ok: false; error: str
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
-  if (!cfg.telegram.token || !TOKEN_RE.test(cfg.telegram.token)) {
-    return { ok: false, error: 'Add a valid Telegram bot token before starting.' };
+  if (!cfg.models.chat) {
+    return { ok: false, error: 'Pick a chat model before starting.' };
   }
-  if (cfg.telegram.allowedIds.length === 0) {
-    return { ok: false, error: 'Add at least one allowed person before starting.' };
+  // A half-configured Telegram (token with no one allowlisted, or a malformed
+  // token) is a config bug rather than a deliberate panel-only choice, so block
+  // on it with an actionable message. No token at all = panel-only, which is fine.
+  if (cfg.telegram.token) {
+    if (!TOKEN_RE.test(cfg.telegram.token)) {
+      return {
+        ok: false,
+        error:
+          'The Telegram bot token looks malformed. Clear it to use the web panel only, or paste a valid token.',
+      };
+    }
+    if (cfg.telegram.allowedIds.length === 0) {
+      return {
+        ok: false,
+        error: 'Add at least one allowed person, or clear the token to use the web panel only.',
+      };
+    }
   }
   return { ok: true };
 }

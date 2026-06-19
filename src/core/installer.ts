@@ -484,8 +484,7 @@ export interface StagedSkill {
 
 function walkSkillDir(dir: string, onFile: (name: string) => void): void {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.isSymbolicLink())
-      throw new InstallError(`skill bundle contains a symlink: ${e.name}`);
+    if (e.isSymbolicLink()) throw new InstallError(`skill bundle contains a symlink: ${e.name}`);
     if (e.isDirectory()) {
       // node_modules/ and migrations/ are the two ways a "data" bundle would
       // smuggle code or schema; refuse both by name regardless of contents.

@@ -211,7 +211,10 @@ test('the shipped first-party launch skills all load cleanly', async () => {
       watch: false,
     });
     await loader.loadAll();
-    const names = loader.list().map((s) => s.name).sort();
+    const names = loader
+      .list()
+      .map((s) => s.name)
+      .sort();
     // At least the three reference skills, each enabled and error-free.
     for (const expected of ['day-planner', 'meeting-prep', 'trip-planner']) {
       assert.ok(names.includes(expected), `missing launch skill: ${expected}`);

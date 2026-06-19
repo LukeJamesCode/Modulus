@@ -16,7 +16,10 @@ const EVERY_USAGE = 'Usage: /every <when>, <what> — e.g. /every weekday at 8am
 
 // Split "<when>, <what>" on the first comma. The comma is the separator because
 // either half can contain spaces (and the time half rarely contains a comma).
-function splitWhenWhat(arg: string, usage: string): { when: string; what: string } | { error: string } {
+function splitWhenWhat(
+  arg: string,
+  usage: string,
+): { when: string; what: string } | { error: string } {
   const i = arg.indexOf(',');
   if (i === -1) return { error: usage };
   const when = arg.slice(0, i).trim();

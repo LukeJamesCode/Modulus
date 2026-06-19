@@ -162,7 +162,7 @@ Behaviour: when a turn is predicted slow (heavy profile selected, delegation lik
 
 ## 5. Hive-Mind Memory (core, SQLite + FTS5)
 
-One shared store; every agent — Modulus Agent, module agents, autonomous workers — reads and writes the same table. That _is_ the hive mind: context flows across specialists for free. v1.4.0 adds **per-agent namespaces** as an *additive overlay* on top of this shared store (below) — the shared layer is unchanged and still carries user truth across the fleet.
+One shared store; every agent — Modulus Agent, module agents, autonomous workers — reads and writes the same table. That _is_ the hive mind: context flows across specialists for free. v1.4.0 adds **per-agent namespaces** as an _additive overlay_ on top of this shared store (below) — the shared layer is unchanged and still carries user truth across the fleet.
 
 ### Schema (migration 0021; `agent_id` added in 0032)
 
@@ -254,7 +254,7 @@ The CLI keeps `modulus mod install <name|url|path>` for power users — same sha
 
 ### Skills — the safe tier (v1.5.0)
 
-A **skill** rides the same pinned, consent-gated pipeline but is pure prompt data — a `skill.json` + `SKILL.md` playbook + an allowlist of *existing* tools, with **no code**. Registry entries set `"kind": "skill"` (absent ⇒ module, so every prior entry stays valid) and carry a `tools` array instead of `permissions`. Before staging, the installer runs a **code-free gate** (`assertNoExecutableContent`) over the whole tarball — any `.js`/`.ts`/`.sh`/`.py`/`.wasm` or other non-data file, a `node_modules/`, a `migrations/`, or an `entrypoints` key fails closed. The same gate re-runs at load, so a hand-placed bundle is held to the contract too. The loader (`src/core/skills.ts`) has no `Host` and never imports — that absence is the guarantee. Consent renders per-tool tiers ("uses `web_search` — runs automatically"); a skill's only capability is the intersection of its tools with what's installed and permitted. See [skills.md](skills.md). Skills are the **safe tier of the marketplace**; the module supply-chain stance below is the trusted-code tier.
+A **skill** rides the same pinned, consent-gated pipeline but is pure prompt data — a `skill.json` + `SKILL.md` playbook + an allowlist of _existing_ tools, with **no code**. Registry entries set `"kind": "skill"` (absent ⇒ module, so every prior entry stays valid) and carry a `tools` array instead of `permissions`. Before staging, the installer runs a **code-free gate** (`assertNoExecutableContent`) over the whole tarball — any `.js`/`.ts`/`.sh`/`.py`/`.wasm` or other non-data file, a `node_modules/`, a `migrations/`, or an `entrypoints` key fails closed. The same gate re-runs at load, so a hand-placed bundle is held to the contract too. The loader (`src/core/skills.ts`) has no `Host` and never imports — that absence is the guarantee. Consent renders per-tool tiers ("uses `web_search` — runs automatically"); a skill's only capability is the intersection of its tools with what's installed and permitted. See [skills.md](skills.md). Skills are the **safe tier of the marketplace**; the module supply-chain stance below is the trusted-code tier.
 
 ---
 

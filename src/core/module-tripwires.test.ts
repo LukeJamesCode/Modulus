@@ -91,11 +91,14 @@ test('pathContained: a path inside a root passes; traversal and siblings fail', 
 
 // -- createModuleTripwires: enforcement + the denied counter -----------------
 
-function countingTripwires(permissions: {
-  network?: string[];
-  subprocess?: string[];
-  filesystem?: string[];
-}, dataDir: string) {
+function countingTripwires(
+  permissions: {
+    network?: string[];
+    subprocess?: string[];
+    filesystem?: string[];
+  },
+  dataDir: string,
+) {
   const denials: TripwireSurface[] = [];
   const tw = createModuleTripwires({
     moduleName: 'demo',
@@ -275,7 +278,11 @@ test('no NEW first-party module imports node:child_process directly', () => {
         walk(full);
       } else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
         const src = readFileSync(full, 'utf8');
-        if (/(from\s+['"](?:node:)?child_process['"]|require\(\s*['"](?:node:)?child_process['"]\s*\))/.test(src)) {
+        if (
+          /(from\s+['"](?:node:)?child_process['"]|require\(\s*['"](?:node:)?child_process['"]\s*\))/.test(
+            src,
+          )
+        ) {
           offenders.push(relative(modulesRoot, full).split('\\').join('/'));
         }
       }

@@ -110,6 +110,14 @@ A **skill** is the safe tier of the marketplace: pure prompt data — a `skill.j
 
 Skills are therefore safe to install by construction; the trust warning above applies to **modules**, not skills.
 
+### Self-improving skills (approval-gated)
+
+A skill can be _rewritten_ without becoming code. The `propose_skill` tool lets an agent or the owner suggest a new skill or an edit to an existing one. The proposal is pure data held off-disk until the owner approves — and the same guarantees hold:
+
+- **Three-point code-free gate.** `assertNoExecutableContent` runs at **propose** time (a proposal carrying an executable file, `node_modules/`, `migrations/`, or an `entrypoints` key is refused before review), again at **commit** time (on approval), and a third time at **load** time. The loader still has no dynamic import on its path, so a self-proposed skill provably cannot smuggle in code.
+- **No capability creation.** A proposal can rewrite guidance and re-list tools, but a committed skill's only capability remains its tools ∩ what is installed and permitted. Self-improvement changes _instructions_, never _reach_ — a playbook that re-lists a tool the owner never installed unlocks nothing.
+- **Owner-only approval.** Only the Telegram owner or the token-authed panel can approve. An agent cannot self-approve, and a plain chat user cannot approve at all. Rejecting leaves disk untouched. The committed skill loads inside the same provenance fence with the standing anti-injection policy, so its guidance is still reference data and still hits the confirm/owner gate.
+
 ---
 
 ## Docker security

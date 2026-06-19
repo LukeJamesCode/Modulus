@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { parseSchedule, describeSpec, hostTimeZone } from './schedule-parse.js';
+import { parseSchedule, describeSpec, describeCron, hostTimeZone } from './schedule-parse.js';
 import type { ScheduleSpec } from './schedule-parse.js';
 import type { LLM, ChatChunk, ChatOptions } from './llm.js';
 
@@ -112,7 +112,10 @@ test('"every Monday at 9" → 0 9 * * 1', async () => {
 });
 
 test('"every mon and wed at 7:30" → 30 7 * * 1,3', async () => {
-  assert.equal(asRecurring(await parseSchedule('every mon and wed at 7:30', ctx())).cron, '30 7 * * 1,3');
+  assert.equal(
+    asRecurring(await parseSchedule('every mon and wed at 7:30', ctx())).cron,
+    '30 7 * * 1,3',
+  );
 });
 
 test('"every 2 hours" → 0 */2 * * *', async () => {
@@ -144,7 +147,10 @@ test('"every 24 hours" → daily (0 0 * * *)', async () => {
 });
 
 test('"monthly on the 1st at noon" → 0 12 1 * *', async () => {
-  assert.equal(asRecurring(await parseSchedule('monthly on the 1st at noon', ctx())).cron, '0 12 1 * *');
+  assert.equal(
+    asRecurring(await parseSchedule('monthly on the 1st at noon', ctx())).cron,
+    '0 12 1 * *',
+  );
 });
 
 test('"on the 15th at 9am" → 0 9 15 * * (monthly)', async () => {
@@ -225,9 +231,29 @@ test('unparseable with no model is an error', async () => {
   assert.ok('error' in (await parseSchedule('banana pancakes', ctx())));
 });
 
-test('describeSpec renders a recurring cron and a once time', () => {
-  assert.match(describeSpec({ kind: 'recurring', cron: '0 8 * * *', timeZone: TZ }, TZ), /0 8 \* \* \*/);
+test('describeSpec renders a recurring cron in plain words and a once time', () => {
+  assert.equal(
+    describeSpec({ kind: 'recurring', cron: '0 8 * * *', timeZone: TZ }, TZ),
+    'every day at 8:00 AM',
+  );
   assert.ok(describeSpec({ kind: 'once', at: NOW.getTime() }, TZ).length > 0);
+});
+
+test('describeCron turns the shapes we emit into plain phrases', () => {
+  assert.equal(describeCron('0 8 * * *'), 'every day at 8:00 AM');
+  assert.equal(describeCron('0 8 * * 1-5'), 'every weekday at 8:00 AM');
+  assert.equal(describeCron('0 10 * * 0,6'), 'every weekend at 10:00 AM');
+  assert.equal(describeCron('0 9 * * 1'), 'every Mon at 9:00 AM');
+  assert.equal(describeCron('30 7 * * 1,3'), 'every Mon and Wed at 7:30 AM');
+  assert.equal(describeCron('0 */2 * * *'), 'every 2 hours');
+  assert.equal(describeCron('*/30 * * * *'), 'every 30 minutes');
+  assert.equal(describeCron('0 * * * *'), 'every hour');
+  assert.equal(describeCron('0 0 * * *'), 'every day at 12:00 AM');
+  assert.equal(describeCron('0 12 1 * *'), 'on day 1 of every month at 12:00 PM');
+  assert.equal(describeCron('15 6 * * 1-5'), 'every weekday at 6:15 AM');
+  // Exotic shapes (specific month, malformed) fall back so no raw cron leaks.
+  assert.equal(describeCron('5 4 3 2 1'), 'on a custom schedule');
+  assert.equal(describeCron('not a cron'), 'on a custom schedule');
 });
 
 test('hostTimeZone returns a non-empty string', () => {

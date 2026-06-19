@@ -5,7 +5,15 @@
 // Usage: node fetch-node.mjs [destDir]   (default: ../staging/daemon/node)
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, renameSync, readdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  renameSync,
+  readdirSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -44,7 +52,9 @@ async function main() {
   const actual = createHash('sha256').update(readFileSync(zipPath)).digest('hex');
   if (actual !== expected) {
     rmSync(zipPath);
-    throw new Error(`sha256 mismatch for ${DIST}.zip (got ${actual}, want ${expected}) — cache cleared, retry`);
+    throw new Error(
+      `sha256 mismatch for ${DIST}.zip (got ${actual}, want ${expected}) — cache cleared, retry`,
+    );
   }
 
   console.log(`extracting to ${dest} …`);

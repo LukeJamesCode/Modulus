@@ -10,11 +10,20 @@ function setup() {
   const dir = mkdtempSync(join(tmpdir(), 'modulus-standing-'));
   const db = open({ path: join(dir, 'g.db') });
   const store = createStandingOrderStore(db);
-  return { db, store, cleanup: () => { db.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return {
+    db,
+    store,
+    cleanup: () => {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 // A handler that records agent dispatches and never has a missing agent.
-function recordingHandlers(extra: Partial<StandingOrderHandlers> = {}): StandingOrderHandlers & { dispatched: number[] } {
+function recordingHandlers(
+  extra: Partial<StandingOrderHandlers> = {},
+): StandingOrderHandlers & { dispatched: number[] } {
   const dispatched: number[] = [];
   let nextTaskId = 1;
   return Object.assign(
@@ -96,7 +105,11 @@ test('a vanished agent (dispatch returns null) does not fire', () => {
 test('notify_on_change fires only when the probed state differs', () => {
   const { store, cleanup } = setup();
   try {
-    const order = store.create({ instruction: 'btc dropped', notifyChatId: 5, notifyOnChange: true });
+    const order = store.create({
+      instruction: 'btc dropped',
+      notifyChatId: 5,
+      notifyOnChange: true,
+    });
     let state = 'high';
     const h: StandingOrderHandlers = { dispatchAgent: () => null, probe: () => state };
 
@@ -119,9 +132,18 @@ test('a cron order catches up: fires on the first beat at/after its time', () =>
   try {
     // 09:15 daily, but a 30-min heartbeat only beats at :00 and :30 — an
     // exact-minute match would never fire. Anchor the order's clock to 09:00.
-    const order = store.create({ instruction: 'morning check', notifyChatId: 2, cron: '15 9 * * *', timeZone: 'UTC' });
+    const order = store.create({
+      instruction: 'morning check',
+      notifyChatId: 2,
+      cron: '15 9 * * *',
+      timeZone: 'UTC',
+    });
     const base = new Date('2026-06-15T09:00:00Z').getTime();
-    db.prepare('UPDATE standing_orders SET created_at = ?, last_evaluated_at = ? WHERE id = ?').run(base, base, order.id);
+    db.prepare('UPDATE standing_orders SET created_at = ?, last_evaluated_at = ? WHERE id = ?').run(
+      base,
+      base,
+      order.id,
+    );
     const h = recordingHandlers();
     assert.equal(store.evaluateDue(h, new Date('2026-06-15T09:00:00Z')).nudges.length, 0); // 09:15 not yet
     assert.equal(store.evaluateDue(h, new Date('2026-06-15T09:30:00Z')).nudges.length, 1); // fires off-minute

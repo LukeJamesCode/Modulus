@@ -158,12 +158,7 @@ function ModulesTab() {
         >
           Skills
         </window.Button>
-        <window.Button
-          size="sm"
-          variant="default"
-          icon="plus"
-          onClick={() => setView('browse')}
-        >
+        <window.Button size="sm" variant="default" icon="plus" onClick={() => setView('browse')}>
           Browse marketplace
         </window.Button>
       </div>
@@ -1533,7 +1528,7 @@ function MarketCard({ entry, busy, onInstall }) {
           minHeight: 40,
         }}
       >
-        {entry.description || 'No description provided.'}
+        {blurbFor(entry)}
       </p>
       <div style={{ marginBottom: 14 }}>
         <div
@@ -1663,6 +1658,8 @@ function SkillsView({ onBack }) {
   const [busy, setBusy] = useStateMod(null); // skill name mutating
   const [consent, setConsent] = useStateMod(null); // registry entry awaiting confirm
   const [playbook, setPlaybook] = useStateMod(null); // installed record being viewed
+  const [proposals, setProposals] = useStateMod(null); // { pending, recent } | null
+  const [proposal, setProposal] = useStateMod(null); // proposal being reviewed in modal
   const [actionError, setActionError] = useStateMod(null);
 
   const loadInstalled = async () => {
@@ -1670,6 +1667,11 @@ function SkillsView({ onBack }) {
     const r = await window.api.get('/api/skills');
     if (r.ok) setInstalled(r.data.skills || []);
     else setError((r.data && r.data.error) || r.error || 'Could not load skills.');
+  };
+  const loadProposals = async () => {
+    const r = await window.api.get('/api/skills/proposals');
+    if (r.ok) setProposals({ pending: r.data.pending || [], recent: r.data.recent || [] });
+    else setActionError((r.data && r.data.error) || r.error || 'Could not load proposals.');
   };
   const loadBrowse = async () => {
     setError(null);
@@ -1680,6 +1682,7 @@ function SkillsView({ onBack }) {
   };
   useEffectMod(() => {
     loadInstalled();
+    loadProposals();
   }, []);
 
   const act = async (name, action) => {
@@ -1702,8 +1705,25 @@ function SkillsView({ onBack }) {
     if (r.ok) {
       loadBrowse();
       loadInstalled();
-    } else setActionError((r.data && r.data.error) || r.error || `Could not install ${entry.name}.`);
+    } else
+      setActionError((r.data && r.data.error) || r.error || `Could not install ${entry.name}.`);
   };
+  // Approve/reject a proposal. Approve commits it to disk and hot-loads it, so
+  // refresh the installed list too; either way the proposals list moves it out
+  // of pending.
+  const actProposal = async (id, action) => {
+    setBusy(`proposal:${id}`);
+    setActionError(null);
+    const r = await window.api.post(`/api/skills/proposals/${id}/${action}`);
+    setBusy(null);
+    setProposal(null);
+    if (r.ok) {
+      loadProposals();
+      if (action === 'approve') loadInstalled();
+    } else setActionError((r.data && r.data.error) || r.error || `Could not ${action} proposal.`);
+  };
+
+  const pendingCount = proposals && proposals.pending ? proposals.pending.length : 0;
 
   return (
     <div className="fade">
@@ -1739,10 +1759,15 @@ function SkillsView({ onBack }) {
           onChange={(v) => {
             setView(v);
             if (v === 'browse' && browse === null) loadBrowse();
+            if (v === 'proposals') loadProposals();
           }}
           options={[
             { value: 'installed', label: 'Installed' },
             { value: 'browse', label: 'Browse' },
+            {
+              value: 'proposals',
+              label: pendingCount ? `Proposals (${pendingCount})` : 'Proposals',
+            },
           ]}
         />
       </div>
@@ -1822,6 +1847,74 @@ function SkillsView({ onBack }) {
         </div>
       )}
 
+      {view === 'proposals' && proposals === null && !actionError && (
+        <p style={{ fontSize: 13.5, color: 'var(--text-3)' }}>Loading proposals…</p>
+      )}
+      {view === 'proposals' &&
+        proposals &&
+        proposals.pending.length === 0 &&
+        proposals.recent.length === 0 && (
+          <div
+            style={{
+              textAlign: 'center',
+              padding: '50px 20px',
+              border: '1px dashed var(--border-2)',
+              borderRadius: 'var(--radius)',
+              color: 'var(--text-3)',
+            }}
+          >
+            <window.Icon name="spark" size={28} style={{ margin: '0 auto 10px' }} />
+            <p style={{ fontSize: 14, color: 'var(--text-2)', fontWeight: 600 }}>No proposals</p>
+            <p style={{ fontSize: 13, marginTop: 3 }}>
+              When the assistant suggests a new skill or a refinement, it lands here for your
+              approval.
+            </p>
+          </div>
+        )}
+      {view === 'proposals' &&
+        proposals &&
+        (proposals.pending.length > 0 || proposals.recent.length > 0) && (
+          <>
+            {proposals.pending.length > 0 && (
+              <div style={{ display: 'grid', gap: 'calc(14px * var(--gap))', marginBottom: 20 }}>
+                {proposals.pending.map((p) => (
+                  <ProposalCard
+                    key={p.id}
+                    proposal={p}
+                    busy={busy === `proposal:${p.id}`}
+                    onReview={() => setProposal(p)}
+                    onApprove={() => actProposal(p.id, 'approve')}
+                    onReject={() => actProposal(p.id, 'reject')}
+                  />
+                ))}
+              </div>
+            )}
+            {proposals.recent.length > 0 && (
+              <>
+                <div
+                  style={{
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    color: 'var(--text-3)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '.05em',
+                    margin: '4px 0 10px',
+                  }}
+                >
+                  Decided
+                </div>
+                <div style={{ display: 'grid', gap: 'calc(14px * var(--gap))' }}>
+                  {proposals.recent
+                    .filter((p) => p.status !== 'pending')
+                    .map((p) => (
+                      <ProposalCard key={p.id} proposal={p} onReview={() => setProposal(p)} />
+                    ))}
+                </div>
+              </>
+            )}
+          </>
+        )}
+
       <SkillConsentModal
         entry={consent}
         busy={!!busy}
@@ -1829,6 +1922,14 @@ function SkillsView({ onBack }) {
         onConfirm={() => consent && install(consent)}
       />
       <SkillPlaybookModal skill={playbook} onClose={() => setPlaybook(null)} />
+      <ProposalReviewModal
+        proposal={proposal}
+        current={proposal && (installed || []).find((s) => s.name === proposal.skillName)}
+        busy={proposal ? busy === `proposal:${proposal.id}` : false}
+        onClose={() => setProposal(null)}
+        onApprove={() => proposal && actProposal(proposal.id, 'approve')}
+        onReject={() => proposal && actProposal(proposal.id, 'reject')}
+      />
     </div>
   );
 }
@@ -1848,7 +1949,15 @@ function SkillToolList({ tools, label }) {
       >
         {label}
       </div>
-      <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5 }}>
+      <ul
+        style={{
+          margin: 0,
+          paddingLeft: 16,
+          fontSize: 12.5,
+          color: 'var(--text-2)',
+          lineHeight: 1.5,
+        }}
+      >
         {(tools && tools.length ? tools : ['Guidance only — uses no tools']).map((t, i) => (
           <li key={i}>{t}</li>
         ))}
@@ -1882,13 +1991,26 @@ function SkillCard({ skill, busy, onToggle, onView, onRemove }) {
           {skill.error ? 'Error' : skill.enabled ? 'On' : 'Off'}
         </window.Badge>
       </div>
-      <p style={{ fontSize: 13.5, color: 'var(--text-2)', lineHeight: 1.5, marginBottom: 12, minHeight: 38 }}>
+      <p
+        style={{
+          fontSize: 13.5,
+          color: 'var(--text-2)',
+          lineHeight: 1.5,
+          marginBottom: 12,
+          minHeight: 38,
+        }}
+      >
         {skill.error ? skill.error : skill.summary}
       </p>
       {!skill.error && <SkillToolList tools={skill.tools} label="Tools it can use" />}
       <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
         {!skill.error && (
-          <window.Button size="sm" variant="subtle" onClick={() => onToggle(!skill.enabled)} disabled={busy}>
+          <window.Button
+            size="sm"
+            variant="subtle"
+            onClick={() => onToggle(!skill.enabled)}
+            disabled={busy}
+          >
             {skill.enabled ? 'Disable' : 'Enable'}
           </window.Button>
         )}
@@ -1932,11 +2054,21 @@ function SkillMarketCard({ entry, busy, onInstall }) {
           <div style={{ fontWeight: 600, fontSize: 15.5 }}>{entry.displayName || entry.name}</div>
           <div style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
             v{entry.version}
-            {entry.installed && entry.installedVersion ? ` · installed v${entry.installedVersion}` : ''}
+            {entry.installed && entry.installedVersion
+              ? ` · installed v${entry.installedVersion}`
+              : ''}
           </div>
         </div>
       </div>
-      <p style={{ fontSize: 13.5, color: 'var(--text-2)', lineHeight: 1.5, marginBottom: 14, minHeight: 40 }}>
+      <p
+        style={{
+          fontSize: 13.5,
+          color: 'var(--text-2)',
+          lineHeight: 1.5,
+          marginBottom: 14,
+          minHeight: 40,
+        }}
+      >
         {entry.description || 'No description provided.'}
       </p>
       <SkillToolList tools={entry.tools} label="Tools it would use" />
@@ -1980,7 +2112,12 @@ function SkillConsentModal({ entry, busy, onCancel, onConfirm }) {
           <window.Button variant="ghost" onClick={onCancel} disabled={busy}>
             Cancel
           </window.Button>
-          <window.Button variant="primary" icon={busy ? undefined : 'check'} onClick={onConfirm} disabled={busy}>
+          <window.Button
+            variant="primary"
+            icon={busy ? undefined : 'check'}
+            onClick={onConfirm}
+            disabled={busy}
+          >
             {busy ? 'Adding…' : 'Add skill'}
           </window.Button>
         </>
@@ -1990,10 +2127,20 @@ function SkillConsentModal({ entry, busy, onCancel, onConfirm }) {
         This downloads <span className="mono">{entry.name}</span> v{entry.version}, verifies it, and
         confirms it carries no code. It can use only these tools you already have:
       </p>
-      <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13.5, color: 'var(--text)', lineHeight: 1.6 }}>
-        {(entry.tools && entry.tools.length ? entry.tools : ['Guidance only — uses no tools']).map((t, i) => (
-          <li key={i}>{t}</li>
-        ))}
+      <ul
+        style={{
+          margin: 0,
+          paddingLeft: 18,
+          fontSize: 13.5,
+          color: 'var(--text)',
+          lineHeight: 1.6,
+        }}
+      >
+        {(entry.tools && entry.tools.length ? entry.tools : ['Guidance only — uses no tools']).map(
+          (t, i) => (
+            <li key={i}>{t}</li>
+          ),
+        )}
       </ul>
     </window.Modal>
   );
@@ -2018,6 +2165,212 @@ function SkillPlaybookModal({ skill, onClose }) {
       >
         {skill.playbook || 'No playbook text.'}
       </pre>
+    </window.Modal>
+  );
+}
+
+// A self-improving-skill proposal: the assistant (or the owner) suggests a new
+// skill or an edit to an existing one. It's pure data held off-disk until the
+// owner approves here — approving runs the same code-free gate and commits it.
+function ProposalCard({ proposal: p, busy, onReview, onApprove, onReject }) {
+  const pending = p.status === 'pending';
+  const tone =
+    p.status === 'approved' ? 'ok' : p.status === 'rejected' ? 'err' : pending ? 'warn' : 'neutral';
+  return (
+    <div
+      style={{
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
+        boxShadow: 'var(--shadow-sm)',
+        padding: 18,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <window.Icon name="spark" size={18} style={{ color: 'var(--accent)' }} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 15 }}>{p.skillName}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+            {p.baseVersion ? `Edit of v${p.baseVersion}` : 'New skill'} · proposed by{' '}
+            <span className="mono">{p.proposedBy}</span>
+          </div>
+        </div>
+        <window.Badge tone={tone}>{p.status[0].toUpperCase() + p.status.slice(1)}</window.Badge>
+      </div>
+      {p.summary && (
+        <p style={{ fontSize: 13.5, color: 'var(--text-2)', lineHeight: 1.5, margin: '0 0 8px' }}>
+          {p.summary}
+        </p>
+      )}
+      <p style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5, margin: 0 }}>
+        <span style={{ fontWeight: 600, color: 'var(--text-3)' }}>Why: </span>
+        {p.rationale}
+      </p>
+      <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <window.Button size="sm" variant="ghost" icon="doc" onClick={onReview}>
+          Review {p.baseVersion ? 'diff' : 'playbook'}
+        </window.Button>
+        {pending && (
+          <>
+            <window.Button
+              size="sm"
+              variant="ghost"
+              onClick={onReject}
+              disabled={busy}
+              style={{ marginLeft: 'auto', color: 'var(--err)' }}
+            >
+              Reject
+            </window.Button>
+            <window.Button
+              size="sm"
+              variant="primary"
+              icon="check"
+              onClick={onApprove}
+              disabled={busy}
+            >
+              Approve
+            </window.Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// LCS line diff so an owner can see exactly what an edit changes before approving.
+// Playbooks are capped at 32 KB, so the quadratic table stays small; the line
+// guard in ProposalDiff covers the pathological case anyway.
+function diffLines(a, b) {
+  const A = (a || '').split('\n');
+  const B = (b || '').split('\n');
+  const n = A.length;
+  const m = B.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (A[i] === B[j]) {
+      out.push({ t: ' ', text: A[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push({ t: '-', text: A[i++] });
+    } else {
+      out.push({ t: '+', text: B[j++] });
+    }
+  }
+  while (i < n) out.push({ t: '-', text: A[i++] });
+  while (j < m) out.push({ t: '+', text: B[j++] });
+  return out;
+}
+
+function ProposalDiff({ oldText, newText }) {
+  const tooBig = (oldText || '').split('\n').length + (newText || '').split('\n').length > 1200;
+  if (tooBig) {
+    return (
+      <>
+        <p style={{ fontSize: 12.5, color: 'var(--text-3)', margin: '0 0 6px' }}>
+          Playbook too large to diff inline — showing the proposed version.
+        </p>
+        <pre style={diffPreStyle}>{newText || ''}</pre>
+      </>
+    );
+  }
+  const rows = diffLines(oldText, newText);
+  const bg = {
+    '+': 'color-mix(in oklab, var(--ok) 12%, transparent)',
+    '-': 'color-mix(in oklab, var(--err) 12%, transparent)',
+    ' ': 'transparent',
+  };
+  const fg = { '+': 'var(--ok)', '-': 'var(--err)', ' ': 'var(--text-2)' };
+  return (
+    <pre style={diffPreStyle}>
+      {rows.map((r, k) => (
+        <div
+          key={k}
+          style={{
+            background: bg[r.t],
+            color: fg[r.t],
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}
+        >
+          {r.t} {r.text}
+        </div>
+      ))}
+    </pre>
+  );
+}
+
+const diffPreStyle = {
+  margin: 0,
+  maxHeight: '52vh',
+  overflow: 'auto',
+  fontSize: 12.5,
+  lineHeight: 1.5,
+  fontFamily: 'var(--font-mono)',
+  background: 'var(--surface-2)',
+  border: '1px solid var(--border)',
+  borderRadius: 'var(--radius-sm)',
+  padding: 12,
+};
+
+function ProposalReviewModal({ proposal: p, current, busy, onClose, onApprove, onReject }) {
+  if (!p) return null;
+  const pending = p.status === 'pending';
+  const isEdit = !!p.baseVersion;
+  return (
+    <window.Modal
+      open={!!p}
+      onClose={busy ? () => {} : onClose}
+      width={700}
+      title={`${p.skillName} · ${isEdit ? 'proposed edit' : 'new skill'}`}
+      footer={
+        pending ? (
+          <>
+            <window.Button
+              variant="ghost"
+              onClick={onReject}
+              disabled={busy}
+              style={{ color: 'var(--err)' }}
+            >
+              Reject
+            </window.Button>
+            <window.Button
+              variant="primary"
+              icon={busy ? undefined : 'check'}
+              onClick={onApprove}
+              disabled={busy}
+            >
+              {busy ? 'Approving…' : 'Approve & install'}
+            </window.Button>
+          </>
+        ) : undefined
+      }
+    >
+      <p style={{ fontSize: 12.5, color: 'var(--text-3)', margin: '0 0 10px' }}>
+        Proposed by <span className="mono">{p.proposedBy}</span>. Approving runs the code-free gate
+        again and writes it to disk; a skill can still only use tools you already have.
+      </p>
+      {p.summary && (
+        <p style={{ fontSize: 13.5, color: 'var(--text)', lineHeight: 1.5, margin: '0 0 10px' }}>
+          {p.summary}
+        </p>
+      )}
+      <SkillToolList tools={p.tools} label="Tools it would use" />
+      <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5, marginBottom: 12 }}>
+        <span style={{ fontWeight: 600, color: 'var(--text-3)' }}>Why: </span>
+        {p.rationale}
+      </div>
+      {isEdit && current ? (
+        <ProposalDiff oldText={current.playbook} newText={p.instructions} />
+      ) : (
+        <pre style={diffPreStyle}>{p.instructions || 'No playbook text.'}</pre>
+      )}
     </window.Modal>
   );
 }

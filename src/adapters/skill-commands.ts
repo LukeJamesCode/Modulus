@@ -27,7 +27,10 @@ export interface SkillDeps {
 // is just a human preview.
 const PLAYBOOK_PREVIEW_CHARS = 1500;
 
-function resolveTiers(deps: SkillDeps, allowlist: readonly string[]): Array<{ name: string; tier: SkillToolTier }> {
+function resolveTiers(
+  deps: SkillDeps,
+  allowlist: readonly string[],
+): Array<{ name: string; tier: SkillToolTier }> {
   return allowlist.map((name) => {
     const handler = deps.tools.get(name);
     return { name, tier: (handler ? handler.tier : 'unknown') as SkillToolTier };
@@ -44,11 +47,18 @@ export function handleSkills(deps: SkillDeps): string {
       return 'No skills installed yet. Add one from the Modules tab (Skills section) in the panel.';
     }
     // Everything present is disabled/errored — say so rather than "none".
-    const lines = blocked.map((s) => `- ${s.name}${s.error ? ` — unavailable (${s.error})` : ' — disabled'}`);
+    const lines = blocked.map(
+      (s) => `- ${s.name}${s.error ? ` — unavailable (${s.error})` : ' — disabled'}`,
+    );
     return ['🧩 Skills (none active):', ...lines].join('\n');
   }
   const lines = usable.map((s) => `- ${s.name} — ${s.summary}`);
-  const out = ['🧩 Skills the assistant can draw on:', ...lines, '', 'View one with /skill <name>.'];
+  const out = [
+    '🧩 Skills the assistant can draw on:',
+    ...lines,
+    '',
+    'View one with /skill <name>.',
+  ];
   const blocked = all.filter((s) => !s.enabled || s.error);
   if (blocked.length > 0) {
     out.push('', `Also installed but inactive: ${blocked.map((s) => s.name).join(', ')}.`);
@@ -65,7 +75,9 @@ export function handleSkill(deps: SkillDeps, arg: string): string {
   if (!rec) return `No skill named '${name}'. Run /skills to see them.`;
   if (rec.error) return `Skill '${name}' is installed but unavailable: ${rec.error}`;
 
-  const header = rec.enabled ? `🧩 ${rec.name} (v${rec.version})` : `🧩 ${rec.name} (v${rec.version}) — disabled`;
+  const header = rec.enabled
+    ? `🧩 ${rec.name} (v${rec.version})`
+    : `🧩 ${rec.name} (v${rec.version}) — disabled`;
   const toolLines = describeSkillTools(resolveTiers(deps, rec.toolAllowlist));
 
   const out = [header, '', rec.summary, '', 'Tools:', ...toolLines.map((l) => `· ${l}`)];

@@ -20,6 +20,19 @@ test('/help lists core commands and excludes any codex commands', () => {
   assert.doesNotMatch(help, /codex/i);
 });
 
+test('/help groups core commands under themed headers', () => {
+  const help = buildTelegramHelp();
+  assert.match(help, /Chatting:/);
+  assert.match(help, /Reminders:/);
+  assert.match(help, /Agents & skills:/);
+  assert.match(help, /Proactive nudges:/);
+  assert.match(help, /System:/);
+  // /remind lands in Reminders, not in some catch-all bucket.
+  const remindIdx = help.indexOf('/remind');
+  const remindersIdx = help.indexOf('Reminders:');
+  assert.ok(remindersIdx >= 0 && remindIdx > remindersIdx);
+});
+
 test('/help groups installed modules and their commands', () => {
   const help = buildTelegramHelp({
     modules: [

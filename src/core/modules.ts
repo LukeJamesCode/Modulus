@@ -144,6 +144,8 @@ export interface SettingsSchema {
       type: 'string' | 'number' | 'boolean';
       default?: string | number | boolean;
       format?: string;
+      // Human-friendly field label. Falls back to a humanized key when absent.
+      title?: string;
       description?: string;
       secret?: boolean;
     }

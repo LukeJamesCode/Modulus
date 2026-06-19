@@ -71,7 +71,8 @@ function agentActivity(agentId, tasks, typing) {
       queued,
       paused,
     };
-  if (queued.length) return { dot: 'idle', label: `${queued.length} queued`, running, queued, paused };
+  if (queued.length)
+    return { dot: 'idle', label: `${queued.length} queued`, running, queued, paused };
   if (paused.length) return { dot: 'paused', label: 'paused', running, queued, paused };
   return { dot: 'stopped', label: 'idle', running, queued, paused };
 }
@@ -283,7 +284,8 @@ function AgentRoster({ agents, tasks, typingId, selectedId, onSelect, onNewAgent
                 if (!on) e.currentTarget.style.background = 'var(--surface-2)';
               }}
               onMouseLeave={(e) => {
-                if (!on) e.currentTarget.style.background = on ? 'var(--accent-soft)' : 'transparent';
+                if (!on)
+                  e.currentTarget.style.background = on ? 'var(--accent-soft)' : 'transparent';
               }}
             >
               <AgentAvatar agent={a} />
@@ -369,7 +371,13 @@ function TaskCardInline({ task, onOpen }) {
     >
       <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
         <window.Icon
-          name={task.status === 'running' ? 'loader' : task.status === 'paused' ? 'pause-circle' : 'clock'}
+          name={
+            task.status === 'running'
+              ? 'loader'
+              : task.status === 'paused'
+                ? 'pause-circle'
+                : 'clock'
+          }
           size={13}
           className={task.status === 'running' ? 'spin' : undefined}
           style={{ color: tone }}
@@ -430,7 +438,11 @@ function DmThinking({ text, live }) {
           font: 'inherit',
         }}
       >
-        <window.Icon name={live ? 'loader' : 'chevron-down'} size={12} className={live ? 'spin' : undefined} />
+        <window.Icon
+          name={live ? 'loader' : 'chevron-down'}
+          size={12}
+          className={live ? 'spin' : undefined}
+        />
         {live ? 'thinking…' : open ? 'hide reasoning' : 'show reasoning'}
       </button>
       {(open || live) && (
@@ -458,7 +470,10 @@ function DmThinking({ text, live }) {
 function DmBubble({ m }) {
   const isUser = m.role === 'user';
   return (
-    <div className="rise" style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start' }}>
+    <div
+      className="rise"
+      style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start' }}
+    >
       <div
         style={{
           maxWidth: '76%',
@@ -528,7 +543,9 @@ function DmConfirmCard({ confirm, onAnswer }) {
         gap: 10,
       }}
     >
-      <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700 }}>
+      <span
+        style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700 }}
+      >
         <window.Icon name="shield" size={15} style={{ color: 'var(--warn)' }} />
         Approval needed — {confirm.tool}
       </span>
@@ -548,7 +565,16 @@ function DmConfirmCard({ confirm, onAnswer }) {
 }
 
 /* ---- the chat pane ---- */
-function AgentChatPane({ agent, tasks, typing, onTyping, onOpenTask, onEditAgent, onDispatch, refresh }) {
+function AgentChatPane({
+  agent,
+  tasks,
+  typing,
+  onTyping,
+  onOpenTask,
+  onEditAgent,
+  onDispatch,
+  refresh,
+}) {
   const [messages, setMessages] = useStateAC([]);
   const [loaded, setLoaded] = useStateAC(false);
   const [draft, setDraft] = useStateAC('');
@@ -594,7 +620,6 @@ function AgentChatPane({ agent, tasks, typing, onTyping, onOpenTask, onEditAgent
       onTyping(null);
     }
     loadHistory();
-     
   }, [agent.id]);
 
   // Pin the scroll to the newest message.
@@ -764,7 +789,12 @@ function AgentChatPane({ agent, tasks, typing, onTyping, onOpenTask, onEditAgent
           </span>
         </div>
         {act.paused.length > 0 ? (
-          <window.Button size="sm" icon="play" onClick={resumeWork} title="Resume this agent's paused tasks">
+          <window.Button
+            size="sm"
+            icon="play"
+            onClick={resumeWork}
+            title="Resume this agent's paused tasks"
+          >
             Resume
           </window.Button>
         ) : (
@@ -817,7 +847,11 @@ function AgentChatPane({ agent, tasks, typing, onTyping, onOpenTask, onEditAgent
           </window.Button>
         )}
         <div ref={menuRef} style={{ position: 'relative' }}>
-          <window.IconButton name="menu" label="Chat options" onClick={() => setMenuOpen(!menuOpen)} />
+          <window.IconButton
+            name="menu"
+            label="Chat options"
+            onClick={() => setMenuOpen(!menuOpen)}
+          />
           {menuOpen && (
             <div
               style={{
@@ -938,7 +972,15 @@ function AgentChatPane({ agent, tasks, typing, onTyping, onOpenTask, onEditAgent
           </>
         )}
         {busy && !streamText && !thinkText && (
-          <div style={{ display: 'flex', gap: 5, alignItems: 'center', color: 'var(--text-3)', fontSize: 13 }}>
+          <div
+            style={{
+              display: 'flex',
+              gap: 5,
+              alignItems: 'center',
+              color: 'var(--text-3)',
+              fontSize: 13,
+            }}
+          >
             {[0, 1, 2].map((i) => (
               <span
                 key={i}
@@ -964,7 +1006,9 @@ function AgentChatPane({ agent, tasks, typing, onTyping, onOpenTask, onEditAgent
       )}
 
       {/* composer */}
-      <div style={{ padding: '10px 14px 14px', borderTop: '1px solid var(--border)', flex: 'none' }}>
+      <div
+        style={{ padding: '10px 14px 14px', borderTop: '1px solid var(--border)', flex: 'none' }}
+      >
         <div
           style={{
             display: 'flex',

@@ -122,7 +122,15 @@ export async function handleDispatch(
   if (!choice) {
     return "I couldn't find a specialist that fits that. Try /dispatch <agent> <task>, or /agents to see who's available.";
   }
-  return enqueueDispatch(registry, queue, choice.agentId, choice.agentName, trimmed, notifyChatId, true);
+  return enqueueDispatch(
+    registry,
+    queue,
+    choice.agentId,
+    choice.agentName,
+    trimmed,
+    notifyChatId,
+    true,
+  );
 }
 
 // Enqueue a `/dispatch <agent> <task>` that arrived with attached files (a

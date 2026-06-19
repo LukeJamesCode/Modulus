@@ -79,7 +79,10 @@ test('/dispatch: validates input and enqueues a task for a known agent', async (
     // old "no such agent" error (the auto-route path needs llm+log).
     assert.match(await handleDispatch(reg, undefined, ''), /Usage/);
     assert.match(await handleDispatch(reg, undefined, 'researcher'), /Usage/);
-    assert.match(await handleDispatch(reg, undefined, 'ghost find things'), /No agent named 'ghost'/);
+    assert.match(
+      await handleDispatch(reg, undefined, 'ghost find things'),
+      /No agent named 'ghost'/,
+    );
 
     // Happy path: the rest of the line becomes the task prompt.
     const reply = await handleDispatch(reg, undefined, 'researcher  find the population of Mars ');
@@ -212,7 +215,10 @@ test('task-done notification: formats done + error, skips non-terminal and cance
     assert.match(done, /the answer is 7/);
 
     reg.updateTask(t.id, { status: 'error', error: 'model timed out' });
-    assert.match(formatTaskNotification(reg.getTask(t.id)!, agent.name)!, /failed: model timed out/);
+    assert.match(
+      formatTaskNotification(reg.getTask(t.id)!, agent.name)!,
+      /failed: model timed out/,
+    );
 
     // User-cancelled: they initiated it, so no ping.
     reg.updateTask(t.id, { status: 'cancelled', error: 'cancelled' });
@@ -392,13 +398,19 @@ test('/agent reads and updates via knobs, prompt, role', () => {
     assert.match(handleAgentCommand(reg, 'ghost'), /No agent named 'ghost'/);
 
     // set <knob> via the plain vocabulary.
-    assert.match(handleAgentCommand(reg, 'scribe set brainpower deep'), /Set scribe: brainpower = deep/);
+    assert.match(
+      handleAgentCommand(reg, 'scribe set brainpower deep'),
+      /Set scribe: brainpower = deep/,
+    );
     assert.equal(reg.getByName('scribe')!.profile, 'reason');
     assert.match(handleAgentCommand(reg, 'scribe set solo on'), /Set scribe/);
     assert.equal(reg.getByName('scribe')!.mode, 'autonomous');
 
     // prompt + role.
-    assert.match(handleAgentCommand(reg, 'scribe prompt You write crisp notes.'), /Updated scribe's prompt/);
+    assert.match(
+      handleAgentCommand(reg, 'scribe prompt You write crisp notes.'),
+      /Updated scribe's prompt/,
+    );
     assert.equal(reg.getByName('scribe')!.systemPrompt, 'You write crisp notes.');
     assert.match(handleAgentCommand(reg, 'scribe role takes notes'), /Updated scribe's role/);
     assert.equal(reg.getByName('scribe')!.role, 'takes notes');
@@ -423,7 +435,10 @@ test('/fire removes a user agent; module-owned agents reject edit and delete', (
 
     // Module-owned: read works, but every mutation is refused.
     assert.match(handleAgentCommand(reg, 'modbot'), /modbot/);
-    assert.match(handleAgentCommand(reg, 'modbot set brainpower deep'), /can't be edited or removed/);
+    assert.match(
+      handleAgentCommand(reg, 'modbot set brainpower deep'),
+      /can't be edited or removed/,
+    );
     assert.match(handleAgentCommand(reg, 'modbot prompt nope'), /can't be edited or removed/);
     assert.match(handleFire(reg, 'modbot'), /can't be edited or removed/);
     assert.ok(reg.getByName('modbot'), 'module agent survives a fire attempt');

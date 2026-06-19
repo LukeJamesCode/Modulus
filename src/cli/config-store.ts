@@ -94,6 +94,16 @@ export function configPath(home: string = homeDir()): string {
   return join(home, 'config.json');
 }
 
+// True once a config.json has been written — i.e. the user has been through the
+// wizard (or `modulus init`). Used to treat setup as "done" even on a panel-only
+// install with no Telegram token, so the daemon boots fully instead of dropping
+// back into the setup wizard. Telegram supplied purely via env still counts as
+// configured on its own (see start.ts), so env-only deployments don't depend on
+// this file existing.
+export function configFileExists(home: string = homeDir()): boolean {
+  return existsSync(configPath(home));
+}
+
 export function loadConfig(home: string = homeDir()): ModulusConfig {
   const file = configPath(home);
   if (!existsSync(file)) return cloneDefaults();
@@ -168,8 +178,12 @@ export function effectiveConfig(home: string = homeDir()): ModulusConfig {
     // Left unset (undefined enabled) unless explicitly chosen, so start.ts can
     // apply the tier-aware extraction default. env 'true'/'false' wins over file.
     memory: {
-      extraction: { enabled: envBool(env['MODULUS_MEMORY_EXTRACTION'], file.memory?.extraction?.enabled) },
-      dreaming: { enabled: envBool(env['MODULUS_MEMORY_DREAMING'], file.memory?.dreaming?.enabled) },
+      extraction: {
+        enabled: envBool(env['MODULUS_MEMORY_EXTRACTION'], file.memory?.extraction?.enabled),
+      },
+      dreaming: {
+        enabled: envBool(env['MODULUS_MEMORY_DREAMING'], file.memory?.dreaming?.enabled),
+      },
     },
   };
 }

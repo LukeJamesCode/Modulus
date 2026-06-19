@@ -1,7 +1,8 @@
 // Setup-mode server: boots the real panel against stub engine handles and
 // asserts the wizard's contract. /api/state reports setupMode + not-configured,
-// the module list works, /api/setup/complete preflights then resolves promotion,
-// and the ollama pull SSE relays NDJSON progress.
+// the module list works, /api/setup/complete preflights then resolves promotion
+// (for both a full Telegram config and a panel-only one), an incomplete Telegram
+// config is rejected, and the ollama pull SSE relays NDJSON progress.
 
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
@@ -59,9 +60,12 @@ before(async () => {
 
   // Bind the panel to an OS-chosen port so the suite survives a real Modulus
   // daemon already holding the default 7777 on this dev box.
+  // A half-set Telegram (valid token, nobody allowlisted) — a misconfiguration,
+  // so the panel stays not-configured and promotion is rejected until it's
+  // either completed or cleared. (A panel-only config is covered separately.)
   saveConfig(
     {
-      telegram: { token: '', allowedIds: [] },
+      telegram: { token: `123456:${TOKEN_SECRET}`, allowedIds: [] },
       ollama: { url: ollamaUrl },
       models: { chat: 'qwen2.5:0.5b' },
       panel: { enabled: true, port: 0, bind: '127.0.0.1' },
@@ -99,9 +103,11 @@ test('GET /api/modules responds in setup mode', async () => {
   assert.ok(Array.isArray(body.modules));
 });
 
-test('POST /api/setup/complete with an empty config is 400', async () => {
+test('POST /api/setup/complete with an incomplete Telegram config is 400', async () => {
   const res = await authed('/api/setup/complete', { method: 'POST' });
   assert.equal(res.status, 400);
+  const body = (await res.json()) as { error?: string };
+  assert.match(body.error ?? '', /allowed person|web panel only/i);
 });
 
 test('ollama pull-stream relays NDJSON progress then a done frame', async () => {
@@ -144,4 +150,39 @@ test('POST /api/setup/complete with a valid config returns 200 and resolves prom
       setTimeout(() => reject(new Error('completed never resolved')), 2000),
     ),
   ]);
+});
+
+// Telegram is optional: a config with a chat model but no bot token is a valid
+// panel-only install and must promote. Uses its own server so it doesn't race
+// the shared one's promotion lifecycle.
+test('POST /api/setup/complete promotes a panel-only config (no Telegram)', async () => {
+  const home2 = mkdtempSync(join(tmpdir(), 'modulus-setup-panel-'));
+  let srv: SetupServer | undefined;
+  try {
+    saveConfig(
+      {
+        telegram: { token: '', allowedIds: [] },
+        ollama: { url: ollamaUrl },
+        models: { chat: 'qwen2.5:0.5b' },
+        panel: { enabled: true, port: 0, bind: '127.0.0.1' },
+      },
+      home2,
+    );
+    srv = await startSetupServer(home2, { onStop: () => {} });
+    const u = new URL(srv.handle.url);
+    const res = await fetch(`${u.protocol}//${u.host}/api/setup/complete`, {
+      method: 'POST',
+      headers: { 'x-modulus-token': u.searchParams.get('token') ?? '' },
+    });
+    assert.equal(res.status, 200);
+    await Promise.race([
+      srv.completed,
+      new Promise((_r, reject) =>
+        setTimeout(() => reject(new Error('panel-only promotion never resolved')), 2000),
+      ),
+    ]);
+  } finally {
+    await srv?.close();
+    rmSync(home2, { recursive: true, force: true });
+  }
 });

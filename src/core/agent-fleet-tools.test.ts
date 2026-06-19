@@ -129,7 +129,10 @@ test('manage_agent_tasks pauses, resumes, and cancels only the named agent', asy
     assert.equal(h.registry.getTask(ta.id)!.status, 'queued');
     assert.equal(h.queue.notifies, 1, 'resume must poke the queue');
 
-    const cancelledOut = await manage.invoke({ agent: 'busy', action: 'cancel' }, ctx({ chatId: 1 }));
+    const cancelledOut = await manage.invoke(
+      { agent: 'busy', action: 'cancel' },
+      ctx({ chatId: 1 }),
+    );
     assert.match(cancelledOut, /Cancelled 1 task/);
     assert.deepEqual(h.cancelled, [ta.id], 'queued/running cancels go through the runtime');
     assert.equal(h.registry.getTask(tOther.id)!.status, 'queued', 'other agent still untouched');

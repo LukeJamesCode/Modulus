@@ -27,18 +27,23 @@ function SystemTab({
   onProactive,
 }) {
   const [sub, setSub] = useStateSys('status');
+  const [showAdvanced, setShowAdvanced] = useStateSys(false);
   const [cmd, setCmd] = useStateSys({
     running: true,
     result: { ok: true, command: SYSTEM_COMMAND_LABELS.status, output: '' },
   });
   const commandSeq = useRefSys(0);
-  const subs = [
+  // Everyday-facing views up front; raw diagnostics (metrics, logs, the command
+  // list) fold behind "Advanced" so the tab doesn't read as a developer console.
+  const primarySubs = [
     { value: 'status', label: 'Status' },
-    { value: 'metrics', label: 'Metrics' },
+    { value: 'doctor', label: 'Health check' },
     { value: 'schedule', label: 'Schedule' },
-    { value: 'doctor', label: 'Doctor' },
-    { value: 'logs', label: 'Logs' },
     { value: 'maintenance', label: 'Maintenance' },
+  ];
+  const advancedSubs = [
+    { value: 'metrics', label: 'Metrics' },
+    { value: 'logs', label: 'Logs' },
     { value: 'commands', label: 'Commands' },
   ];
 
@@ -110,11 +115,54 @@ function SystemTab({
 
   return (
     <div>
-      <window.SectionTitle sub="The deeper controls — health checks, logs, and maintenance. Everything the terminal can do.">
+      <window.SectionTitle sub="Check that everything’s running, see what’s scheduled, and keep Modulus up to date.">
         System &amp; Diagnostics
       </window.SectionTitle>
-      <div style={{ marginBottom: 20 }}>
-        <window.Segmented value={sub} onChange={changeSub} options={subs} />
+      <div
+        style={{
+          marginBottom: 20,
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 10,
+        }}
+      >
+        <window.Segmented
+          value={primarySubs.some((s) => s.value === sub) ? sub : ''}
+          onChange={changeSub}
+          options={primarySubs}
+        />
+        <button
+          onClick={() => setShowAdvanced((v) => !v)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            background: 'none',
+            border: 'none',
+            color: 'var(--text-3)',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          <window.Icon
+            name="fwd"
+            size={13}
+            style={{
+              transform: showAdvanced ? 'rotate(90deg)' : 'none',
+              transition: 'transform .2s',
+            }}
+          />
+          {showAdvanced ? 'Hide advanced' : 'Advanced'}
+        </button>
+        {showAdvanced && (
+          <window.Segmented
+            value={advancedSubs.some((s) => s.value === sub) ? sub : ''}
+            onChange={changeSub}
+            options={advancedSubs}
+          />
+        )}
       </div>
       {sub === 'status' && (
         <StatusDashboard
@@ -256,7 +304,10 @@ function HealthPill({ icon, label, value, pct, danger }) {
       </div>
       {typeof pct === 'number' && (
         <div className="mini-bar" style={{ width: 46 }}>
-          <div className="fill green" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}></div>
+          <div
+            className="fill green"
+            style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
+          ></div>
         </div>
       )}
     </div>
@@ -278,7 +329,12 @@ function SystemHealthBar({ state }) {
   return (
     <div className="health-bar" style={{ marginBottom: 'calc(14px * var(--gap))' }}>
       <HealthPill icon="cpu" label="CPU" value={cpu == null ? '—' : `${cpu}%`} pct={cpu ?? 0} />
-      <HealthPill icon="database" label="RAM" value={ram == null ? '—' : `${ram}%`} pct={ram ?? 0} />
+      <HealthPill
+        icon="database"
+        label="RAM"
+        value={ram == null ? '—' : `${ram}%`}
+        pct={ram ?? 0}
+      />
       <HealthPill icon="layers" label="Queue" value={String(queue)} />
       <HealthPill
         icon="alert-triangle"
@@ -324,7 +380,11 @@ function DaemonControls({ agentStatus, busy, onStart, onStop, onRestart, proacti
           border: '1px solid var(--border)',
         }}
       >
-        <window.Icon name={transitioning ? 'refresh' : 'power'} size={20} className={transitioning ? 'spin' : undefined} />
+        <window.Icon
+          name={transitioning ? 'refresh' : 'power'}
+          size={20}
+          className={transitioning ? 'spin' : undefined}
+        />
       </span>
       <div style={{ flex: 1, minWidth: 180 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
@@ -415,7 +475,8 @@ function StatusDashboard({
           : 'Unreachable';
   const ollamaDownSub = (kind, url) => {
     const u = url || '';
-    if (kind === 'refused') return `${u} — is Ollama running? On another machine, set OLLAMA_HOST=0.0.0.0`;
+    if (kind === 'refused')
+      return `${u} — is Ollama running? On another machine, set OLLAMA_HOST=0.0.0.0`;
     if (kind === 'unreachable' || kind === 'timeout')
       return `${u} — is the machine on and the address right?`;
     if (kind === 'dns') return `${u} — hostname doesn’t resolve; try the IP address`;
@@ -1767,11 +1828,10 @@ function ScheduleView() {
                     style={{
                       fontSize: 12,
                       color: 'var(--text-3)',
-                      fontFamily: 'var(--font-mono)',
                       marginTop: 2,
                     }}
                   >
-                    {j.cron}
+                    {j.human || j.cron}
                   </div>
                 </div>
                 <window.Badge tone="neutral">{prettyModule(j.module)}</window.Badge>

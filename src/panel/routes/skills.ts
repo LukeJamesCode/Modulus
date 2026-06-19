@@ -29,6 +29,25 @@ import { readJson, sendJson } from '../http.js';
 import { HOST_VERSION } from '../../core/version.js';
 import type { RouteModule } from '../router.js';
 import type { PanelDeps } from '../types.js';
+import type { SkillProposal } from '../../core/skill-improve.js';
+
+// Shape a proposal for the Proposals subsection: the proposed summary/tools/
+// playbook (so the panel can preview or diff), plus who/why/when.
+function proposalView(p: SkillProposal) {
+  const m = p.manifest;
+  return {
+    id: p.id,
+    skillName: p.skillName,
+    baseVersion: p.baseVersion,
+    summary: typeof m['summary'] === 'string' ? m['summary'] : '',
+    tools: Array.isArray(m['tools']) ? m['tools'] : [],
+    instructions: p.instructions,
+    rationale: p.rationale,
+    proposedBy: p.proposedBy,
+    status: p.status,
+    createdAt: p.createdAt,
+  };
+}
 
 // Per-skill record of the tools the user consented to, so an update asking for
 // MORE re-prompts while one asking for the same (or fewer) installs quietly.
@@ -298,6 +317,31 @@ export function createSkillRoutes(deps: PanelDeps, opts: SkillRoutesOptions = {}
       return true;
     }
 
+    // ---- Self-improving-skill proposals -----------------------------------
+    if (path === '/api/skills/proposals' && method === 'GET') {
+      const sp = deps.skillProposals;
+      sendJson(res, 200, {
+        pending: sp ? sp.store.listPending().map(proposalView) : [],
+        recent: sp ? sp.store.listRecent(20).map(proposalView) : [],
+      });
+      return true;
+    }
+    const proposalAction = /^\/api\/skills\/proposals\/(\d+)\/(approve|reject)$/.exec(path);
+    if (proposalAction && method === 'POST') {
+      const sp = deps.skillProposals;
+      if (!sp) {
+        sendJson(res, 503, { error: 'skill proposals are not available' });
+        return true;
+      }
+      const id = Number(proposalAction[1]);
+      const r =
+        proposalAction[2] === 'approve'
+          ? await sp.manager.approve(id, 'panel')
+          : sp.manager.reject(id, 'panel');
+      sendJson(res, r.ok ? 200 : 409, r);
+      return true;
+    }
+
     if (path === '/api/skills/registry' && method === 'GET') {
       try {
         sendJson(res, 200, await browseSkillRegistry(deps, opts));
@@ -309,7 +353,11 @@ export function createSkillRoutes(deps: PanelDeps, opts: SkillRoutesOptions = {}
 
     if (path === '/api/skills/registry/install' && method === 'POST') {
       const { name, acceptAdded } = await readJson<{ name?: string; acceptAdded?: boolean }>(req);
-      const r = await installSkillFromRegistry(deps, { name: name ?? '', acceptAdded: !!acceptAdded }, opts);
+      const r = await installSkillFromRegistry(
+        deps,
+        { name: name ?? '', acceptAdded: !!acceptAdded },
+        opts,
+      );
       sendJson(res, r.status, r.body);
       return true;
     }
@@ -324,7 +372,11 @@ export function createSkillRoutes(deps: PanelDeps, opts: SkillRoutesOptions = {}
         return true;
       }
       const ok = await setSkillEnabled(deps, name, verb === 'enable');
-      sendJson(res, ok ? 200 : 404, ok ? { ok: true, name, enabled: verb === 'enable' } : { error: `unknown skill '${name}'` });
+      sendJson(
+        res,
+        ok ? 200 : 404,
+        ok ? { ok: true, name, enabled: verb === 'enable' } : { error: `unknown skill '${name}'` },
+      );
       return true;
     }
 
