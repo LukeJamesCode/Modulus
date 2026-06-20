@@ -241,7 +241,14 @@ export function createAgentQueue(opts: AgentQueueOptions): AgentQueue {
       status: 'paused',
       pausedUntil: until,
     });
-    if (running.has(taskId)) opts.runtime.cancelTask(taskId);
+    // Pause is cooperative — we do NOT abort the in-flight turn. An autonomous
+    // run checks its own status between steps (see runAutonomous) and parks
+    // itself at the next boundary with its progress checkpointed, so the current
+    // step's work is preserved rather than thrown away mid-flight. (A single-mode
+    // task is one turn and simply finishes.) The previous `cancelTask` call here
+    // was dead code: cancelTask bails the instant it sees the row is already
+    // 'paused', so it never aborted anything — and routing a pause through the
+    // cancel path would also have mislabeled the row as 'cancelled'/'error'.
     const paused = opts.registry.getTask(taskId);
     if (paused) opts.onTaskUpdate?.(paused);
     notify();
