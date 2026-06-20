@@ -71,7 +71,12 @@ import { createStandingOrderStore } from '../core/standing-orders.js';
 import { setupHeartbeat } from '../core/heartbeat.js';
 import { setupDreaming } from '../core/dreaming.js';
 import type { Tier } from './profiles.js';
-import { createModuleLoader, type HostOrchestrator, type VoicePayload } from '../core/modules.js';
+import {
+  createModuleLoader,
+  type HostOrchestrator,
+  type VoicePayload,
+  type PhotoPayload,
+} from '../core/modules.js';
 import { createSkillLoader } from '../core/skills.js';
 import { setupSkillImprove } from '../core/skill-improve.js';
 import {
@@ -368,6 +373,10 @@ async function bootDaemon(
     // hasn't been built yet, so we install a thunk that resolves to it once
     // adapter construction finishes below.
     let sendVoiceImpl: ((chatId: number, voice: VoicePayload) => Promise<void>) | null = null;
+    // Proactive text + photo sinks for modules (e.g. modulus-computer-use step
+    // screenshots). Same deferral as sendVoice: resolved once the adapter exists.
+    let sendMessageImpl: ((chatId: number, text: string) => Promise<void>) | null = null;
+    let sendPhotoImpl: ((chatId: number, photo: PhotoPayload) => Promise<void>) | null = null;
     let notifySetupIssues: (() => Promise<void>) | null = null;
     // The orchestrator is built after the module loader (it consumes
     // promptFragmentProvider/toolIntentFilter on the loader). Modules that
@@ -437,6 +446,20 @@ async function bootDaemon(
           return;
         }
         await sendVoiceImpl(chatId, voice);
+      },
+      sendMessage: async (chatId, text) => {
+        if (!sendMessageImpl) {
+          log.warn('sendMessage called before Telegram adapter ready');
+          return;
+        }
+        await sendMessageImpl(chatId, text);
+      },
+      sendPhoto: async (chatId, photo) => {
+        if (!sendPhotoImpl) {
+          log.warn('sendPhoto called before Telegram adapter ready');
+          return;
+        }
+        await sendPhotoImpl(chatId, photo);
       },
       onDidReload: async () => {
         await notifySetupIssues?.();
@@ -913,6 +936,8 @@ async function bootDaemon(
     // safe defaults (warn-noop / noop) on a panel-only install.
     if (telegram) {
       sendVoiceImpl = (chatId, voice) => telegram.sendVoice(chatId, voice);
+      sendMessageImpl = (chatId, text) => telegram.sendMessage(chatId, text);
+      sendPhotoImpl = (chatId, photo) => telegram.sendPhoto(chatId, photo);
       sendTaskNotification = (chatId, text) => telegram.sendMessage(chatId, text);
     }
     // Point the tool registry's confirm hook at a surface router. Modules

@@ -1,0 +1,54 @@
+{
+  "type": "object",
+  "properties": {
+    "vision_backend": {
+      "type": "string",
+      "default": "local",
+      "title": "Vision backend",
+      "description": "Which model 'sees' the screen and picks actions: 'local' uses an Ollama vision model (private, offline, slower on CPU); 'cloud' uses the configured cloud vision API (faster, more precise at clicking)."
+    },
+    "vision_model": {
+      "type": "string",
+      "default": "qwen2.5vl:7b",
+      "title": "Local vision model",
+      "description": "Ollama tag of a vision-capable model used when vision_backend=local (e.g. qwen2.5vl:7b, llama3.2-vision:11b). Must already be pulled in Ollama."
+    },
+    "cloud_endpoint": {
+      "type": "string",
+      "default": "https://api.anthropic.com/v1/messages",
+      "title": "Cloud vision endpoint",
+      "description": "Anthropic Messages API endpoint used when vision_backend=cloud."
+    },
+    "cloud_model": {
+      "type": "string",
+      "default": "claude-sonnet-4-5",
+      "title": "Cloud vision model",
+      "description": "Model id sent to the cloud vision endpoint (your provider's current vision model)."
+    },
+    "cloud_api_key": {
+      "type": "string",
+      "secret": true,
+      "title": "Cloud vision API key",
+      "description": "API key for the cloud vision endpoint. Required only when vision_backend=cloud."
+    },
+    "app_allowlist": {
+      "type": "string",
+      "default": "",
+      "title": "Allowed apps",
+      "description": "Comma-separated process names the operator may act in, e.g. 'notepad,chrome,explorer'. The foreground window is checked before EVERY action; empty means nothing is allowed (safe default — opt apps in first)."
+    },
+    "max_steps": {
+      "type": "number",
+      "default": 40,
+      "title": "Max steps per session",
+      "description": "Hard cap on actions before the session stops itself. Keeps a confused loop from running away."
+    },
+    "step_delay_ms": {
+      "type": "number",
+      "default": 600,
+      "title": "Delay between actions (ms)",
+      "description": "Visible, interruptible pause after each action so you can watch and Stop in time."
+    }
+  },
+  "required": []
+}

@@ -18,6 +18,7 @@ import { sendJson } from './http.js';
 import { dispatch, type RouteContext, type RouteModule } from './router.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createChatRoutes } from './routes/chat.js';
+import { createComputerRoutes } from './routes/computer.js';
 import { createMarketplaceRoutes } from './routes/marketplace.js';
 import { createModuleRoutes } from './routes/modules.js';
 import { createSkillRoutes } from './routes/skills.js';
@@ -101,6 +102,7 @@ export async function createPanel(deps: PanelDeps): Promise<PanelHandle> {
   const routes: RouteModule[] = [
     createSystemRoutes(deps, runtime),
     createChatRoutes(deps),
+    createComputerRoutes(deps),
     createAgentRoutes(deps),
     // Before modules: its /:name/install regex would otherwise claim
     // /api/modules/registry/install (name='registry').

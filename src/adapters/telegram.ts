@@ -73,6 +73,7 @@ import type {
   ModuleInterceptRecord,
   TelegramCallbackContext,
   VoicePayload,
+  PhotoPayload,
 } from '../core/modules.js';
 
 export interface TelegramOptions {
@@ -182,6 +183,9 @@ export interface TelegramAdapter {
   // Voice notes for modules like modulus-voice. Wired into the loader as
   // host.telegram.sendVoice so modules never touch grammY directly.
   sendVoice(chatId: number, voice: VoicePayload): Promise<void>;
+  // Photos (e.g. screenshots) for modules like modulus-computer-use. Wired into
+  // the loader as host.telegram.sendPhoto so modules never touch grammY directly.
+  sendPhoto(chatId: number, photo: PhotoPayload): Promise<void>;
   // Confirm-tier tool gate. Wired into the tool registry as its `confirm` hook:
   // pops a Yes/No prompt in the originating chat and resolves to the user's
   // choice. Fails closed (returns false) when there's no chat to ask in, the
@@ -1870,6 +1874,25 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
         await bot.api.sendVoice(chatId, file, voice.caption ? { caption: voice.caption } : {});
       } catch (e) {
         log.warn('sendVoice failed', {
+          chatId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    },
+    async sendPhoto(chatId, photo) {
+      try {
+        const file = photo.path
+          ? new InputFile(photo.path)
+          : photo.data
+            ? new InputFile(photo.data)
+            : null;
+        if (!file) {
+          log.warn('sendPhoto called without data or path', { chatId });
+          return;
+        }
+        await bot.api.sendPhoto(chatId, file, photo.caption ? { caption: photo.caption } : {});
+      } catch (e) {
+        log.warn('sendPhoto failed', {
           chatId,
           error: e instanceof Error ? e.message : String(e),
         });

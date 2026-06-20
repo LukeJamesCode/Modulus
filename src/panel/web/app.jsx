@@ -11,6 +11,13 @@ const { useState, useEffect, useCallback, useRef } = React;
 const NAV = [
   { id: 'agents', label: 'Home', icon: 'spark' },
   { id: 'fleet', label: 'Agents', icon: 'user' },
+  // Only shown when modulus-computer-use is enabled (requiresModule filter below).
+  {
+    id: 'computer',
+    label: 'Computer Use',
+    icon: 'monitor',
+    requiresModule: 'modulus-computer-use',
+  },
   { id: 'modules', label: 'Modules', icon: 'plug' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
   { id: 'system', label: 'System', icon: 'pulse' },
@@ -229,6 +236,7 @@ function App() {
               mode={route === 'fleet' ? 'fleet' : 'home'}
             />
           )}
+          {route === 'computer' && <window.ComputerTab />}
           {route === 'modules' && <window.ModulesTab />}
           {route === 'settings' && (
             <window.SettingsTab onReRunWizard={() => setForcedView('wizard')} onSaved={refresh} />

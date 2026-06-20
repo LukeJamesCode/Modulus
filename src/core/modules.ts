@@ -239,6 +239,15 @@ export interface VoicePayload {
   caption?: string;
 }
 
+// Photo payload a module hands the Telegram adapter — mirrors VoicePayload.
+// Either an in-memory buffer or a path to an image file on disk, with an
+// optional caption. Used by modulus-computer-use to stream step screenshots.
+export interface PhotoPayload {
+  data?: Buffer;
+  path?: string;
+  caption?: string;
+}
+
 // Inbound Telegram voice note delivered to modules via
 // host.telegram.onVoiceMessage. Modules don't touch grammY directly — the
 // adapter wraps the file id, exposes a download helper, and surfaces basic
@@ -471,6 +480,13 @@ export interface Host {
     // Send a voice note. Backed by the Telegram adapter when available, or a
     // no-op stub during tests so modules can register without grammY in scope.
     sendVoice: (chatId: number, voice: VoicePayload) => Promise<void>;
+    // Send a plain text message proactively to a chat (outside a command
+    // reply). Backed by the adapter, or a no-op stub during tests.
+    sendMessage: (chatId: number, text: string) => Promise<void>;
+    // Send a photo (e.g. a screenshot) with an optional caption. Backed by the
+    // adapter's sendPhoto, or a no-op stub during tests. Any image-producing
+    // module (browser, computer-use, charts) can stream images to Telegram.
+    sendPhoto: (chatId: number, photo: PhotoPayload) => Promise<void>;
     // Receive inbound voice notes. The adapter walks handlers in registration
     // order; the first to return `{ transcript }` wins and the transcript is
     // injected into the orchestrator as a user turn. Returning `{ skip: true }`
@@ -652,6 +668,11 @@ export interface ModuleLoaderOptions {
   // implementation here; tests leave it undefined and the loader hands a no-op
   // to modules so registration still succeeds.
   sendVoice?: (chatId: number, voice: VoicePayload) => Promise<void>;
+  // Optional proactive text + photo sinks, wired by the Telegram adapter the
+  // same way as sendVoice. Undefined in tests; the loader hands modules a
+  // no-op so registration still succeeds.
+  sendMessage?: (chatId: number, text: string) => Promise<void>;
+  sendPhoto?: (chatId: number, photo: PhotoPayload) => Promise<void>;
   // Fired after an explicit or watched hot-reload completes. Startup calls
   // loadAll() directly and handles its own notification after Telegram is up.
   onDidReload?: () => void | Promise<void>;
@@ -1197,6 +1218,20 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
             return;
           }
           await opts.sendVoice(chatId, voice);
+        },
+        sendMessage: async (chatId, text) => {
+          if (!opts.sendMessage) {
+            cl.warn('sendMessage called but adapter has no message sink');
+            return;
+          }
+          await opts.sendMessage(chatId, text);
+        },
+        sendPhoto: async (chatId, photo) => {
+          if (!opts.sendPhoto) {
+            cl.warn('sendPhoto called but adapter has no photo sink');
+            return;
+          }
+          await opts.sendPhoto(chatId, photo);
         },
         onVoiceMessage: (handler) => {
           const record: ModuleVoiceMessageRecord = { module: manifest.name, handler };

@@ -114,6 +114,8 @@ export async function runAuthForModule(
       afterReply: () => {},
       afterTurn: () => {},
       sendVoice: async () => {},
+      sendMessage: async () => {},
+      sendPhoto: async () => {},
       onVoiceMessage: () => {},
       defaultChatId: 0,
       chatId: 0,
