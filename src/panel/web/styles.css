@@ -186,6 +186,22 @@ a {
     opacity: 0;
   }
 }
+/* A routine card flashes green while one of its runs is in flight. Animating
+   border-color overrides the card's inline border; box-shadow pulses a glow. */
+@keyframes routine-flash {
+  0%,
+  100% {
+    border-color: color-mix(in oklab, var(--ok) 40%, var(--border));
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--ok) 0%, transparent);
+  }
+  50% {
+    border-color: var(--ok);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--ok) 42%, transparent);
+  }
+}
+.routine-card-running {
+  animation: routine-flash 1.3s ease-in-out infinite;
+}
 @keyframes rise {
   from {
     transform: translateY(9px);

@@ -73,6 +73,10 @@ export interface PanelDeps {
   // CRUD on the orders and reads heartbeat stats for the System tab.
   standingOrders?: StandingOrderStore;
   heartbeat?: Heartbeat;
+  // Read-only view of the daemon's routine runner so /api/routines can flag a
+  // multi-step routine that is mid-run (drives the card's "running" flash).
+  // Absent in tests that don't exercise the runner.
+  routineRunner?: { isRunning(routineId: number): boolean };
   // Shared with the daemon's confirm router so a confirm-tier tool fired during
   // a browser turn prompts inline in the browser (fail-closed otherwise).
   confirmBus: PanelConfirmBus;

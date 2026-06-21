@@ -38,6 +38,7 @@ import {
   isAgentChatId,
   isAgentDmChatId,
   seedStarterAgents,
+  ensureBuiltinModulusAgent,
   AGENT_CHAT_ID_BASE,
   SPAWN_AGENT_TOOL_NAME,
   SPAWN_AGENTS_TOOL_NAME,
@@ -598,6 +599,9 @@ async function bootDaemon(
     if (requeued > 0) log.info('re-queued interrupted agent tasks', { count: requeued });
     // Seed a starter fleet on a fresh install (no-op once any agent exists).
     seedStarterAgents(agentRegistry);
+    // The built-in Modulus agent — the default assistant, offered as a routine
+    // runner. Hidden from list() (Fleet/delegation/channels); idempotent.
+    ensureBuiltinModulusAgent(agentRegistry);
     // Agents run unattended and may use big, slow models, so their per-inference
     // cap is far more generous than the chat default (120s). 20 min covers a 12B
     // research round on CPU; override with MODULUS_AGENT_INFERENCE_TIMEOUT_MS.
@@ -1117,6 +1121,9 @@ async function bootDaemon(
           skillProposals: { store: skillImprove.store, manager: skillImprove.manager },
           standingOrders,
           heartbeat,
+          // A multi-step routine's run state lives in the runner's memory; expose
+          // a read-only probe so /api/routines can flag one that's mid-run.
+          routineRunner: { isRunning: (id) => routineRef.runner?.isRunning(id) ?? false },
           confirmBus: panelConfirmBus,
           pairing,
           ...(instantResponder ? { instantResponder } : {}),

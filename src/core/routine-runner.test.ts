@@ -72,6 +72,22 @@ test('routine-runner: threads each step output into the next and notifies the fi
   assert.equal(h.notified[0]!.chatId, 555);
 });
 
+test('routine-runner: isRunning tracks a multi-step run from start to finish', () => {
+  const h = harness();
+  const steps: RoutineStep[] = [
+    { agentId: 1, instruction: 'a' },
+    { agentId: 2, instruction: 'b' },
+  ];
+  assert.equal(h.runner.isRunning(7), false, 'not running before start');
+  h.runner.start({ routineId: 7, steps, notifyChatId: null });
+  assert.equal(h.runner.isRunning(7), true, 'running while step 1 is in flight');
+  assert.equal(h.runner.isRunning(8), false, 'a different routine is not running');
+  h.complete('A');
+  assert.equal(h.runner.isRunning(7), true, 'still running while step 2 is in flight');
+  h.complete('B');
+  assert.equal(h.runner.isRunning(7), false, 'no longer running once finished');
+});
+
 test('routine-runner: a step condition gates on the accumulated output', () => {
   const h = harness();
   const steps: RoutineStep[] = [

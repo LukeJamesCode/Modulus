@@ -13,6 +13,7 @@ import {
   type UpdateAgentScheduleInput,
 } from '../../core/agent-schedules.js';
 import type { StandingOrder, UpdateStandingOrderInput } from '../../core/standing-orders.js';
+import { BUILTIN_MODULUS_NAME } from '../../core/agents.js';
 import { parseSchedule, describeSpec, hostTimeZone } from '../../core/schedule-parse.js';
 import { readJson, sendJson } from '../http.js';
 import type { RouteModule } from '../router.js';
@@ -52,11 +53,12 @@ function stepNames(steps: RoutineStep[], names: AgentNameMap): string[] {
   return out.length > 0 ? out : ['Just messages you'];
 }
 
-function scheduleView(s: AgentSchedule, names: AgentNameMap, tz: string) {
+function scheduleView(s: AgentSchedule, names: AgentNameMap, tz: string, running = false) {
   const steps = scheduleSteps(s);
   return {
     id: s.id,
     kind: 'schedule' as const,
+    running,
     trigger: s.cron || s.recurrence !== 'once' ? ('recurring' as const) : ('once' as const),
     agentIds: s.agentIds,
     agentNames: stepNames(steps, names),
@@ -166,7 +168,24 @@ export function createRoutinesRoutes(deps: PanelDeps): RouteModule {
   const reg = deps.agentRegistry;
   const schedules = createAgentScheduleStore(deps.db, reg);
   const tz = (): string => hostTimeZone();
-  const names = (): AgentNameMap => new Map(reg.list().map((a) => [a.id, a.name]));
+  // The Modulus built-in is hidden from reg.list(), so add it back explicitly —
+  // a step run by Modulus must still resolve to a name in the trust line.
+  const names = (): AgentNameMap => {
+    const map = new Map(reg.list().map((a) => [a.id, a.name]));
+    const builtin = reg.getByName(BUILTIN_MODULUS_NAME);
+    if (builtin) map.set(builtin.id, builtin.name);
+    return map;
+  };
+  // A schedule is "running" when one of its dispatched tasks is still in flight
+  // (single-step / legacy rows record their task ids), or when the runner reports
+  // its multi-step run as active. Drives the card's green flash in the panel.
+  const isScheduleRunning = (s: AgentSchedule): boolean => {
+    if (deps.routineRunner?.isRunning(s.id)) return true;
+    return s.lastTaskIds.some((tid) => {
+      const t = reg.getTask(tid);
+      return !!t && (t.status === 'queued' || t.status === 'running');
+    });
+  };
   // `notify` is a panel boolean; the chat id stays server-side. Telegram-only
   // by design (see the Routines design) — no owner chat ⇒ no notify target.
   const notifyTarget = (on: unknown): number | null => {
@@ -180,12 +199,18 @@ export function createRoutinesRoutes(deps: PanelDeps): RouteModule {
       const nameMap = names();
       const zone = tz();
       const list = [
-        ...schedules.list({ limit: 100 }).map((s) => scheduleView(s, nameMap, zone)),
+        ...schedules
+          .list({ limit: 100 })
+          .map((s) => scheduleView(s, nameMap, zone, isScheduleRunning(s))),
         ...(deps.standingOrders?.list({ limit: 100 }) ?? []).map((o) => watchView(o, nameMap, zone)),
       ];
+      const builtin = reg.getByName(BUILTIN_MODULUS_NAME);
       sendJson(res, 200, {
         routines: list,
         telegram: { available: ownerChat(deps.db, deps.config) != null },
+        // Offered as a routine runner alongside the user's agents — Modulus
+        // itself handles the step. Omitted on older daemons that don't seed it.
+        ...(builtin ? { modulus: { id: builtin.id, name: builtin.name } } : {}),
       });
       return true;
     }

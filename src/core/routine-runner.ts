@@ -57,6 +57,10 @@ export interface RoutineRunner {
   // Call on every task terminal state; advances the run that owns the task.
   onTaskComplete(task: RoutineRunTask): void;
   activeCount(): number;
+  // Whether a multi-step routine is mid-run right now (drives the panel's
+  // "running" flash). Single-step routines aren't tracked here — the sweep
+  // dispatches them directly, so their run state is read off the task instead.
+  isRunning(routineId: number): boolean;
 }
 
 const MAX_RESULT_CHARS = 4000;
@@ -143,5 +147,10 @@ export function createRoutineRunner(deps: RoutineRunnerDeps): RoutineRunner {
     finish(run);
   }
 
-  return { start, onTaskComplete, activeCount: () => runsByTask.size };
+  function isRunning(routineId: number): boolean {
+    for (const run of runsByTask.values()) if (run.routineId === routineId) return true;
+    return false;
+  }
+
+  return { start, onTaskComplete, activeCount: () => runsByTask.size, isRunning };
 }

@@ -7,7 +7,7 @@ import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { open, type DB } from '../../storage/db.js';
 import { createLogger } from '../../util/log.js';
-import { createAgentRegistry } from '../../core/agents.js';
+import { createAgentRegistry, ensureBuiltinModulusAgent } from '../../core/agents.js';
 import { createStandingOrderStore } from '../../core/standing-orders.js';
 import type { PanelDeps } from '../types.js';
 import { createRoutinesRoutes } from './routines.js';
@@ -216,6 +216,37 @@ test('routines: a multi-step routine is stored with its steps', async () => {
     assert.equal(routine['stepCount'], 2);
     assert.deepEqual(routine['agentNames'], ['agenda', 'news']);
     assert.equal((routine['steps'] as unknown[]).length, 2);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('routines: the built-in Modulus agent is hidden from the fleet but offered + named', async () => {
+  const h = harness();
+  try {
+    const modulus = ensureBuiltinModulusAgent(h.reg);
+    // Hidden from the Fleet list…
+    assert.equal(
+      h.reg.list().some((a) => a.id === modulus.id),
+      false,
+      'built-in is excluded from list()',
+    );
+    // …but resolvable by id (so the queue/runtime can run it).
+    assert.equal(h.reg.get(modulus.id)?.name, 'Modulus');
+
+    const created = await h.call('POST', '/api/routines', {
+      kind: 'schedule',
+      cron: '0 8 * * *',
+      steps: [{ agentId: modulus.id, instruction: 'summarize my day' }],
+    });
+    assert.equal(created.status, 200);
+    assert.deepEqual((created.json['routine'] as Record<string, unknown>)['agentNames'], ['Modulus']);
+
+    const list = await h.call('GET', '/api/routines');
+    assert.equal((list.json['modulus'] as { name: string }).name, 'Modulus');
+    const first = (list.json['routines'] as { agentNames: string[]; running: boolean }[])[0];
+    assert.deepEqual(first?.agentNames, ['Modulus']);
+    assert.equal(first?.running, false, 'not running until a task is in flight');
   } finally {
     h.cleanup();
   }

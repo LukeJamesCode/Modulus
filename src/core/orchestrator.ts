@@ -285,7 +285,7 @@ interface QueuedUserMessage extends UserMessage {
   reject: (error: unknown) => void;
 }
 
-const DEFAULT_SYSTEM = `You are Modulus, a concise AI assistant chatting with the user over Telegram. When the user asks you to do something you have a tool for, call the tool — never tell the user to do it themselves. Be direct.`;
+export const DEFAULT_SYSTEM = `You are Modulus, a concise AI assistant chatting with the user over Telegram. When the user asks you to do something you have a tool for, call the tool — never tell the user to do it themselves. Be direct.`;
 const DEFAULT_MAX_TOOL_ROUNDS = 4;
 
 // Standing anti-injection policy, part of the stable prefix whenever skills are

@@ -17,7 +17,12 @@ import type { DB } from '../storage/db.js';
 import type { Logger } from '../util/log.js';
 import type { LLM, ProfileName, ThinkMode } from './llm.js';
 import type { ToolHandler, ToolRegistry } from './tools.js';
-import { createOrchestrator, type Orchestrator, type ReplyChunk } from './orchestrator.js';
+import {
+  createOrchestrator,
+  DEFAULT_SYSTEM,
+  type Orchestrator,
+  type ReplyChunk,
+} from './orchestrator.js';
 import { allStepsDone, markActive, renderPlan } from './agent-planning.js';
 import { loadImageAttachmentsBase64 } from './agent-attachments.js';
 
@@ -516,7 +521,13 @@ export function createAgentRegistry(db: DB): AgentRegistry {
   );
   const selectById = db.prepare(`SELECT * FROM agents WHERE id = ?`);
   const selectByName = db.prepare(`SELECT * FROM agents WHERE name = ?`);
-  const selectAll = db.prepare(`SELECT * FROM agents ORDER BY name`);
+  // Built-in agents (origin 'builtin:%') are daemon-owned and hidden from every
+  // management surface — list() is what the Fleet, delegation roster, channel
+  // bindings, and routers all read, so excluding them here keeps them off all of
+  // those. The Routines surface resolves the Modulus built-in by name instead.
+  const selectAll = db.prepare(
+    `SELECT * FROM agents WHERE origin IS NULL OR origin NOT LIKE 'builtin:%' ORDER BY name`,
+  );
   const deleteById = db.prepare(`DELETE FROM agents WHERE id = ?`);
 
   const insertTask = db.prepare(
@@ -567,6 +578,8 @@ export function createAgentRegistry(db: DB): AgentRegistry {
   function update(id: number, patch: UpdateAgentInput): AgentDefinition | undefined {
     const current = get(id);
     if (!current) return undefined;
+    // Built-in agents (the Modulus default) are daemon-owned and immutable.
+    if (current.origin?.startsWith('builtin:')) return current;
     const next: AgentDefinition = {
       ...current,
       ...('name' in patch && patch.name !== undefined ? { name: patch.name } : {}),
@@ -633,6 +646,10 @@ export function createAgentRegistry(db: DB): AgentRegistry {
   }
 
   function remove(id: number): boolean {
+    // Never delete a built-in (would cascade its tasks and break routines that
+    // run it).
+    const row = selectById.get(id) as AgentRow | undefined;
+    if (row?.origin?.startsWith('builtin:')) return false;
     return deleteById.run(id).changes > 0;
   }
 
@@ -869,6 +886,34 @@ export function createAgentRegistry(db: DB): AgentRegistry {
     addAttachment,
     listAttachments,
   };
+}
+
+// The built-in "Modulus" agent: the default assistant, offered as a routine
+// runner so a routine step can be handled by Modulus itself instead of a
+// hand-built persona. It is a real registry row — so it dispatches through the
+// normal queue + runtime like any agent — but is hidden from list(): it never
+// appears in the Fleet, delegation rosters, or channel bindings; only the
+// Routines surface offers it explicitly. The reserved origin marks it
+// daemon-owned, so remove()/update() refuse to touch it.
+export const BUILTIN_MODULUS_NAME = 'Modulus';
+export const BUILTIN_MODULUS_ORIGIN = 'builtin:modulus';
+
+// Idempotently seed the built-in Modulus agent and return it. Safe to call on
+// every boot: returns the existing row when already present.
+export function ensureBuiltinModulusAgent(registry: AgentRegistry): AgentDefinition {
+  const existing = registry.getByName(BUILTIN_MODULUS_NAME);
+  if (existing) return existing;
+  return registry.create({
+    name: BUILTIN_MODULUS_NAME,
+    role: 'Your everyday Modulus assistant',
+    systemPrompt: DEFAULT_SYSTEM,
+    // All tools + the shared hive memory, so a routine run by Modulus behaves
+    // like the assistant you chat with. 'tools' profile so it can call tools;
+    // the LLM router falls back to the chat model when no tool model is set.
+    toolAllowlist: null,
+    profile: 'tools',
+    origin: BUILTIN_MODULUS_ORIGIN,
+  });
 }
 
 // Seed a small, useful starter fleet on a fresh install (no-op if any agent

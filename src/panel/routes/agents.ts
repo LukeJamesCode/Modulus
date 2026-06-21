@@ -14,6 +14,7 @@ import { ensurePrivateDir } from '../../cli/config-store.js';
 import {
   AGENT_TASK_CANCELLED_MESSAGE,
   agentDmChatId,
+  BUILTIN_MODULUS_NAME,
   type AgentExecutionMode,
   type CreateAgentInput,
 } from '../../core/agents.js';
@@ -640,7 +641,11 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
 
     // ---- Tasks --------------------------------------------------------------
     if (path === '/api/agents/tasks' && method === 'GET') {
+      // Include the hidden Modulus built-in so a routine task it ran still
+      // resolves to a name in the Activity list (list() excludes built-ins).
       const names = new Map(reg.list().map((a) => [a.id, a.name]));
+      const builtin = reg.getByName(BUILTIN_MODULUS_NAME);
+      if (builtin) names.set(builtin.id, builtin.name);
       const tasks = reg
         .listTasks({ limit: 60 })
         .map((t) => ({ ...t, agentName: names.get(t.agentId) ?? null }));

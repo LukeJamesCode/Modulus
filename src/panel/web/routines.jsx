@@ -61,7 +61,6 @@ function StepEditor({ index, step, agents, canRemove, canMoveUp, canMoveDown, on
         <window.Button size="sm" variant="subtle" icon="trash" title="Remove step" disabled={!canRemove} onClick={onRemove} />
       </div>
       <window.Select value={step.agentId} onChange={(e) => onChange({ agentId: e.target.value })}>
-        <option value="">Just message me</option>
         {agents.map((a) => (
           <option key={a.id} value={a.id}>
             {a.name}
@@ -115,10 +114,10 @@ function prettyModule(slug) {
   );
 }
 
-// Curated starter routines. A `step.agent` flag means "needs one of your agents"
-// (filled with your first agent on open, then editable); otherwise it's a
-// "just message me" step. `requiresModule` greys the card until that module is
-// enabled. All cron-based so no date picking is needed to try one.
+// Curated starter routines. Every step opens pre-filled with the built-in
+// Modulus assistant (the picker's first entry), then is editable to one of your
+// own agents. `requiresModule` greys the card until that module is enabled. All
+// cron-based so no date picking is needed to try one.
 const TEMPLATES = [
   {
     id: 'daily-agenda',
@@ -218,14 +217,16 @@ const TEMPLATES = [
   },
 ];
 
-// Map a template to the `initial` shape RoutineModal pre-fills from.
+// Map a template to the `initial` shape RoutineModal pre-fills from. Every step
+// gets a runner — the built-in Modulus assistant by default (agents[0]); the
+// old "just message me" (no agent) step no longer exists.
 function templateToInitial(template, agents) {
   const firstAgent = agents[0] ? agents[0].id : null;
   return {
     kind: template.trigger === 'watch' ? 'watch' : 'schedule',
     trigger: template.trigger,
     steps: template.steps.map((s) => ({
-      agentId: s.agent ? firstAgent : null,
+      agentId: firstAgent,
       instruction: s.instruction,
       condition: s.condition || '',
     })),
@@ -279,6 +280,7 @@ function RoutineCard({ routine, onToggle, onEdit, onDelete, onView }) {
     (stepCount > 1 ? ` · ${stepCount} steps` : '');
   return (
     <div
+      className={routine.running ? 'routine-card-running' : undefined}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -366,23 +368,23 @@ function RoutineModal({ agents, telegram, initial, onClose, onSave }) {
   const editing = !!(initial && initial.id);
   const [trigger, setTrigger] = useState(initial?.kind === 'watch' ? 'watch' : initial?.trigger || 'recurring');
   // Steps drive both kinds: a schedule runs the whole list in order; a watch
-  // uses just the first step. agentId is a string for the <select> ('' = a
-  // "just message me" step).
+  // uses just the first step. agentId is a string for the <select>. Every step
+  // has a runner now — the built-in Modulus assistant (agents[0]) by default;
+  // the old "just message me" (no agent) step is gone, so a legacy null step
+  // adopts Modulus when reopened for editing.
+  const defaultAgentId = agents[0] ? String(agents[0].id) : '';
   const [steps, setSteps] = useState(() => {
     const init =
       initial?.steps && initial.steps.length
         ? initial.steps
         : [
             {
-              // Default a brand-new routine's first step to a real agent — not
-              // "Just message me" — so it actually does something. Leaving it
-              // unset silently made the routine a notify-only prompt echo.
               agentId: initial?.agentIds?.[0] ?? (agents[0] ? agents[0].id : null),
               instruction: initial?.prompt || '',
             },
           ];
     return init.map((s) => ({
-      agentId: s.agentId != null ? String(s.agentId) : '',
+      agentId: s.agentId != null ? String(s.agentId) : defaultAgentId,
       instruction: s.instruction || '',
       condition: s.condition || '',
     }));
@@ -834,11 +836,16 @@ function RoutinesTab({ onNavigate, enabledModules }) {
       window.api.get('/api/routines'),
       window.api.get('/api/agents'),
     ]);
+    const modulus = r.ok && r.data.modulus ? r.data.modulus : null;
     if (r.ok) {
       setRoutines(r.data.routines || []);
       setTelegram(!!(r.data.telegram && r.data.telegram.available));
     }
-    if (a.ok) setAgents(a.data.agents || []);
+    if (a.ok) {
+      // Offer the built-in Modulus assistant first, then the user's own agents.
+      const userAgents = a.data.agents || [];
+      setAgents(modulus ? [modulus, ...userAgents] : userAgents);
+    }
     setLoading(false);
   }, []);
 
