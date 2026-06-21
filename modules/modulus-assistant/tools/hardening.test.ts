@@ -287,6 +287,73 @@ test('calendar_add_event leaves the start alone when no am/pm in the user messag
   }
 });
 
+test('calendar_list_events resolves `date` to that local day and replies without event_ids', async () => {
+  // Bug: the small chat model defaulted to today instead of computing ISO
+  // bounds for "june 16th", so the list returned today's events. The tool now
+  // takes a plain YYYY-MM-DD `date` and computes the local-day window itself.
+  const tmp = mkdtempSync(join(tmpdir(), 'ged-hardening-cal-date-'));
+  try {
+    const db = open({ path: join(tmp, 'g.db') });
+    const host = makeHost(db);
+    // Pin the zone so the computed bounds don't depend on the test machine.
+    (host.settings as unknown as { get: <T>(k: string, d?: T) => T | undefined }).get = (<T>(
+      key: string,
+      def?: T,
+    ) =>
+      ((
+        {
+          google_client_id: 'cid',
+          google_client_secret: 'csec',
+          google_refresh_token: 'rtok',
+          time_zone: 'America/Denver',
+          calendar_id: 'primary',
+        } as Record<string, unknown>
+      )[key] as T) ?? def) as Host['settings']['get'];
+    const tools = registerTools(registerCalendar, host);
+    const origFetch = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = async (input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
+      urls.push(String(input));
+      const body =
+        urls.length === 1
+          ? { access_token: 'AT', expires_in: 3600 }
+          : {
+              items: [
+                {
+                  id: 'e1',
+                  summary: 'EMR Test',
+                  start: { dateTime: '2026-06-16T14:00:00-06:00' },
+                  end: { dateTime: '2026-06-16T15:00:00-06:00' },
+                },
+              ],
+            };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => body,
+        text: async () => JSON.stringify(body),
+      } as Response;
+    };
+    try {
+      const result = String(
+        await tools.get('calendar_list_events')!({ date: '2026-06-16' }, { log: fakeLog }),
+      );
+      // The window queried is June 16 local (MDT = UTC-6), not today.
+      const listUrl = urls[1]!;
+      assert.match(listUrl, /timeMin=2026-06-16T06/);
+      assert.match(listUrl, /timeMax=2026-06-17T06/);
+      // Self-replying output is user-facing prose — no internal id block.
+      assert.match(result, /EMR Test/);
+      assert.doesNotMatch(result, /event_ids/);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+    db.close();
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('reminder_clear_all deletes all unfired reminders for the originating chat', async () => {
   // Before this tool existed, "get rid of all my reminders" forced the model
   // to chain reminder_list + repeated reminder_cancel — qwen3.5:2b just

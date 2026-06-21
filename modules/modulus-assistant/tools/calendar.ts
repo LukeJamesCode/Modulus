@@ -1,5 +1,6 @@
 import type { Host } from '../../../src/core/modules.js';
 import { formatEventLine, getClient, hasClockTime, todayRangeIso } from '../helpers/calendar.js';
+import { dateRangeForDate } from '../helpers/range.js';
 import { briefingTimeZone } from '../gather.js';
 
 const NOT_CONFIGURED = 'Google Calendar is not configured. Run `modulus auth modulus-assistant`.';
@@ -24,20 +25,29 @@ export function register(host: Host): void {
     intentPattern: CALENDAR_LIST_INTENT,
     description:
       "List Google Calendar events for a day or range. ALWAYS call for 'do I have anything tomorrow / am I free at 3pm / what's on my calendar / show my events this week'. " +
-      'Defaults to today. For a specific date the user named, set `time_min` to the start of that local day and `time_max` to the start of the next — do not widen. ' +
-      "Read-only: list every event in the result, repeat each line's date verbatim, never claim an event is cancelled.",
+      'For a single named day, pass `date` as YYYY-MM-DD (resolve the day the user named against the current date in the system prompt) — do NOT compute ISO bounds yourself. ' +
+      'For a multi-day span pass `time_min`/`time_max`. Omit all three to default to today. Read-only.',
     tier: 'auto',
+    // Self-replying: the formatted event lines ARE the answer, so we ship them
+    // directly and skip the follow-up LLM round that otherwise spends ~50s on
+    // CPU re-wording lines we already formatted.
+    selfReplying: true,
     parameters: {
       type: 'object',
       properties: {
+        date: {
+          type: 'string',
+          description:
+            'A single calendar day as YYYY-MM-DD (e.g. 2026-06-16). Resolve the day the user named against the current date, then pass it here — the tool computes the local-day bounds itself. Ignored if time_min/time_max are set.',
+        },
         time_min: {
           type: 'string',
           description:
-            'ISO 8601 start of the range, inclusive (e.g. 2026-05-02T00:00:00-06:00). Omit to default to today.',
+            'ISO 8601 start of a multi-day range, inclusive (e.g. 2026-05-02T00:00:00-06:00). For a single day use `date` instead.',
         },
         time_max: {
           type: 'string',
-          description: 'ISO 8601 end of the range, exclusive. Omit to default to end-of-today.',
+          description: 'ISO 8601 end of the range, exclusive.',
         },
         max: {
           type: 'number',
@@ -48,7 +58,7 @@ export function register(host: Host): void {
     invoke: async (args, ctx) => {
       const c = getClient(host, ctx.signal);
       if (!c) return NOT_CONFIGURED;
-      const a = args as { time_min?: string; time_max?: string; max?: number };
+      const a = args as { time_min?: string; time_max?: string; date?: string; max?: number };
       const parseBound = (s: string): Date | null => {
         const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
         if (dateOnly) {
@@ -77,6 +87,8 @@ export function register(host: Host): void {
         const start = new Date(end);
         start.setDate(start.getDate() - 1);
         range = { timeMin: start.toISOString(), timeMax: end.toISOString() };
+      } else if (a.date) {
+        range = dateRangeForDate(a.date, briefingTimeZone(host));
       } else {
         range = todayRangeIso(new Date(), briefingTimeZone(host));
       }
@@ -84,12 +96,12 @@ export function register(host: Host): void {
         ...range,
         ...(a.max ? { max: a.max } : { max: 25 }),
       });
+      // Self-replying: this string is sent to the user verbatim, so it must be
+      // plain prose — no internal `event_ids:` block (delete works by title).
       if (events.length === 0) {
-        return `No events between ${range.timeMin} and ${range.timeMax}.`;
+        return 'Nothing on your calendar for that.';
       }
-      const lines = events.map((ev) => formatEventLine(ev)).join('\n');
-      const idMap = events.map((ev) => `${ev.summary}=${ev.id}`).join('; ');
-      return `${lines}\nevent_ids: ${idMap}`;
+      return events.map((ev) => formatEventLine(ev)).join('\n');
     },
   });
 
@@ -256,7 +268,7 @@ export function register(host: Host): void {
     description:
       "Cancel/delete a calendar event the user named ('cancel the camping event', 'remove tomorrow's 3pm'). " +
       'PREFER `title` (a substring of the event the user named) — the tool will list the upcoming window itself and pick the match, so you do not need to call `calendar_list_events` first. ' +
-      'Pass `id` only when you already have one verbatim from a previous `event_ids:` line — never invent or guess an id.',
+      'Pass `id` only when you already hold one verbatim — never invent or guess an id.',
     tier: 'confirm',
     selfReplying: true,
     parameters: {
@@ -265,7 +277,7 @@ export function register(host: Host): void {
         id: {
           type: 'string',
           description:
-            'Google Calendar event id, taken from the trailing `event_ids:` block of a `calendar_list_events` result. Never invent or guess an id.',
+            'Google Calendar event id you already hold verbatim from an earlier result. Never invent or guess an id.',
         },
         title: {
           type: 'string',
