@@ -214,6 +214,7 @@ function App() {
         <Topbar state={state} setRoute={setRoute} offline={offline} agentStatus={agentStatus} />
         {offline && <OfflineBar onRetry={refresh} />}
         {state.cfgError && <ConfigErrorBar message={state.cfgError} />}
+        <UpdateBanner setRoute={setRoute} />
         <div className="content-shell">
           {(route === 'agents' || route === 'fleet') && (
             <window.AgentsTab
@@ -253,6 +254,67 @@ function App() {
           {route === 'docs' && <window.DocsTab />}
         </div>
       </main>
+    </div>
+  );
+}
+
+// App-wide "update available" notification. Polls the TTL-cached version check
+// (cheap) and shows a dismissible bar that routes to Settings, where the actual
+// Update button lives. Dismissal is keyed to the latest version, so a newer
+// release re-shows it.
+function UpdateBanner({ setRoute }) {
+  const [status, setStatus] = useState(null);
+  const [dismissed, setDismissed] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      const r = await window.api.get('/api/maintenance/version');
+      if (alive && r.ok && r.data) setStatus(r.data);
+    };
+    load();
+    const id = setInterval(load, 30 * 60 * 1000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+  if (!status || status.updateAvailable !== true) return null;
+  if (dismissed && dismissed === (status.latest || 'yes')) return null;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '8px 16px',
+        background: 'color-mix(in oklab, var(--warn, #f59e0b) 14%, var(--surface))',
+        borderBottom: '1px solid color-mix(in oklab, var(--warn, #f59e0b) 35%, transparent)',
+        fontSize: 13.5,
+      }}
+    >
+      <window.Icon name="download" size={16} style={{ color: 'var(--warn, #f59e0b)' }} />
+      <span style={{ flex: 1, color: 'var(--text-2)' }}>
+        A new version of Modulus is available
+        {status.latest ? ` (${status.latest})` : ''}. {status.detail}
+      </span>
+      <window.Button size="sm" variant="primary" onClick={() => setRoute('settings')}>
+        Update
+      </window.Button>
+      <button
+        onClick={() => setDismissed(status.latest || 'yes')}
+        aria-label="Dismiss"
+        style={{
+          background: 'none',
+          border: 'none',
+          color: 'var(--text-3)',
+          cursor: 'pointer',
+          fontSize: 16,
+          lineHeight: 1,
+          padding: '0 4px',
+        }}
+      >
+        ×
+      </button>
     </div>
   );
 }

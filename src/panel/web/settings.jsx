@@ -122,6 +122,7 @@ function SettingsTab({ onReRunWizard, onSaved }) {
             models={models}
             onReRun={onReRunWizard}
           />
+          <UpdatesSection />
           <button
             onClick={() => setShowAdvanced((s) => !s)}
             style={{
@@ -158,6 +159,130 @@ function SettingsTab({ onReRunWizard, onSaved }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// One-click update + version status. Talks to /api/maintenance/version (cached
+// availability check) and applies via /api/maintenance/update (git: pull +
+// rebuild + auto-restart) or /api/maintenance/desktop-update/apply (desktop:
+// the shell already downloaded the release; this just restarts into it).
+function UpdatesSection() {
+  const [status, setStatus] = useStateSet(null);
+  const [checking, setChecking] = useStateSet(false);
+  const [busy, setBusy] = useStateSet(false);
+  const [note, setNote] = useStateSet(null);
+
+  const check = async (force) => {
+    setChecking(true);
+    const r = await window.api.get('/api/maintenance/version' + (force ? '?force=1' : ''));
+    setChecking(false);
+    if (r.ok && r.data) setStatus(r.data);
+  };
+  useEffectSet(() => {
+    check(false);
+  }, []);
+
+  const apply = async () => {
+    if (!status) return;
+    setBusy(true);
+    setNote(null);
+    try {
+      if (status.channel === 'desktop') {
+        const r = await window.api.post('/api/maintenance/desktop-update/apply');
+        setNote(
+          r.ok
+            ? 'Restarting the app to apply the update…'
+            : (r.data && r.data.error) || r.error || 'Could not apply the update.',
+        );
+      } else {
+        const r = await window.api.post('/api/maintenance/update');
+        const out = (r && r.data) || {};
+        if (out.ok) {
+          setNote(out.restarting ? 'Updated — restarting to apply…' : 'Updated. Restart to apply.');
+          setTimeout(() => check(true), 9000);
+        } else {
+          setNote('Update failed:\n' + (out.output || (r && r.error) || 'unknown error'));
+        }
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const avail = !!(status && status.updateAvailable === true);
+  const upToDate = !!(status && status.updateAvailable === false);
+  const desktop = !!(status && status.channel === 'desktop');
+  const pill = avail
+    ? { text: 'Update available', bg: 'var(--warn, #f59e0b)' }
+    : upToDate
+      ? { text: 'Up to date', bg: 'var(--ok, #22c55e)' }
+      : { text: 'Unknown', bg: 'var(--text-3)' };
+
+  return (
+    <window.Card style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+      <window.Icon
+        name="download"
+        size={22}
+        style={{ color: avail ? 'var(--warn, #f59e0b)' : 'var(--text-3)' }}
+      />
+      <div style={{ flex: 1, minWidth: 220 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 600, fontSize: 15.5 }}>Updates</span>
+          {status && (
+            <span
+              style={{
+                fontSize: 11.5,
+                fontWeight: 700,
+                color: '#0b0b0b',
+                background: pill.bg,
+                borderRadius: 999,
+                padding: '2px 8px',
+              }}
+            >
+              {pill.text}
+            </span>
+          )}
+        </div>
+        <p
+          style={{
+            fontSize: 13,
+            color: 'var(--text-3)',
+            marginTop: 4,
+            whiteSpace: 'pre-line',
+            lineHeight: 1.5,
+          }}
+        >
+          {note || (status ? status.detail : 'Checking for updates…')}
+          {status && status.current ? ` · Current ${status.current}` : ''}
+          {status && status.latest && avail ? ` · Latest ${status.latest}` : ''}
+        </p>
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <window.Button variant="subtle" size="sm" onClick={() => check(true)} disabled={checking || busy}>
+          {checking ? (
+            <>
+              <window.Icon name="refresh" size={14} className="spin" /> Checking…
+            </>
+          ) : (
+            'Check now'
+          )}
+        </window.Button>
+        {avail && (
+          <window.Button variant="primary" onClick={apply} disabled={busy}>
+            {busy ? (
+              <>
+                <window.Icon name="refresh" size={16} className="spin" />{' '}
+                {desktop ? 'Restarting…' : 'Updating…'}
+              </>
+            ) : desktop ? (
+              'Restart to apply'
+            ) : (
+              'Update now'
+            )}
+          </window.Button>
+        )}
+      </div>
+    </window.Card>
   );
 }
 

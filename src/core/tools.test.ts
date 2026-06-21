@@ -62,6 +62,31 @@ test('owner-tier tool blocked when isOwner returns false', async () => {
   assert.match(res.output, /owner-only/);
 });
 
+test('schemas() / schemasFor() return a deterministic name-sorted manifest', () => {
+  const r = createToolRegistry({ log });
+  // Register out of alphabetical order, mixing a core tool and a module tool.
+  r.register({ name: 'zebra', description: 'z', parameters: {}, tier: 'auto', invoke: async () => '' });
+  r.register({
+    name: 'apple',
+    description: 'a',
+    parameters: {},
+    tier: 'auto',
+    module: 'm',
+    invoke: async () => '',
+  });
+  r.register({ name: 'mango', description: 'm', parameters: {}, tier: 'auto', invoke: async () => '' });
+  assert.deepEqual(
+    r.schemas().map((s) => s.function.name),
+    ['apple', 'mango', 'zebra'],
+  );
+  // The pruned path is sorted too, so the same intent set yields a byte-identical
+  // tool block across turns (the KV-cache reuse this ordering protects).
+  assert.deepEqual(
+    r.schemasFor(new Set(['m']), 'anything').map((s) => s.function.name),
+    ['apple', 'mango', 'zebra'],
+  );
+});
+
 test('schemas() shape matches Ollama tool format', () => {
   const r = createToolRegistry({ log });
   r.register({

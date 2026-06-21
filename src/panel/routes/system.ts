@@ -9,7 +9,14 @@
 // The read-only projections use the daemon's live db/scheduler directly, no
 // second runtime and no DB polling.
 
-import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import {
+  createReadStream,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { freemem, totalmem } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -21,6 +28,7 @@ import { collectDoctorChecks } from '../../cli/doctor.js';
 import { parseCron, nextFireAfter } from '../../core/cron.js';
 import { describeCron } from '../../core/schedule-parse.js';
 import { readMetrics } from '../../core/metrics.js';
+import { createUpdateChecker, type DesktopUpdateState } from '../../core/update-check.js';
 import { createPrefsStore, formatWindow } from '../../core/prefs.js';
 import { readJson, sendJson, sse, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
@@ -31,8 +39,31 @@ import type { PanelDeps, PanelRuntime } from '../types.js';
 // docs/ lives at the repo root; this file is src/panel/routes/system.ts.
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
+// Files the desktop shell and the daemon use to coordinate updates (alongside
+// modulus.pid / the panel-locator files in ~/.modulus). The shell WRITES its
+// downloaded-update status here; the daemon WRITES the apply request the shell
+// watches for. Names are shared with desktop/ModulusDesktop/UpdateChecker.cs.
+const DESKTOP_UPDATE_STATUS_FILE = 'desktop-update.json';
+const DESKTOP_APPLY_UPDATE_FILE = 'desktop-apply-update';
+
 function humanize(key: string): string {
   return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Read the desktop shell's downloaded-update status file, if it wrote one.
+// Absent/garbled → null (the version checker then falls back to the releases
+// API). Never throws — an update check must not break the System tab.
+function readDesktopUpdateState(home: string): DesktopUpdateState | null {
+  try {
+    const raw = readFileSync(join(home, DESKTOP_UPDATE_STATUS_FILE), 'utf8');
+    const j = JSON.parse(raw) as { hasUpdate?: unknown; version?: unknown };
+    return {
+      hasUpdate: j.hasUpdate === true,
+      version: typeof j.version === 'string' ? j.version : null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 // The owner chat used for proactive prefs: the most recently seen chat of an
@@ -289,6 +320,17 @@ function streamLogs(deps: PanelDeps, req: IncomingMessage, res: ServerResponse):
 }
 
 export function createSystemRoutes(deps: PanelDeps, runtime: PanelRuntime): RouteModule {
+  // One process-lived update checker (TTL-cached, so panel polling never hammers
+  // the GitHub API). Desktop installs check the release channel + the shell's
+  // status file; git checkouts compare the local commit to origin.
+  const isDesktop = process.env.MODULUS_DESKTOP === '1';
+  const updateChecker = createUpdateChecker({
+    desktop: isDesktop,
+    repoRoot: REPO_ROOT,
+    ...(process.env.MODULUS_REPO ? { defaultSlug: process.env.MODULUS_REPO } : {}),
+    readDesktopState: () => readDesktopUpdateState(deps.home),
+  });
+
   return async ({ req, res, path, method }) => {
     if (path === '/api/state' && method === 'GET') {
       sendJson(
@@ -383,10 +425,39 @@ export function createSystemRoutes(deps: PanelDeps, runtime: PanelRuntime): Rout
       return true;
     }
 
+    // Update availability for the panel's notification + Update button. Cheap
+    // (TTL-cached); `?force=1` skips the cache for an explicit "check now".
+    if (path === '/api/maintenance/version' && method === 'GET') {
+      const force = new URL(req.url ?? '', 'http://localhost').searchParams.has('force');
+      sendJson(res, 200, await updateChecker.check(force));
+      return true;
+    }
+
+    // Desktop "Update" button: the shell has already downloaded the release in
+    // the background (Velopack), so applying it is just an app restart. We drop a
+    // sentinel file the shell watches for; it stops the daemon and relaunches
+    // into the new version. No-op outside the desktop shell.
+    if (path === '/api/maintenance/desktop-update/apply' && method === 'POST') {
+      // Read at request time (not the creation-time `isDesktop`) so tests that
+      // toggle the env per-request, and any late-set env, are honoured.
+      if (process.env.MODULUS_DESKTOP !== '1') {
+        sendJson(res, 400, { ok: false, error: 'not running under the desktop app' });
+        return true;
+      }
+      try {
+        writeFileSync(join(deps.home, DESKTOP_APPLY_UPDATE_FILE), String(Date.now()));
+        sendJson(res, 200, { ok: true });
+      } catch (e) {
+        sendJson(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+      return true;
+    }
+
     // Pull + rebuild via the same `modulus update` the CLI runs. Safe while
-    // live: the rebuild lands on disk and takes effect on the next restart.
-    // Under the desktop shell the install is a packaged payload, not a git
-    // checkout — the shell's own updater owns updates there.
+    // live: the rebuild lands on disk; we then re-exec a fresh daemon so the new
+    // code is actually running (the old in-process one is still serving this
+    // response). Under the desktop shell the install is a packaged payload, not a
+    // git checkout — the shell's own release updater owns updates there.
     if (path === '/api/maintenance/update' && method === 'POST') {
       if (process.env.MODULUS_DESKTOP === '1') {
         sendJson(res, 409, {
@@ -399,12 +470,21 @@ export function createSystemRoutes(deps: PanelDeps, runtime: PanelRuntime): Rout
         return true;
       }
       const r = await runModulus(deps, ['update'], 1_800_000);
-      sendJson(res, r.code === 0 ? 200 : 500, {
-        ok: r.code === 0,
+      const ok = r.code === 0;
+      sendJson(res, ok ? 200 : 500, {
+        ok,
         code: r.code,
         command: 'modulus update',
         output: r.out + r.err,
+        // Tell the panel a restart is coming so it can show "restarting…" and
+        // reconnect once the fresh daemon's panel is back up.
+        restarting: ok && !!deps.onRestart,
       });
+      // Apply the freshly-built code by re-execing after the response flushes.
+      if (ok && deps.onRestart) setTimeout(() => deps.onRestart?.(), 250).unref();
+      else if (ok && !deps.onRestart) {
+        deps.log.warn('update built but no onRestart hook — restart manually to apply');
+      }
       return true;
     }
 

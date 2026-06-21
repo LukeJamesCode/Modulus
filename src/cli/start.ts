@@ -1137,9 +1137,14 @@ async function bootDaemon(
       }
     }
 
-    // Best-effort warm-up. `/api/tags` proves Ollama is reachable, then the
-    // tiny capped chat call actually loads the configured chat model so the
-    // first real user turn doesn't pay cold-start latency.
+    // Best-effort warm-up. `/api/tags` proves Ollama is reachable, then a tiny
+    // capped call actually loads the model into RAM so the first real user turn
+    // doesn't pay cold-start latency. We warm BOTH the chat profile and the
+    // tools profile: most first turns carry tool schemas and run on the tools
+    // profile, which on standard/heavy tiers is a separate, still-cold model —
+    // warming only chat left that exact common case eating a cold load. The
+    // heavy reason model is intentionally NOT warmed: it's loaded on demand and
+    // evicted to keep RAM free on Pi-class hosts (see the resource governor).
     void (async () => {
       const h = await llm.health();
       if (!h.ok) {
@@ -1147,25 +1152,35 @@ async function bootDaemon(
         return;
       }
       log.info('Ollama reachable', { models: h.models.length });
-      try {
-        let warmedModel: string | undefined;
-        for await (const chunk of llm.chat({
-          profile: 'chat',
-          messages: [
-            { role: 'system', content: 'You are Modulus. Reply with OK.' },
-            { role: 'user', content: 'warm up' },
-          ],
-          maxTokens: 1,
-        })) {
-          warmedModel = chunk.model ?? warmedModel;
-          if (chunk.done) break;
+      const warm = async (profile: 'chat' | 'tools'): Promise<void> => {
+        try {
+          let warmedModel: string | undefined;
+          for await (const chunk of llm.chat({
+            profile,
+            messages: [
+              { role: 'system', content: 'You are Modulus. Reply with OK.' },
+              { role: 'user', content: 'warm up' },
+            ],
+            maxTokens: 1,
+          })) {
+            warmedModel = chunk.model ?? warmedModel;
+            if (chunk.done) break;
+          }
+          log.info('model warmed', { profile, model: warmedModel ?? llm.resolveModel(profile) });
+        } catch (e) {
+          log.warn('model warm-up failed', {
+            profile,
+            error: e instanceof Error ? e.message : String(e),
+          });
         }
-        log.info('chat model warmed', { model: warmedModel ?? llm.resolveModel('chat') });
-      } catch (e) {
-        log.warn('chat model warm-up failed', {
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
+      };
+      // Sequential, not parallel — loading two models at once would spike RAM on
+      // a small host. Only warm a distinct tools model (skip when it's the same
+      // tag as chat, already warmed, or absent — the Pi/small tier case).
+      await warm('chat');
+      const profiles = llm.listProfiles();
+      const toolsModel = profiles.tools?.model;
+      if (toolsModel && toolsModel !== profiles.chat?.model) await warm('tools');
     })();
 
     const shutdown = async (signal: string): Promise<void> => {

@@ -100,6 +100,10 @@ export function register(host: Host): void {
     description:
       'Cancel a pending reminder by id. Resolve the id from a prior `reminder_list` — never invent one.',
     tier: 'confirm',
+    // Both outcomes ("Reminder cancelled." / "not found or already fired") are
+    // terminal user-facing confirmations, like reminder_clear_all — ship them
+    // directly and skip the follow-up LLM round that only re-words them.
+    selfReplying: true,
     parameters: {
       type: 'object',
       required: ['id'],

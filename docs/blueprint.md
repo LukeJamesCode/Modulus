@@ -195,7 +195,7 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', conten
 
 ### Read path
 
-The context manager's **memory slot already exists** in the deterministic prefix (`system → tools → memory → session → history`). Fill it for **every** run — chat turns _and_ agent virtual-chat turns: BM25 query (`memories_fts`) on the user message / task goal, namespace-scoped (above), top-K (default 6, tier-scaled), rendered in a stable format; bump `last_used_at`/`uses`. CPU cost is microseconds; no embedding model needed; works on a Pi 4.
+The context manager's **memory slot already exists**. Fill it for **every** run — chat turns _and_ agent virtual-chat turns: BM25 query (`memories_fts`) on the user message / task goal, namespace-scoped (above), top-K (default 6, tier-scaled), rendered in a stable format; bump `last_used_at`/`uses`. CPU cost is microseconds; no embedding model needed; works on a Pi 4. Recalled memory is **volatile** (different every message), so it renders at the **tail** — a system message right before the latest user turn — not inside the stable prefix. The prefix is now `system → tools → session → history`; parking volatile content (memory + the clock anchor) past it lets Ollama reuse the prefix+history KV across a focused conversation instead of re-prefilling history each turn (see `src/core/context.ts`).
 
 ### Dreaming pass (v1.4.0)
 

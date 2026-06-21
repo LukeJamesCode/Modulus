@@ -1,11 +1,21 @@
-// Context manager. Builds the prompt the LLM sees from a deterministic order
-// of sections so Ollama's KV slot cache stays warm:
+// Context manager. Builds the prompt the LLM sees so Ollama's KV slot cache
+// stays warm across turns. Two regions:
 //
-//     system  ->  tools  ->  memory  ->  session  ->  history
+//   STABLE PREFIX   system -> tools -> session -> history
+//   VOLATILE TAIL   (turn-context + memory), as a system message injected
+//                   immediately before the latest user turn.
 //
-// Per PLAN North Star "Deterministic prompt prefix". Anything before history
-// is the stable prefix; drift there invalidates the cache for the rest of
-// the conversation, so the order never changes.
+// Per PLAN North Star "Deterministic prompt prefix". The win is keeping the
+// reusable token prefix as LONG as possible: Ollama only reuses KV up to the
+// longest common prefix with the previous turn, so any block that changes
+// turn-to-turn caps reuse at its position. The clock (changes every few
+// minutes) and recalled memory (different every message) are exactly such
+// blocks — parked in the prefix they used to sit *before* history and force a
+// full re-prefill of all history on every turn. Moving them to the tail, right
+// next to the always-new user turn, lets system+tools+history stay cached.
+// (Pruned tools still cap reuse when the turn's intent changes; for a focused
+// multi-turn conversation — the common case — the tool block is identical, so
+// history now reuses its KV.)
 //
 // Token counting is approximate by design: real tokenization is
 // model-specific and Ollama doesn't expose its tokenizer. ~4 chars per token
@@ -27,10 +37,17 @@ export interface BuildOptions {
   // Natural-language tool fragment (e.g. a module's prompt.md). The
   // OpenAI-shaped tool schemas go into ChatOptions.tools, not here.
   toolPrompt?: string;
+  // Per-turn volatile context — the date/time anchor and anything else that
+  // changes every turn. Rendered at the TAIL (its own system message right
+  // before the latest user turn), never in the stable prefix, so it can't
+  // invalidate the cached system+tools+history KV. See the file header.
+  turnContext?: string;
   // Long-term memory results retrieved for this turn (populated by whichever
-  // module is providing memory; e.g. modulus-memgraph when it lands).
+  // module is providing memory; e.g. the hive store). Volatile — keyed to the
+  // message — so it rides the tail next to turnContext, not the prefix.
   memory?: string;
-  // Compact running session summary kept between turns.
+  // Compact running session summary kept between turns. Stable across a turn's
+  // tool rounds, so it stays in the prefix.
   session?: string;
   history: HistoryMessage[];
   // Approx max tokens the assembled prompt may consume. Older history is
@@ -53,12 +70,21 @@ export function build(opts: BuildOptions): BuiltPrompt {
   const prefixParts: string[] = [];
   if (opts.systemPrompt) prefixParts.push(opts.systemPrompt);
   if (opts.toolPrompt) prefixParts.push(opts.toolPrompt);
-  if (opts.memory) prefixParts.push(opts.memory);
   if (opts.session) prefixParts.push(opts.session);
+
+  // Volatile per-turn block, rendered at the tail (see header). Order within
+  // it doesn't affect cache reuse — the whole block sits past the cached
+  // prefix — so it's just clock then memory.
+  const tailParts: string[] = [];
+  if (opts.turnContext) tailParts.push(opts.turnContext);
+  if (opts.memory) tailParts.push(opts.memory);
+  const tailText = tailParts.join('\n\n');
 
   const SAFETY = 64;
   const prefixText = prefixParts.join('\n\n');
-  const prefixTokens = approxTokens(prefixText) + SAFETY;
+  // The tail is never dropped, so it counts toward the fixed overhead the
+  // history must fit under, same as the prefix did when memory lived there.
+  const prefixTokens = approxTokens(prefixText) + approxTokens(tailText) + SAFETY;
 
   const history = [...opts.history];
   let pinnedIdx = -1;
@@ -118,13 +144,21 @@ export function build(opts: BuildOptions): BuiltPrompt {
 
   const messages: ChatMessage[] = [];
   if (prefixText) messages.push({ role: 'system', content: prefixText });
-  for (const h of history) {
+  for (let i = 0; i < history.length; i++) {
+    // Inject the volatile tail as its own system message immediately before the
+    // latest user turn, so everything ahead of it (the prefix + all prior
+    // history) is a stable, cacheable token prefix.
+    if (tailText && i === pinnedIdx) messages.push({ role: 'system', content: tailText });
+    const h = history[i]!;
     const m: ChatMessage = { role: h.role, content: h.content };
     if (h.tool_call_id) m.tool_call_id = h.tool_call_id;
     if (h.tool_name) m.tool_name = h.tool_name;
     if (h.tool_calls) m.tool_calls = h.tool_calls;
     messages.push(m);
   }
+  // No user turn to anchor to (empty history, or history with no user role):
+  // fall back to appending the tail at the end so its context isn't lost.
+  if (tailText && pinnedIdx < 0) messages.push({ role: 'system', content: tailText });
 
   return {
     messages,

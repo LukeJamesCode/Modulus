@@ -34,9 +34,13 @@ decisions there are final.
 
 ## Invariants (do not break)
 
-- Deterministic prompt prefix — system → tools → memory → session → history — protects the
-  Ollama KV cache. New prompt content goes in a stable slot; copy the `memoryProvider`
-  pattern in `src/core/orchestrator.ts`.
+- Deterministic prompt prefix — system → tools → session → history — protects the Ollama KV
+  cache. Per-turn VOLATILE context (the clock anchor + recalled memory) rides a system message
+  at the TAIL, right before the latest user turn (`turnContext`/`memory` in
+  `src/core/context.ts`), so it never invalidates the cached prefix — system+tools+history then
+  reuse their KV across a focused multi-turn conversation. New STABLE prompt content goes in a
+  prefix slot; new PER-TURN content goes in the tail. Pruned tool schemas are name-sorted so a
+  repeated intent yields a byte-identical tool block (same cache reason).
 - One heavy model resident at a time; the agent queue's resource governor owns residency.
 - The user-facing reply ships first; everything else (memory extraction, promotions) runs as
   a background-queue job.

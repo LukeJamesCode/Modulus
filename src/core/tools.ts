@@ -183,12 +183,12 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
   }
 
   function schemas(): ToolSchema[] {
-    return [...handlers.values()].map(toSchema);
+    return sortedSchemas([...handlers.values()]);
   }
 
   function schemasFor(moduleNames: ReadonlySet<string>, inputText?: string): ToolSchema[] {
     const inScope = [...handlers.values()].filter((h) => !h.module || moduleNames.has(h.module));
-    if (!inputText) return inScope.map(toSchema);
+    if (!inputText) return sortedSchemas(inScope);
 
     const grouped = new Map<string, ToolHandler[]>();
     const core: ToolHandler[] = [];
@@ -210,7 +210,7 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
       // disabling a valid request.
       filtered.push(...(narrowed.length > 0 ? narrowed : group));
     }
-    return filtered.map(toSchema);
+    return sortedSchemas(filtered);
   }
 
   function onAfterExecute(toolName: string, listener: AfterExecuteListener): () => void {
@@ -439,6 +439,22 @@ function deepEqual(a: unknown, b: unknown): boolean {
     return ka.every((k) => deepEqual(aa[k], bb[k]));
   }
   return false;
+}
+
+// Map handlers to schemas in a deterministic (name-sorted) order. The tool
+// manifest is rendered into the prompt prefix by Ollama's chat template, so a
+// stable order means two turns with the same intent set produce a byte-identical
+// tool block — letting Ollama's KV cache reuse the prefix (and, with the
+// volatile tail moved past it, the history) across those turns. Insertion order
+// alone wasn't a guarantee: the intent-pruning path concatenates core + per-
+// module groups, so a registration-order or grouping change would silently
+// reshuffle the block. Sorting pins it. Tool order is semantically irrelevant
+// to the model, so this is free.
+function sortedSchemas(handlers: ToolHandler[]): ToolSchema[] {
+  return handlers
+    .slice()
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map(toSchema);
 }
 
 export function toSchema(h: ToolHandler): ToolSchema {

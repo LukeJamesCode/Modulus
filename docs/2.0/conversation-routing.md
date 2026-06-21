@@ -43,8 +43,9 @@ export interface ConversationRouter {
 - `orchestratorFor` **memoizes one chat orchestrator per bound agentId** (not per
   chat) via a factory injected from `start.ts`. One orchestrator per agent keeps
   the deterministic-prefix / KV-cache invariant intact: each agent has its own
-  stable `system → tools → memory → session → history` prefix; binding swaps
-  _which_ stable prefix is used, never reorders one. The default (unbound)
+  stable `system → tools → session → history` prefix (volatile clock + recalled
+  memory ride the tail, before the latest user turn — see `src/core/context.ts`);
+  binding swaps _which_ stable prefix is used, never reorders one. The default (unbound)
   orchestrator is the existing main orchestrator, untouched.
 
 ### Per-agent chat orchestrator (the factory)

@@ -1,3 +1,5 @@
+using System.IO;
+using System.Text.Json;
 using Velopack;
 using Velopack.Sources;
 
@@ -24,11 +26,39 @@ public sealed class UpdateChecker : IDisposable
     public bool HasUpdate => _ready is not null;
     public string? ReadyVersion => _ready?.TargetFullRelease.Version.ToString();
 
+    // Status file the daemon's panel reads to surface "update available" in the
+    // web UI (see src/panel/routes/system.ts → readDesktopUpdateState). Name must
+    // match DESKTOP_UPDATE_STATUS_FILE there.
+    private static readonly string StatusFile =
+        Path.Combine(AppPaths.ModulusHome, "desktop-update.json");
+
     public UpdateChecker()
     {
         _manager = new UpdateManager(new GithubSource(RepoUrl, accessToken: null, prerelease: false));
-        if (_manager.IsInstalled) _ = CheckLoopAsync();
+        if (_manager.IsInstalled)
+        {
+            // Clear any stale status from a previous run so the panel doesn't show
+            // an "update available" that already installed.
+            WriteStatus(false, null);
+            _ = CheckLoopAsync();
+        }
         else DaemonLog.Write("update checks disabled (not a packed install)");
+    }
+
+    // Mirror the downloaded-update state to the status file so the daemon's panel
+    // can show it. Best-effort: a write failure just means the web UI won't show
+    // the banner (the tray balloon + menu still do).
+    private static void WriteStatus(bool hasUpdate, string? version)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppPaths.ModulusHome);
+            File.WriteAllText(StatusFile, JsonSerializer.Serialize(new { hasUpdate, version }));
+        }
+        catch (Exception e)
+        {
+            DaemonLog.Write($"update status write failed: {e.Message}");
+        }
     }
 
     private async Task CheckLoopAsync()
@@ -45,6 +75,7 @@ public sealed class UpdateChecker : IDisposable
                 {
                     await _manager.DownloadUpdatesAsync(info);
                     _ready = info;
+                    WriteStatus(true, ReadyVersion);
                     DaemonLog.Write($"update {ReadyVersion} downloaded; applies on next quit");
                     UpdateReady?.Invoke();
                     return; // one pending update is enough — it lands on exit

@@ -19,10 +19,40 @@ const CALENDAR_DELETE_INTENT =
   '\\b(cancel|delete|remove|drop|get rid of|nuke).*(event|meeting|appointment|calendar)\\b' +
   '|\\b(cancel|delete|remove|drop|get rid of|nuke)\\b.*\\b(today|tomorrow|tonight|on|this|next|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|mon|tue|wed|thu|fri|sat|sun|\\d{1,2}(st|nd|rd|th)?)\\b';
 
+// Deterministic 0-LLM route for the canonical "what's on today" calendar
+// questions. Matched against the WHOLE trimmed message (anchored ^…$), so a
+// compound request ("…and remind me to call mom") never matches and falls
+// through to the model. The target tool is read-only, self-replying, and takes
+// no args (defaults to today), so even a rare false match just shows today's
+// agenda — there is no destructive side effect to get wrong. When this claims
+// the turn the orchestrator skips both LLM rounds (tool-selection and
+// paraphrase) and ships the formatted list directly. Exported for tests.
+const TODAY_CALENDAR_PATTERNS: RegExp[] = [
+  /^what(?:'?s| is) on (?:my )?(?:calendar|agenda|schedule)(?: today)?\??$/i,
+  /^what(?:'?s| is) on today\??$/i,
+  /^what(?:'?s| do i have) (?:on )?(?:my )?(?:calendar|agenda) today\??$/i,
+  /^what do i have (?:on )?today\??$/i,
+  /^do i have (?:anything|something|any (?:events?|meetings?)) (?:on )?today\??$/i,
+  /^am i (?:free|busy) today\??$/i,
+  /^(?:my )?(?:calendar|agenda|schedule) (?:for )?today\??$/i,
+  /^today'?s (?:calendar|agenda|schedule|events?)\??$/i,
+];
+
+export function calendarTodayAutoRoute(message: string): Record<string, never> | null {
+  // Fold smart quotes (mobile keyboards autocorrect ' → ’) to straight quotes so
+  // "What’s on my calendar today" matches the same as "What's …".
+  const t = message
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[’‘]/g, "'");
+  return TODAY_CALENDAR_PATTERNS.some((re) => re.test(t)) ? {} : null;
+}
+
 export function register(host: Host): void {
   host.tools.register({
     name: 'calendar_list_events',
     intentPattern: CALENDAR_LIST_INTENT,
+    autoRoute: calendarTodayAutoRoute,
     description:
       "List Google Calendar events for a day or range. ALWAYS call for 'do I have anything tomorrow / am I free at 3pm / what's on my calendar / show my events this week'. " +
       'For a single named day, pass `date` as YYYY-MM-DD (resolve the day the user named against the current date in the system prompt) — do NOT compute ISO bounds yourself. ' +

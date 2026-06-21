@@ -647,8 +647,14 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
       cl.warn('memory provider failed', { error: e instanceof Error ? e.message : String(e) });
     }
     // The standing anti-injection policy joins the stable prefix only when skills
-    // are wired, so base/agent orchestrators and tests are unchanged.
-    const systemForTurn = `${systemPrompt}${opts.skills ? `\n\n${SKILL_FENCE_POLICY}` : ''}\n\n${dailyContext(new Date(), lastUserAt)}`;
+    // are wired, so base/agent orchestrators and tests are unchanged. The clock
+    // anchor is intentionally NOT baked in here: it changes every few minutes, so
+    // it rides the volatile tail (turnContext) instead of busting the cached
+    // prefix. See context.ts.
+    const systemForTurn = `${systemPrompt}${opts.skills ? `\n\n${SKILL_FENCE_POLICY}` : ''}`;
+    // Volatile per-turn block — recomputed once here, placed at the prompt tail
+    // by buildContext alongside recalled memory.
+    const turnContext = dailyContext(new Date(), lastUserAt);
 
     // One helper, three callers: initial chat, tool-loop followup, safety-net
     // followup. Optional `omitToolPrompt` lets the safety net drop the tool
@@ -657,6 +663,7 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
       buildContext({
         systemPrompt: systemForTurn,
         history,
+        turnContext,
         ...(!omitToolPrompt && toolPrompt ? { toolPrompt } : {}),
         ...(memory ? { memory } : {}),
         budgetTokens,
@@ -1180,6 +1187,19 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
         toolCalls: afterTurnToolCalls,
       },
     };
+    // Per-turn latency/token telemetry. promptTokens is the cache-reuse signal:
+    // with the volatile tail (clock + memory) moved out of the prefix, a focused
+    // multi-turn conversation should show promptTokens dropping toward just the
+    // new tokens after turn 1 (Ollama reuses the cached prefix) instead of
+    // re-prefilling all history every turn. Watch it to validate the prefix
+    // stays warm; a flat, full-prompt count every turn means something volatile
+    // is still busting the prefix.
+    cl.debug('turn complete', {
+      elapsedMs: meta.elapsedMs,
+      ...(meta.promptTokens !== undefined ? { promptTokens: meta.promptTokens } : {}),
+      ...(meta.completionTokens !== undefined ? { completionTokens: meta.completionTokens } : {}),
+      model: meta.model,
+    });
     await msg.send({
       delta: '',
       done: true,
