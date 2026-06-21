@@ -93,6 +93,9 @@ export async function startSetupServer(
       listProfiles: () => ({}),
       health: async () => ({ ok: false, models: [] }),
       providerModels: () => [],
+      // Setup saves a model selection before any live LLM exists; the config is
+      // applied at boot, so re-pointing the (absent) router here is a no-op.
+      updateModels: () => {},
     } as unknown as PanelDeps['llm'],
     memory,
     orchestrator: {
