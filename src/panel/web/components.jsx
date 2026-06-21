@@ -221,6 +221,84 @@ function IconButton({ name, size = 18, label, active, style, ...rest }) {
   );
 }
 
+/* ---------------------------------------------------------------- ImproveButton
+   A drop-in "Improve" action for any prompt field. Given the field's current
+   text and a `kind` hint ('chat' | 'agent-system' | 'agent-task' | 'routine'),
+   it asks the model (POST /api/improve-prompt) to rewrite the draft clearer and
+   hands the result back via onImproved. Disabled while empty/too-short or busy;
+   flashes an error state on failure instead of throwing. `iconOnly` renders a
+   compact square button for tight composers; otherwise a labeled subtle button. */
+function ImproveButton({
+  value,
+  onImproved,
+  kind,
+  size = 'sm',
+  minChars = 3,
+  iconOnly,
+  style,
+  title,
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const text = (value || '').trim();
+  const disabled = busy || text.length < minChars;
+  const run = async () => {
+    if (disabled) return;
+    setBusy(true);
+    setErr('');
+    const r = await window.api.post('/api/improve-prompt', { text, kind });
+    setBusy(false);
+    if (r.ok && r.data && r.data.text) {
+      onImproved(r.data.text);
+    } else {
+      setErr((r.data && r.data.error) || r.error || 'Could not improve — try again');
+      setTimeout(() => setErr(''), 4000);
+    }
+  };
+  const iconName = busy ? 'loader' : err ? 'alert-triangle' : 'spark';
+  const tip = err || title || 'Rewrite this with AI to make it clearer';
+
+  if (iconOnly) {
+    return (
+      <button
+        type="button"
+        onClick={run}
+        disabled={disabled}
+        aria-label="Improve with AI"
+        title={tip}
+        style={{
+          display: 'grid',
+          placeItems: 'center',
+          flex: 'none',
+          border: '1px solid var(--border-2)',
+          borderRadius: 'var(--radius-sm)',
+          background: 'var(--surface-2)',
+          color: err ? 'var(--err)' : 'var(--text-2)',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled && !busy ? 0.5 : 1,
+          ...style,
+        }}
+      >
+        <Icon name={iconName} size={17} className={busy ? 'spin' : undefined} />
+      </button>
+    );
+  }
+  return (
+    <Button
+      type="button"
+      variant="subtle"
+      size={size}
+      onClick={run}
+      disabled={disabled}
+      title={tip}
+      style={{ color: err ? 'var(--err)' : undefined, ...style }}
+    >
+      <Icon name={iconName} size={size === 'sm' ? 15 : 17} className={busy ? 'spin' : undefined} />
+      {busy ? 'Improving…' : err ? 'Try again' : 'Improve'}
+    </Button>
+  );
+}
+
 /* ---------------------------------------------------------------- Card
    Quiet panel: a flat translucent surface with a hairline border (Helix). */
 function Card({ children, pad = 18, style, hover, ...rest }) {
@@ -964,6 +1042,7 @@ Object.assign(window, {
   Icon,
   Button,
   IconButton,
+  ImproveButton,
   Card,
   Toggle,
   StatusDot,

@@ -18,6 +18,7 @@ import { sendJson } from './http.js';
 import { dispatch, type RouteContext, type RouteModule } from './router.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createChatRoutes } from './routes/chat.js';
+import { createImproveRoutes } from './routes/improve.js';
 import { createMarketplaceRoutes } from './routes/marketplace.js';
 import { createModuleRoutes } from './routes/modules.js';
 import { createRoutinesRoutes } from './routes/routines.js';
@@ -102,6 +103,7 @@ export async function createPanel(deps: PanelDeps): Promise<PanelHandle> {
   const routes: RouteModule[] = [
     createSystemRoutes(deps, runtime),
     createChatRoutes(deps),
+    createImproveRoutes(deps),
     createAgentRoutes(deps),
     createRoutinesRoutes(deps),
     // Before modules: its /:name/install regex would otherwise claim

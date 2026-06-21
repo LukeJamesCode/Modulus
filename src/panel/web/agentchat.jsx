@@ -1044,6 +1044,14 @@ function AgentChatPane({
               padding: '4px 0',
             }}
           />
+          <window.ImproveButton
+            value={draft}
+            kind="chat"
+            iconOnly
+            onImproved={setDraft}
+            title="Improve my message with AI"
+            style={{ width: 36, height: 36, borderRadius: 12 }}
+          />
           <button
             onClick={send}
             disabled={busy || !draft.trim()}

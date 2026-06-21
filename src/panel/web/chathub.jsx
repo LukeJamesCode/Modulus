@@ -735,6 +735,14 @@ function MainChatPane({
               opacity: running ? 1 : 0.6,
             }}
           />
+          <window.ImproveButton
+            value={draft}
+            kind="chat"
+            iconOnly
+            onImproved={setDraft}
+            title="Improve my message with AI"
+            style={{ width: 44, height: 44 }}
+          />
           <MicButton running={running} disabled={phase !== 'idle'} onTranscript={onTranscript} />
           {streaming ? (
             <window.Button variant="subtle" icon="stop" onClick={abort} style={{ height: 44 }}>

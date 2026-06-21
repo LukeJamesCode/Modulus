@@ -1070,6 +1070,7 @@ function LaunchComposer({ agents, onDispatchAgent, onDispatchAuto }) {
             font: 'inherit',
           }}
         />
+        <window.ImproveButton value={text} kind="agent-task" onImproved={setText} />
         <window.Button variant="primary" icon="play" disabled={!canLaunch} onClick={launch}>
           Launch
         </window.Button>
@@ -1745,6 +1746,9 @@ function DispatchModal({ agent, onClose, onDispatch }) {
           font: 'inherit',
         }}
       />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+        <window.ImproveButton value={prompt} kind="agent-task" onImproved={setPrompt} />
+      </div>
 
       <div style={{ marginTop: 12 }}>
         <window.Label
@@ -1979,6 +1983,13 @@ function AgentEditor({ initial, agents, onClose, onSave, error }) {
                 placeholder="e.g. Look things up on the web and report the facts, with a source."
                 style={taStyle}
               />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+                <window.ImproveButton
+                  value={d.systemPrompt}
+                  kind="agent-system"
+                  onImproved={(t) => set('systemPrompt', t)}
+                />
+              </div>
             </Field>
             <Field
               label="Brainpower"
@@ -2135,6 +2146,13 @@ function AgentEditor({ initial, agents, onClose, onSave, error }) {
                   font: 'inherit',
                 }}
               />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+                <window.ImproveButton
+                  value={d.systemPrompt}
+                  kind="agent-system"
+                  onImproved={(t) => set('systemPrompt', t)}
+                />
+              </div>
             </Field>
             <Field label="Tools it can use" hint="All tools, none, or just the ones you choose.">
               <window.Segmented

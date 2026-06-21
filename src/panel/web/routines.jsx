@@ -74,6 +74,13 @@ function StepEditor({ index, step, agents, canRemove, canMoveUp, canMoveDown, on
         placeholder={index === 0 ? "e.g. Pull together today's agenda" : 'e.g. Summarize the news'}
         style={textareaStyle}
       />
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <window.ImproveButton
+          value={step.instruction}
+          kind="routine"
+          onImproved={(t) => onChange({ instruction: t })}
+        />
+      </div>
       {index > 0 && (
         <window.Input
           value={step.condition}
@@ -544,6 +551,13 @@ function RoutineModal({ agents, telegram, initial, onClose, onSave }) {
                 placeholder="e.g. Check my calendar for tomorrow and flag anything outdoors"
                 style={textareaStyle}
               />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+                <window.ImproveButton
+                  value={steps[0]?.instruction || ''}
+                  kind="routine"
+                  onImproved={(t) => setStep(0, { instruction: t })}
+                />
+              </div>
             </Field>
             <Field label="Which agent does the checking?">
               <window.Select
