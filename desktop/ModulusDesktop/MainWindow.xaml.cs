@@ -79,6 +79,69 @@ public sealed partial class MainWindow : Window
         Activate();
     }
 
+    // First-run, or the tray's "Connection…" item. Prefills the remote box from
+    // the saved config so switching back and forth is easy.
+    public void ShowChooser()
+    {
+        _dispatcher.TryEnqueue(() =>
+        {
+            RemoteError.Visibility = Visibility.Collapsed;
+            var cfg = DesktopConfig.Load();
+            RemoteUrlBox.Text = cfg?.Mode == "remote" ? cfg.RemoteUrl ?? "" : "";
+            SetupOverlay.Visibility = Visibility.Visible;
+            ShowAndFocus();
+        });
+    }
+
+    private async void OnChooseLocal(object sender, RoutedEventArgs e)
+    {
+        DesktopConfig.Save(new DesktopConfig { Mode = "local" });
+        _daemon.ConfigureLocal();
+        SetupOverlay.Visibility = Visibility.Collapsed;
+        await _daemon.StartAsync();
+    }
+
+    private async void OnChooseRemote(object sender, RoutedEventArgs e)
+    {
+        var raw = RemoteUrlBox.Text?.Trim() ?? "";
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var url) ||
+            (url.Scheme != "http" && url.Scheme != "https"))
+        {
+            ShowRemoteError("Enter the full link, e.g. http://192.168.1.50:7777/?token=…");
+            return;
+        }
+        var token = PanelLocator.TokenFromUrl(url);
+        if (string.IsNullOrEmpty(token))
+        {
+            ShowRemoteError("That link has no token. Copy the whole link from the other device’s System tab.");
+            return;
+        }
+
+        RemoteError.Visibility = Visibility.Collapsed;
+        ConnectButton.IsEnabled = false;
+        var label = ConnectButton.Content;
+        ConnectButton.Content = "Connecting…";
+        var ok = await _daemon.CanConnectAsync(url, token);
+        ConnectButton.Content = label;
+        ConnectButton.IsEnabled = true;
+        if (!ok)
+        {
+            ShowRemoteError($"Couldn’t reach Modulus at {url.Host}. Check it’s running and on the same network.");
+            return;
+        }
+
+        DesktopConfig.Save(new DesktopConfig { Mode = "remote", RemoteUrl = raw, RemoteToken = token });
+        _daemon.ConfigureRemote(url, token);
+        SetupOverlay.Visibility = Visibility.Collapsed;
+        await _daemon.StartAsync();
+    }
+
+    private void ShowRemoteError(string message)
+    {
+        RemoteError.Text = message;
+        RemoteError.Visibility = Visibility.Visible;
+    }
+
     private async Task InitWebViewAsync()
     {
         // Unpackaged apps can't write a user-data folder next to the exe once

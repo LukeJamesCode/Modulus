@@ -16,5 +16,41 @@
                        Margin="14,0,0,0" FontSize="12" Foreground="#9A9AA3" />
         </Border>
         <WebView2 x:Name="Web" Grid.Row="1" />
+
+        <!-- First-run (and "switch connection") chooser. Sits above the WebView;
+             collapsed until App/the tray shows it. Picking an option configures
+             the DaemonManager, persists DesktopConfig, and starts/connects. -->
+        <Grid x:Name="SetupOverlay" Grid.Row="1" Background="#131316" Visibility="Collapsed">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel MaxWidth="540" Margin="32,48" HorizontalAlignment="Center" Spacing="16">
+                    <TextBlock Text="Set up Modulus" FontSize="28" FontWeight="SemiBold" Foreground="White" />
+                    <TextBlock TextWrapping="Wrap" Foreground="#B8B8C0" FontSize="14"
+                               Text="Run the Modulus engine on this PC, or connect to one already running on another device — like an always-on mini PC that keeps going when this computer is off." />
+
+                    <Button Click="OnChooseLocal" HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left" Padding="18"
+                            Background="#1B1B1F" BorderBrush="#2A2A31" BorderThickness="1" CornerRadius="10">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="Run Modulus on this PC" FontWeight="SemiBold" FontSize="15" Foreground="White" />
+                            <TextBlock TextWrapping="Wrap" Foreground="#9A9AA3" FontSize="13"
+                                       Text="The engine runs here. Simplest for a single computer." />
+                        </StackPanel>
+                    </Button>
+
+                    <Border Background="#1B1B1F" BorderBrush="#2A2A31" BorderThickness="1" CornerRadius="10" Padding="18">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="Connect to a Modulus running elsewhere" FontWeight="SemiBold" FontSize="15" Foreground="White" />
+                            <TextBlock TextWrapping="Wrap" Foreground="#9A9AA3" FontSize="13"
+                                       Text="On the other device, open Modulus → System tab → “Connect from another device” and copy the link. The engine keeps running there even when this app is closed." />
+                            <TextBox x:Name="RemoteUrlBox" PlaceholderText="http://192.168.1.50:7777/?token=…" />
+                            <TextBlock x:Name="RemoteError" Foreground="#F08A8A" FontSize="13"
+                                       TextWrapping="Wrap" Visibility="Collapsed" />
+                            <Button x:Name="ConnectButton" Content="Connect" Click="OnChooseRemote"
+                                    Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
     </Grid>
 </Window>

@@ -52,6 +52,10 @@ public sealed class TrayController : IDisposable
         _startStopItem.Click += (_, _) => ToggleDaemon();
         menu.Items.Add(_startStopItem);
 
+        var connectionItem = new MenuFlyoutItem { Text = "Connection…" };
+        connectionItem.Click += (_, _) => _window.ShowChooser();
+        menu.Items.Add(connectionItem);
+
         menu.Items.Add(new MenuFlyoutSeparator());
 
         _loginItem = new ToggleMenuFlyoutItem
@@ -114,39 +118,47 @@ public sealed class TrayController : IDisposable
         }
         _lastStatus = s.Status;
 
+        // Remote mode: this app fronts a backend it doesn't own, so "stop" really
+        // means "disconnect this frontend" (the engine keeps running there).
+        var remote = _daemon.Mode == DaemonMode.Remote;
+        var startLabel = remote ? "Connect" : "Start Modulus";
+        var stopLabel = remote ? "Disconnect" : "Stop Modulus";
+
         switch (s.Status)
         {
             case DaemonStatus.Stopped:
                 _tray.Icon = _iconOff;
-                _tray.ToolTipText = "Modulus — stopped";
-                _startStopItem.Text = "Start Modulus";
+                _tray.ToolTipText = remote ? "Modulus — disconnected" : "Modulus — stopped";
+                _startStopItem.Text = startLabel;
                 break;
             case DaemonStatus.Starting:
                 _tray.Icon = _iconStarting;
-                _tray.ToolTipText = "Modulus — starting…";
-                _startStopItem.Text = "Stop Modulus";
+                _tray.ToolTipText = remote ? "Modulus — connecting…" : "Modulus — starting…";
+                _startStopItem.Text = stopLabel;
                 break;
             case DaemonStatus.Failed:
                 _tray.Icon = _iconWarn;
-                _tray.ToolTipText = "Modulus — failed to start (open the window for details)";
-                _startStopItem.Text = "Start Modulus";
+                _tray.ToolTipText = remote
+                    ? "Modulus — can't reach the remote engine (open the window for details)"
+                    : "Modulus — failed to start (open the window for details)";
+                _startStopItem.Text = startLabel;
                 break;
             case DaemonStatus.Running when s.SetupMode:
                 _tray.Icon = _iconStarting;
                 _tray.ToolTipText = "Modulus — finish setup in the app window";
-                _startStopItem.Text = "Stop Modulus";
+                _startStopItem.Text = stopLabel;
                 break;
             case DaemonStatus.Running when s.OllamaOk == false:
                 _tray.Icon = _iconWarn;
                 _tray.ToolTipText = s.OllamaUrl is null
                     ? "Modulus — AI engine unreachable"
                     : $"Modulus — can't reach the AI engine at {s.OllamaUrl}";
-                _startStopItem.Text = "Stop Modulus";
+                _startStopItem.Text = stopLabel;
                 break;
             case DaemonStatus.Running:
                 _tray.Icon = _iconOk;
-                _tray.ToolTipText = "Modulus — running";
-                _startStopItem.Text = "Stop Modulus";
+                _tray.ToolTipText = remote ? "Modulus — connected" : "Modulus — running";
+                _startStopItem.Text = stopLabel;
                 break;
         }
     }

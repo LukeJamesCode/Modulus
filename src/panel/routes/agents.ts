@@ -27,8 +27,6 @@ import { chooseAgentForTask } from '../../core/agent-router.js';
 import type { ToolContext, ToolHandler } from '../../core/tools.js';
 import { createAgentApprovalStore } from '../../core/agent-approvals.js';
 import { ingestStagedDir } from '../../core/agent-attachments.js';
-import { createAgentScheduleStore } from '../../core/agent-schedules.js';
-import { parseSchedule, describeSpec, hostTimeZone } from '../../core/schedule-parse.js';
 import type { ProfileName, ThinkMode } from '../../core/llm.js';
 import { readJson, readRawBody, sendJson, sse, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
@@ -93,42 +91,6 @@ function normalizeAgentInput(body: Record<string, unknown>): CreateAgentInput {
       rawRounds === null || rawRounds === undefined || rawRounds === ''
         ? null
         : clampInt(rawRounds, 1, 200, 30),
-  };
-}
-
-function normalizeAgentScheduleInput(body: Record<string, unknown>): {
-  agentIds: number[];
-  prompt: string;
-  nextRunAt: number;
-  recurrence: 'once' | 'daily' | 'weekly' | 'monthly' | 'yearly';
-  cron: string | null;
-  timeZone: string | null;
-} {
-  const rawIds = Array.isArray(body['agentIds'])
-    ? body['agentIds']
-    : body['agentId'] !== undefined
-      ? [body['agentId']]
-      : [];
-  const agentIds = rawIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
-  const recurrence =
-    body['recurrence'] === 'daily' ||
-    body['recurrence'] === 'weekly' ||
-    body['recurrence'] === 'monthly' ||
-    body['recurrence'] === 'yearly'
-      ? (body['recurrence'] as 'daily' | 'weekly' | 'monthly' | 'yearly')
-      : 'once';
-  const cron = typeof body['cron'] === 'string' && body['cron'].trim() ? body['cron'].trim() : null;
-  const timeZone =
-    typeof body['timeZone'] === 'string' && body['timeZone'].trim()
-      ? body['timeZone'].trim()
-      : null;
-  return {
-    agentIds,
-    prompt: String(body['prompt'] ?? '').trim(),
-    nextRunAt: Number(body['nextRunAt']),
-    recurrence,
-    cron,
-    timeZone,
   };
 }
 
@@ -461,140 +423,8 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
       return true;
     }
 
-    // ---- Schedules ----------------------------------------------------------
-    if (path === '/api/agents/schedules' && method === 'GET') {
-      const names = new Map(reg.list().map((a) => [a.id, a.name]));
-      const schedules = createAgentScheduleStore(deps.db, reg)
-        .list({ limit: 80 })
-        .map((s) => ({ ...s, agentNames: s.agentIds.map((id) => names.get(id) ?? `#${id}`) }));
-      sendJson(res, 200, { schedules });
-      return true;
-    }
-    // Parse a plain-English schedule into a preview ({ kind, cron|at, human }).
-    // The frontend shows it, then POSTs the structured row below. Pure preview —
-    // creates nothing.
-    if (path === '/api/agents/schedules/parse' && method === 'POST') {
-      const body = await readJson<{ text?: string }>(req);
-      const spec = await parseSchedule(String(body.text ?? ''), {
-        now: new Date(),
-        timeZone: hostTimeZone(),
-        llm: deps.llm,
-        log: deps.log,
-      });
-      if ('error' in spec) {
-        sendJson(res, 200, { error: spec.error });
-        return true;
-      }
-      sendJson(res, 200, {
-        spec,
-        human: describeSpec(spec, hostTimeZone()),
-        ...(spec.kind === 'once'
-          ? { nextRunAt: spec.at }
-          : { cron: spec.cron, timeZone: spec.timeZone }),
-      });
-      return true;
-    }
-    if (path === '/api/agents/schedules' && method === 'POST') {
-      const input = normalizeAgentScheduleInput(await readJson<Record<string, unknown>>(req));
-      if (input.agentIds.length === 0) {
-        sendJson(res, 400, { error: 'at least one agent is required' });
-        return true;
-      }
-      if (!input.prompt) {
-        sendJson(res, 400, { error: 'prompt is required' });
-        return true;
-      }
-      // A cron row recurs; the store computes its first fire. A non-cron row
-      // still needs a concrete future timestamp.
-      if (!input.cron) {
-        if (!Number.isFinite(input.nextRunAt)) {
-          sendJson(res, 400, { error: 'nextRunAt must be a timestamp' });
-          return true;
-        }
-        if (input.nextRunAt <= Date.now()) {
-          sendJson(res, 400, { error: 'scheduled time must be in the future' });
-          return true;
-        }
-      }
-      try {
-        const schedule = createAgentScheduleStore(deps.db, reg).create({
-          agentIds: input.agentIds,
-          prompt: input.prompt,
-          ...(input.cron
-            ? { cron: input.cron, timeZone: input.timeZone }
-            : { nextRunAt: input.nextRunAt, recurrence: input.recurrence }),
-        });
-        sendJson(res, 200, { schedule });
-      } catch (e) {
-        sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
-      }
-      return true;
-    }
-    const scheduleIdMatch = /^\/api\/agents\/schedules\/(\d+)$/.exec(path);
-    if (scheduleIdMatch && method === 'DELETE') {
-      const ok = createAgentScheduleStore(deps.db, reg).remove(Number(scheduleIdMatch[1]));
-      sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'not found' });
-      return true;
-    }
-
-    // ---- Standing orders ----------------------------------------------------
-    if (path === '/api/agents/standing' && method === 'GET') {
-      if (!deps.standingOrders) {
-        sendJson(res, 200, { orders: [] });
-        return true;
-      }
-      const names = new Map(reg.list().map((a) => [a.id, a.name]));
-      const orders = deps.standingOrders.list({ limit: 80 }).map((o) => ({
-        ...o,
-        agentName: o.agentId != null ? (names.get(o.agentId) ?? `#${o.agentId}`) : null,
-      }));
-      sendJson(res, 200, { orders });
-      return true;
-    }
-    if (path === '/api/agents/standing' && method === 'POST') {
-      if (!deps.standingOrders) {
-        sendJson(res, 503, { error: 'standing orders unavailable' });
-        return true;
-      }
-      const body = await readJson<Record<string, unknown>>(req);
-      const instruction = String(body['instruction'] ?? '').trim();
-      if (!instruction) {
-        sendJson(res, 400, { error: 'instruction is required' });
-        return true;
-      }
-      const agentId =
-        Number.isInteger(Number(body['agentId'])) && Number(body['agentId']) > 0
-          ? Number(body['agentId'])
-          : null;
-      const notifyChatId =
-        Number.isFinite(Number(body['notifyChatId'])) && Number(body['notifyChatId']) !== 0
-          ? Number(body['notifyChatId'])
-          : null;
-      const cron =
-        typeof body['cron'] === 'string' && body['cron'].trim() ? body['cron'].trim() : null;
-      try {
-        const order = deps.standingOrders.create({
-          instruction,
-          agentId,
-          notifyChatId,
-          cron,
-          ...(typeof body['timeZone'] === 'string' && body['timeZone'].trim()
-            ? { timeZone: body['timeZone'].trim() }
-            : {}),
-          notifyOnChange: body['notifyOnChange'] === true,
-        });
-        sendJson(res, 200, { order });
-      } catch (e) {
-        sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
-      }
-      return true;
-    }
-    const standingIdMatch = /^\/api\/agents\/standing\/(\d+)$/.exec(path);
-    if (standingIdMatch && method === 'DELETE') {
-      const ok = deps.standingOrders?.remove(Number(standingIdMatch[1])) ?? false;
-      sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'not found' });
-      return true;
-    }
+    // Schedules + standing orders moved to the unified Routines surface
+    // (routes/routines.ts) — one "Routine" object over both stores.
 
     // ---- Single agent update / delete / capabilities ------------------------
     const agentIdMatch = /^\/api\/agents\/(\d+)$/.exec(path);

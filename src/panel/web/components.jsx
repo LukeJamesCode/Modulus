@@ -38,6 +38,7 @@ const PATHS = {
   search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z M20 20l-4-4',
   'external-link': 'M14 4h6v6 M20 4l-9 9 M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5',
   'chevron-down': 'M6 9l6 6 6-6',
+  'chevron-up': 'M6 15l6-6 6 6',
   loader:
     'M12 2v4 M12 18v4 M4.9 4.9l2.8 2.8 M16.3 16.3l2.8 2.8 M2 12h4 M18 12h4 M4.9 19.1l2.8-2.8 M16.3 7.7l2.8-2.8',
   'check-circle': 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z M7.5 12.5l3 3 6-7',

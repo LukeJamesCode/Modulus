@@ -12,6 +12,7 @@ import { configFileExists, effectiveConfig, type ModulusConfig } from '../cli/co
 import { metricsFilePath } from '../cli/daemon.js';
 import { classifyProbeError, probeOllama } from '../cli/ollama-probe.js';
 import { collectModuleReadiness } from '../core/module-readiness.js';
+import { loadOrCreatePanelToken } from './auth.js';
 import { readMetrics } from '../core/metrics.js';
 import { RECOMMENDED_MODELS } from '../cli/profiles.js';
 import { HOST_VERSION } from '../core/version.js';
@@ -180,6 +181,17 @@ export async function buildState(deps: BuildStateDeps): Promise<unknown> {
     activity,
     version: HOST_VERSION,
     lan: lanAddress(),
+    // When the panel is LAN-bound (the "host for other devices" topology), hand
+    // the UI the exact tokenized link to paste into the desktop app or another
+    // browser. Loopback-bound installs report lan:false and no url. The token is
+    // already gating this very response, so surfacing it here leaks nothing new.
+    connect: (() => {
+      const bind = cfg?.panel?.bind ?? '127.0.0.1';
+      const ip = lanAddress();
+      if (bind !== '0.0.0.0' || !ip) return { lan: false, url: null as string | null };
+      const port = cfg?.panel?.port ?? 7777;
+      return { lan: true, url: `http://${ip}:${port}/?token=${loadOrCreatePanelToken(home)}` };
+    })(),
     // Running under the desktop shell: updates come from the shell's own
     // updater, not the git checkout, so the panel hides `modulus update`.
     desktop: process.env.MODULUS_DESKTOP === '1',

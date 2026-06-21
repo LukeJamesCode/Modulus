@@ -61,6 +61,7 @@ import { setupAgentPlanning } from '../core/agent-planning.js';
 import { setupFilesystemTools } from '../core/fs-tools.js';
 import { pinnedFilesRoot } from '../core/agent-attachments.js';
 import { setupAgentSchedules } from '../core/agent-schedules.js';
+import { createRoutineRunner, type RoutineRunner } from '../core/routine-runner.js';
 import {
   setupScheduleTools,
   CREATE_SCHEDULE_TOOL_NAME,
@@ -651,6 +652,10 @@ async function bootDaemon(
     // Ping the chat that dispatched a task when it finishes. Wired to Telegram
     // once the adapter is up (below); a no-op until then.
     let sendTaskNotification: (chatId: number, text: string) => Promise<void> = async () => {};
+    // Multi-step routine runner; created after the schedule store (it records run
+    // outcomes there). Held in a ref so the queue's onTaskUpdate — defined here,
+    // before the runner exists — can resume a run when a step task finishes.
+    const routineRef: { runner?: RoutineRunner } = {};
     const agentQueue = createAgentQueue({
       registry: agentRegistry,
       runtime: agentRuntime,
@@ -664,6 +669,20 @@ async function bootDaemon(
       // chat. Only tasks that recorded a notifyChatId (Telegram /dispatch) ping;
       // the formatter returns null for non-terminal/cancelled states.
       onTaskUpdate: (task) => {
+        // Advance any multi-step routine whose step this task was. Routine step
+        // tasks carry no notifyChatId, so they fall through the notify check
+        // below — the runner sends the final result itself. Guarded: this runs
+        // inside the queue's finally(), so a throw here (a DB error advancing a
+        // run) would skip the queue's rescan/heavy-release and surface as an
+        // unhandled rejection.
+        try {
+          routineRef.runner?.onTaskComplete(task);
+        } catch (e) {
+          log.warn('routine runner failed to advance', {
+            taskId: task.id,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
         if (task.notifyChatId == null) return;
         const agent = agentRegistry.get(task.agentId);
         const text = formatTaskNotification(task, agent?.name ?? 'agent');
@@ -737,6 +756,24 @@ async function bootDaemon(
       scheduler,
       registry: agentRegistry,
       queue: agentQueue,
+      log,
+      // Multi-step rows are driven by the runner rather than dispatched inline.
+      onFired: (fired) => {
+        for (const s of fired) {
+          if (s.steps && s.steps.length > 0) {
+            routineRef.runner?.start({ routineId: s.id, steps: s.steps, notifyChatId: s.notifyChatId });
+          }
+        }
+      },
+    });
+    // The runner dispatches each agent step through the queue (no notify target —
+    // intermediate steps stay silent), threads output forward, and on finish
+    // records the outcome + sends the final result to the routine's chat.
+    routineRef.runner = createRoutineRunner({
+      dispatch: (agentId, prompt) => agentQueue.dispatch({ agentId, prompt }).id,
+      agentExists: (id) => !!agentRegistry.get(id),
+      notify: (chatId, text) => void sendTaskNotification(chatId, text),
+      onFinish: (id, outcome) => agentSchedules.recordRun(id, outcome),
       log,
     });
     // Natural-language scheduling: one shared store + parser behind the

@@ -20,6 +20,7 @@ import { createAgentRoutes } from './routes/agents.js';
 import { createChatRoutes } from './routes/chat.js';
 import { createMarketplaceRoutes } from './routes/marketplace.js';
 import { createModuleRoutes } from './routes/modules.js';
+import { createRoutinesRoutes } from './routes/routines.js';
 import { createSkillRoutes } from './routes/skills.js';
 import { createSettingsRoutes } from './routes/settings.js';
 import { createSetupRoutes } from './routes/setup.js';
@@ -102,6 +103,7 @@ export async function createPanel(deps: PanelDeps): Promise<PanelHandle> {
     createSystemRoutes(deps, runtime),
     createChatRoutes(deps),
     createAgentRoutes(deps),
+    createRoutinesRoutes(deps),
     // Before modules: its /:name/install regex would otherwise claim
     // /api/modules/registry/install (name='registry').
     createMarketplaceRoutes(deps),

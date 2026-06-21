@@ -12,6 +12,7 @@ const { useState: useStateWiz, useEffect: useEffectWiz, useRef: useRefWiz } = Re
 
 const STEPS = [
   { id: 'welcome', label: 'Welcome' },
+  { id: 'topology', label: 'How to run' },
   { id: 'ollama', label: 'Model server' },
   { id: 'telegram', label: 'Connect Telegram' },
   { id: 'modules', label: 'Modules' },
@@ -36,6 +37,10 @@ function Wizard({
   const moduleConfigSaveRef = useRefWiz(null);
   const [models, setModels] = useStateWiz([]);
   const [data, setData] = useStateWiz({
+    // Deployment topology: how the user wants the daemon and Ollama laid out.
+    // Drives the Ollama-URL default and the panel bind address (loopback vs LAN).
+    topology: 'solo',
+    panelBind: '127.0.0.1',
     ollamaUrl: 'http://localhost:11434',
     ollamaState: 'idle',
     ollamaErr: '',
@@ -76,6 +81,7 @@ function Wizard({
       token: useTelegram ? data.token : '',
       allowlist: useTelegram ? data.allowlist : [],
       ollamaUrl: data.ollamaUrl,
+      panelBind: data.panelBind,
       chatModel: data.chatModel,
       reasoningModel: data.reasoningModel,
       toolsModel: data.toolsModel,
@@ -259,6 +265,7 @@ function Wizard({
             style={{ maxWidth: 600, margin: '0 auto', padding: '0 32px' }}
           >
             {cur === 'welcome' && <StepWelcome />}
+            {cur === 'topology' && <StepTopology data={data} set={set} />}
             {cur === 'ollama' && (
               <StepOllama
                 data={data}
@@ -543,6 +550,126 @@ function StepWelcome() {
   );
 }
 
+// ---- Topology step (where the daemon + Ollama run) ------------------------
+
+// The deployment choice. Only the bind address differs in config — 'host' flips
+// the panel to 0.0.0.0 so other devices (and the desktop app's "connect to a
+// remote Modulus" mode) can reach it; the others stay loopback-only. The Ollama
+// URL is set on the next step regardless, so any topology can still point the
+// model server at another machine.
+function StepTopology({ data, set }) {
+  const options = [
+    {
+      id: 'solo',
+      bind: '127.0.0.1',
+      icon: 'cpu',
+      title: 'Just this device',
+      desc: 'The assistant and its AI model both run here. Simplest setup — nothing leaves this machine.',
+    },
+    {
+      id: 'remote-ollama',
+      bind: '127.0.0.1',
+      icon: 'plug',
+      title: 'Use a model server on another device',
+      desc: 'The assistant runs here, but the AI model runs on another computer on your network. You’ll enter that machine’s address on the next step.',
+    },
+    {
+      id: 'host',
+      bind: '0.0.0.0',
+      icon: 'send',
+      title: 'Host for my other devices',
+      desc: 'This machine runs the assistant for the whole network — open it from the desktop app or a browser on another device, even with this one’s screen off. Great for an always-on mini PC.',
+    },
+  ];
+  return (
+    <div>
+      <StepHead kicker="Step 1" title="How do you want to run Modulus?">
+        Modulus is one always-on program (the “engine”) plus the app you talk to. They can live on
+        the same device or on different ones. Pick what fits — you can change it later in Settings.
+      </StepHead>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {options.map((o) => {
+          const on = data.topology === o.id;
+          return (
+            <button
+              key={o.id}
+              onClick={() => set({ topology: o.id, panelBind: o.bind })}
+              style={{
+                display: 'flex',
+                gap: 14,
+                textAlign: 'left',
+                padding: 16,
+                borderRadius: 'var(--radius)',
+                background: on ? 'var(--accent-soft)' : 'var(--surface)',
+                border: `1.5px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+                cursor: 'pointer',
+              }}
+            >
+              <span
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: 10,
+                  flex: 'none',
+                  display: 'grid',
+                  placeItems: 'center',
+                  background: on ? 'var(--accent)' : 'var(--accent-soft)',
+                  color: on ? 'var(--on-accent)' : 'var(--accent-strong)',
+                }}
+              >
+                <window.Icon name={o.icon} size={19} />
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    fontWeight: 600,
+                    fontSize: 15,
+                  }}
+                >
+                  {o.title}
+                  {on && (
+                    <window.Icon name="check" size={15} style={{ color: 'var(--accent-strong)' }} />
+                  )}
+                </div>
+                <p style={{ fontSize: 13.5, color: 'var(--text-2)', marginTop: 3, lineHeight: 1.5 }}>
+                  {o.desc}
+                </p>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      {data.topology === 'host' && (
+        <div
+          className="fade"
+          style={{
+            display: 'flex',
+            gap: 9,
+            marginTop: 14,
+            padding: '11px 14px',
+            borderRadius: 'var(--radius-sm)',
+            background: 'color-mix(in oklab, var(--warn) 9%, var(--surface))',
+            border: '1px solid color-mix(in oklab, var(--warn) 35%, var(--border))',
+            fontSize: 13,
+            color: 'var(--text-2)',
+            lineHeight: 1.55,
+          }}
+        >
+          <window.Icon name="alert" size={15} style={{ color: 'var(--warn)', flex: 'none' }} />
+          <span>
+            Modulus will be reachable on your local network. Anyone with the secret link can control
+            it, so keep it private. When it starts, the link to paste into the desktop app is shown
+            in the log and on the System tab.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HelperBox({ open, onToggle, title, children }) {
   return (
     <div
@@ -823,7 +950,7 @@ function StepOllama({ data, set, models, setModels, suggestedTier, ramGb, modelR
 
   return (
     <div>
-      <StepHead kicker="Step 1" title="Local model server">
+      <StepHead kicker="Step 2" title="Local model server">
         Modulus runs its AI with <b>Ollama</b>, a small program on this machine. Let’s make sure
         it’s reachable and pick a model.
       </StepHead>
@@ -1221,7 +1348,7 @@ function StepTelegram({ data, set }) {
 
   return (
     <div>
-      <StepHead kicker="Step 2 · optional" title="Connect Telegram">
+      <StepHead kicker="Step 3 · optional" title="Connect Telegram">
         Telegram lets you chat with Modulus from your phone. It’s <b>optional</b> — you can use the
         web panel’s chat and skip this, then add Telegram any time from Settings. To connect now,
         paste a <b>bot token</b> from BotFather, then add yourself by sending a code from your
@@ -1580,7 +1707,7 @@ function StepModules() {
     (window.MODULE_BLURBS && window.MODULE_BLURBS[e.name]) || e.description || '';
   return (
     <div>
-      <StepHead kicker="Step 3" title="Pick your modules">
+      <StepHead kicker="Step 4" title="Pick your modules">
         These capabilities are on by default — turn off anything you don’t want, or skip to keep
         them all. Codex and Everyday Assistant get a guided connection on the next step.
       </StepHead>

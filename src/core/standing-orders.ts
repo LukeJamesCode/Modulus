@@ -60,10 +60,14 @@ export interface EvaluateResult {
   tasksEnqueued: number;
 }
 
+// An edit. Every field is optional; an omitted field keeps its current value.
+export type UpdateStandingOrderInput = Partial<CreateStandingOrderInput>;
+
 export interface StandingOrderStore {
   create(input: CreateStandingOrderInput): StandingOrder;
   get(id: number): StandingOrder | undefined;
   list(options?: { active?: boolean; chatId?: number; limit?: number }): StandingOrder[];
+  update(id: number, patch: UpdateStandingOrderInput): StandingOrder | undefined;
   remove(id: number): boolean;
   removeForChat(chatId: number, id: number): boolean;
   setActive(id: number, active: boolean): boolean;
@@ -194,6 +198,59 @@ export function createStandingOrderStore(db: DB, log?: Logger): StandingOrderSto
     );
   }
 
+  // Edit an existing order. Untouched fields keep their value; the same checks
+  // create() applies (must do something, valid cron) gate the write.
+  function update(id: number, patch: UpdateStandingOrderInput): StandingOrder | undefined {
+    const existing = get(id);
+    if (!existing) return undefined;
+    const instruction =
+      patch.instruction !== undefined ? patch.instruction.trim() : existing.instruction;
+    if (!instruction) throw new Error('instruction is required');
+    const agentId =
+      patch.agentId !== undefined
+        ? patch.agentId != null && Number.isInteger(patch.agentId)
+          ? patch.agentId
+          : null
+        : existing.agentId;
+    const notifyChatId =
+      patch.notifyChatId !== undefined
+        ? patch.notifyChatId != null && Number.isFinite(patch.notifyChatId)
+          ? Math.trunc(patch.notifyChatId)
+          : null
+        : existing.notifyChatId;
+    if (agentId == null && notifyChatId == null) {
+      throw new Error('a standing order needs an agent to run or a chat to notify');
+    }
+    const cron = patch.cron !== undefined ? patch.cron?.trim() || null : existing.cron;
+    if (cron) parseCron(cron); // validate up front; throws on a bad expression
+    const timeZone = patch.timeZone !== undefined ? patch.timeZone?.trim() || null : existing.timeZone;
+    const cadenceMs =
+      patch.cadenceMs !== undefined
+        ? patch.cadenceMs != null && Number.isFinite(patch.cadenceMs) && patch.cadenceMs >= 0
+          ? Math.trunc(patch.cadenceMs)
+          : null
+        : existing.cadenceMs;
+    const notifyOnChange =
+      patch.notifyOnChange !== undefined ? !!patch.notifyOnChange : existing.notifyOnChange;
+    db.prepare(
+      `UPDATE standing_orders
+       SET instruction = ?, agent_id = ?, notify_chat_id = ?, cron = ?, time_zone = ?,
+           cadence_ms = ?, notify_on_change = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(
+      instruction,
+      agentId,
+      notifyChatId,
+      cron,
+      timeZone,
+      cadenceMs,
+      notifyOnChange ? 1 : 0,
+      Date.now(),
+      id,
+    );
+    return get(id);
+  }
+
   function isDue(order: StandingOrder, at: Date): boolean {
     if (order.cron) {
       try {
@@ -289,5 +346,5 @@ export function createStandingOrderStore(db: DB, log?: Logger): StandingOrderSto
     return { fired, nudges, tasksEnqueued };
   }
 
-  return { create, get, list, remove, removeForChat, setActive, evaluateDue };
+  return { create, get, list, update, remove, removeForChat, setActive, evaluateDue };
 }

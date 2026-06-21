@@ -44,6 +44,7 @@ function envLocks(): Record<string, boolean> {
     toolsModel: !!e['MODULUS_TOOLS_MODEL']?.trim(),
     tier: !!e['MODULUS_TIER']?.trim(),
     logLevel: !!e['MODULUS_LOG_LEVEL']?.trim(),
+    panelBind: !!e['MODULUS_PANEL_BIND']?.trim(),
   };
 }
 
@@ -90,6 +91,14 @@ function saveCoreConfig(
       return { ok: false, error: (e as Error).message };
     }
     next.ollama.url = body['ollamaUrl'];
+  }
+  // Panel bind address. Whitelisted to loopback or all-interfaces only — the
+  // UI's "host for other devices" toggle flips this to 0.0.0.0 (LAN exposure,
+  // token-gated). Anything else is ignored rather than written, so a hand-edited
+  // POST can't bind the panel to an arbitrary address. Takes effect on the next
+  // (re)start, like the Ollama URL.
+  if (body['panelBind'] === '127.0.0.1' || body['panelBind'] === '0.0.0.0') {
+    next.panel = { ...next.panel, bind: body['panelBind'] };
   }
   if (typeof body['chatModel'] === 'string' && body['chatModel'])
     next.models.chat = body['chatModel'];
@@ -141,6 +150,7 @@ export function createSettingsRoutes(deps: PanelDeps): RouteModule {
         hasToken: !!cfg.telegram.token,
         allowlist: cfg.telegram.allowedIds.map(String),
         ollamaUrl: cfg.ollama.url,
+        panelBind: cfg.panel?.bind ?? '127.0.0.1',
         chatModel: cfg.models.chat,
         reasoningModel: cfg.models.reason ?? '',
         toolsModel: cfg.models.tools ?? '',

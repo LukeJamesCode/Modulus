@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(node --import tsx --test src/panel/routes/routines.test.ts src/core/routine-runner.test.ts src/core/routine-e2e.test.ts src/core/standing-orders.test.ts src/core/agent-schedules.test.ts)",
+      "PowerShell(Get-Process -Name ModulusDesktop -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 7787 -ErrorAction SilentlyContinue)",
+      "PowerShell(\"---port 7787---\")"
+    ]
+  }
+}

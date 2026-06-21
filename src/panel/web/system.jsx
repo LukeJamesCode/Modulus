@@ -164,6 +164,9 @@ function SystemTab({
           />
         )}
       </div>
+      {state && state.connect && state.connect.lan && state.connect.url && (
+        <ConnectCard url={state.connect.url} />
+      )}
       {sub === 'status' && (
         <StatusDashboard
           state={state}
@@ -315,6 +318,50 @@ function HealthPill({ icon, label, value, pct, danger }) {
 }
 
 // CPU / RAM / queue / errors strip from the `system` block on /api/state.
+// Shown when the panel is bound to the LAN ("host for other devices"). The link
+// carries the secret token, so it's the one thing to paste into the desktop
+// app's "connect to a remote Modulus" box (or another browser).
+function ConnectCard({ url }) {
+  const [copied, setCopied] = useStateSys(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      /* clipboard blocked — the field is selectable as a fallback */
+    }
+  };
+  return (
+    <div
+      style={{
+        marginBottom: 20,
+        padding: 16,
+        borderRadius: 'var(--radius)',
+        background: 'var(--surface)',
+        border: '1px solid color-mix(in oklab, var(--accent) 35%, var(--border))',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+        <window.Icon name="plug" size={16} style={{ color: 'var(--accent-strong)' }} />
+        <span style={{ fontWeight: 600, fontSize: 14.5 }}>Connect from another device</span>
+      </div>
+      <p style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.55, margin: '0 0 12px' }}>
+        Paste this link into the desktop app’s “Connect to a Modulus running elsewhere” box, or open
+        it in a browser on another device. It contains a secret token — keep it private.
+      </p>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <window.Input mono readOnly value={url} onFocus={(e) => e.target.select()} />
+        </div>
+        <window.Button variant="primary" icon={copied ? 'check' : 'copy'} onClick={copy}>
+          {copied ? 'Copied' : 'Copy'}
+        </window.Button>
+      </div>
+    </div>
+  );
+}
+
 function SystemHealthBar({ state }) {
   const sys = state && state.system ? state.system : null;
   const cpu = sys && typeof sys.cpuPercent === 'number' ? sys.cpuPercent : null;

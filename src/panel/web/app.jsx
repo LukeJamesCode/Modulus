@@ -11,6 +11,7 @@ const { useState, useEffect, useCallback, useRef } = React;
 const NAV = [
   { id: 'agents', label: 'Home', icon: 'spark' },
   { id: 'fleet', label: 'Agents', icon: 'user' },
+  { id: 'routines', label: 'Routines', icon: 'clock' },
   { id: 'modules', label: 'Modules', icon: 'plug' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
   { id: 'system', label: 'System', icon: 'pulse' },
@@ -228,6 +229,9 @@ function App() {
               onNavigate={setRoute}
               mode={route === 'fleet' ? 'fleet' : 'home'}
             />
+          )}
+          {route === 'routines' && (
+            <window.RoutinesTab onNavigate={setRoute} enabledModules={enabledModules} />
           )}
           {route === 'modules' && <window.ModulesTab />}
           {route === 'settings' && (

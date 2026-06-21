@@ -54,6 +54,25 @@ advances a cron row via `nextFireAfter`; legacy rows keep `advanceNextRun`. A
 notify-only fire becomes a deferred nudge, so it inherits quiet hours, the rate
 limit, and dedup for free.
 
+### Multi-step routines
+
+A row may also carry `steps_json` (migration
+[0036](../src/storage/migrations/0036_agent_schedules_steps.sql)): an ordered
+list of `{agentId, instruction, condition?}`. Two or more steps engage the
+[routine-runner](../src/core/routine-runner.ts) instead of the inline dispatch —
+it runs each step in turn, threads each step's output into the next, and skips a
+step whose `condition` (a case-insensitive substring) isn't in the output so
+far. A `agentId: null` step is a "just message me" line. Because a step needs to
+*finish* before the next starts, the runner is async: it dispatches one agent
+step with no notify target, then resumes on that task's terminal state (via the
+queue's `onTaskUpdate` hook), and on completion records `last_status`/
+`last_result` and sends the final result to the chat. A single unconditional
+step collapses back to the legacy fire-and-forget path, so simple schedules are
+unchanged. This is a *linear* list, deliberately not the n8n-style DAG cut in
+0029 — code routes the sequence; the model only runs inside each step. Run state
+is in-memory (a restart abandons an in-flight run; persisted run history is a
+later phase).
+
 **Surfaces** — all routed through one shared creation path
 ([schedule-tools.ts](../src/core/schedule-tools.ts) `createScheduleFromText`):
 
@@ -61,9 +80,16 @@ limit, and dedup for free.
   chat id is a pseudo id).
 - Telegram: `/remind`, `/every`, `/schedules`, `/schedule cancel`
   ([schedule-commands.ts](../src/adapters/schedule-commands.ts)).
-- Panel: `POST /api/agents/schedules/parse` previews the parse; the Schedule
-  dialog's "Plain English" box uses it, then POSTs the structured row (now
-  cron-aware).
+- Panel: the **Routines tab** ([routines.jsx](../src/panel/web/routines.jsx) +
+  [routes/routines.ts](../src/panel/routes/routines.ts)) is the one home for
+  automation. It presents schedules *and* standing orders as a single "Routine"
+  object (do X · on a trigger · tell me), with create/edit/pause/delete over
+  `/api/routines`; `POST /api/routines/parse` previews the plain-English time.
+  This is a unified view, not a second store — it reads/writes the same two
+  tables, so both still ride this one spine. A **module-aware template gallery**
+  (static `TEMPLATES` in routines.jsx, filtered by `state.modules.enabledNames`)
+  pre-fills the New-routine modal for one-click starters; a routine's last
+  output is viewable from its card (`last_result`).
 
 ## Heartbeat (the pulse)
 
@@ -92,7 +118,7 @@ bounded by the heartbeat cadence — minute-exact reminders are `agent_schedules
 
 **Surfaces**: `/standing [add <agent>, <what> | cancel <id>]`
 ([standing-commands.ts](../src/adapters/standing-commands.ts)) and the panel's
-Agents tab (`/api/agents/standing`).
+Routines tab (as a "When something changes" routine; see above).
 
 ## Invariants honoured
 

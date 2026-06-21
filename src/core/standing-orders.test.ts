@@ -189,3 +189,29 @@ test('create rejects an order with neither agent nor chat, and a bad cron', () =
     cleanup();
   }
 });
+
+test('update edits fields, keeps untouched ones, and rejects a bad cron', () => {
+  const { store, cleanup } = setup();
+  try {
+    const o = store.create({ instruction: 'watch', agentId: 5, cron: '0 8 * * *' });
+
+    // Touch only the instruction; agent + cron are preserved.
+    const u1 = store.update(o.id, { instruction: 'watch harder' });
+    assert.equal(u1?.instruction, 'watch harder');
+    assert.equal(u1?.agentId, 5);
+    assert.equal(u1?.cron, '0 8 * * *');
+
+    // Clear the cron and switch to notify-only.
+    const u2 = store.update(o.id, { cron: null, agentId: null, notifyChatId: 42 });
+    assert.equal(u2?.cron, null);
+    assert.equal(u2?.agentId, null);
+    assert.equal(u2?.notifyChatId, 42);
+
+    // Can't end up with neither an agent nor a chat; bad cron throws.
+    assert.throws(() => store.update(o.id, { notifyChatId: null }));
+    assert.throws(() => store.update(o.id, { cron: '99 99 * * *' }));
+    assert.equal(store.update(999, { instruction: 'x' }), undefined);
+  } finally {
+    cleanup();
+  }
+});

@@ -41,7 +41,26 @@ public partial class App : Application
         var hidden = Environment.GetCommandLineArgs().Contains("--hidden");
         if (!hidden) _window.ShowAndFocus();
 
-        _ = _daemon.StartAsync();
+        // First run (no desktop.json) → show the local-vs-remote chooser and let
+        // it start the daemon once the user picks. A saved choice starts straight
+        // away: remote connects to the configured backend; anything else is local.
+        var cfg = DesktopConfig.Load();
+        if (cfg is null)
+        {
+            _window.ShowChooser();
+        }
+        else if (cfg.Mode == "remote" &&
+                 !string.IsNullOrEmpty(cfg.RemoteUrl) &&
+                 Uri.TryCreate(cfg.RemoteUrl, UriKind.Absolute, out var remoteUrl))
+        {
+            _daemon.ConfigureRemote(remoteUrl, cfg.RemoteToken ?? PanelLocator.TokenFromUrl(remoteUrl) ?? "");
+            _ = _daemon.StartAsync();
+        }
+        else
+        {
+            _daemon.ConfigureLocal();
+            _ = _daemon.StartAsync();
+        }
     }
 
     public void ShowMainWindow() => _dispatcher?.TryEnqueue(() => _window?.ShowAndFocus());

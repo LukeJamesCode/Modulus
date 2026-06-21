@@ -5,6 +5,11 @@ namespace ModulusDesktop;
 
 public enum DaemonStatus { Stopped, Starting, Running, Failed }
 
+// Local: this app owns the daemon child process. Remote: this app is a frontend
+// for a daemon running on another device — it never spawns, never stops it, and
+// detects liveness purely by probing /api/state.
+public enum DaemonMode { Local, Remote }
+
 public sealed record DaemonSnapshot(
     DaemonStatus Status,
     Uri? PanelUrl,
@@ -27,6 +32,9 @@ public sealed class DaemonManager : IDisposable
     private readonly Queue<string> _recent = new();
     private readonly CancellationTokenSource _disposed = new();
 
+    private DaemonMode _mode = DaemonMode.Local;
+    private Uri? _remoteUrl;     // full tokenized panel link, when mode is Remote
+    private string? _remoteToken;
     private Process? _child;
     private int? _adoptedPid;
     private Uri? _panelUrl;
@@ -66,15 +74,45 @@ public sealed class DaemonManager : IDisposable
         get { lock (_gate) { return string.Join(Environment.NewLine, _recent); } }
     }
 
+    public DaemonMode Mode
+    {
+        get { lock (_gate) { return _mode; } }
+    }
+
+    // This app runs and owns the daemon on this machine.
+    public void ConfigureLocal()
+    {
+        lock (_gate) { _mode = DaemonMode.Local; _remoteUrl = null; _remoteToken = null; }
+    }
+
+    // This app is a frontend for a daemon elsewhere. `url` is the full tokenized
+    // panel link the WebView navigates to; `token` gates the /api/state probe.
+    public void ConfigureRemote(Uri url, string token)
+    {
+        lock (_gate) { _mode = DaemonMode.Remote; _remoteUrl = url; _remoteToken = token; }
+    }
+
+    // Used by the connect chooser to validate a pasted link before committing.
+    public async Task<bool> CanConnectAsync(Uri url, string token)
+        => await ProbeStateAsync(url, token) is not null;
+
     public async Task StartAsync()
     {
+        DaemonMode mode;
         lock (_gate)
         {
             if (_status is DaemonStatus.Starting or DaemonStatus.Running) return;
             _stopRequested = false;
             _lastError = null;
+            mode = _mode;
         }
         SetStatus(DaemonStatus.Starting);
+
+        if (mode == DaemonMode.Remote)
+        {
+            await StartRemoteAsync();
+            return;
+        }
 
         if (await TryAdoptAsync()) return;
 
@@ -120,6 +158,79 @@ public sealed class DaemonManager : IDisposable
         }
         SetStatus(DaemonStatus.Running);
         return true;
+    }
+
+    // Remote mode: nothing to spawn. Probe the configured panel once; Running on
+    // success, Failed otherwise. The poll loop then tracks liveness like an
+    // adopted daemon (no child handle), and a drop hands off to RecoverRemoteAsync.
+    private async Task StartRemoteAsync()
+    {
+        Uri? url;
+        string? token;
+        lock (_gate) { url = _remoteUrl; token = _remoteToken; }
+        if (url is null || string.IsNullOrEmpty(token))
+        {
+            lock (_gate) { _lastError = "No remote Modulus address is set."; }
+            SetStatus(DaemonStatus.Failed);
+            return;
+        }
+
+        var state = await ProbeStateAsync(url, token);
+        if (state is null)
+        {
+            lock (_gate)
+            {
+                _lastError = $"Couldn't reach the Modulus engine at {url.Host}. " +
+                    "Check it's running and that the link is correct.";
+            }
+            SetStatus(DaemonStatus.Failed);
+            return;
+        }
+
+        ApplyState(state);
+        lock (_gate)
+        {
+            _panelUrl = url;
+            _token = token;
+            _child = null;
+            _adoptedPid = null;
+            _adoptedProbeMisses = 0;
+            _runningSince = DateTime.UtcNow;
+        }
+        SetStatus(DaemonStatus.Running);
+    }
+
+    // A remote backend (always-on by design) may blip off the network; never give
+    // up on it. Re-probe with capped backoff until it answers or the user stops.
+    private async Task RecoverRemoteAsync()
+    {
+        SetStatus(DaemonStatus.Starting);
+        var attempt = 0;
+        while (!_disposed.IsCancellationRequested)
+        {
+            bool stop;
+            Uri? url;
+            string? token;
+            lock (_gate) { stop = _stopRequested; url = _remoteUrl; token = _remoteToken; }
+            if (stop) { SetStatus(DaemonStatus.Stopped); return; }
+
+            if (url is not null && !string.IsNullOrEmpty(token))
+            {
+                var state = await ProbeStateAsync(url, token);
+                if (state is not null)
+                {
+                    ApplyState(state);
+                    lock (_gate) { _adoptedProbeMisses = 0; _runningSince = DateTime.UtcNow; }
+                    SetStatus(DaemonStatus.Running);
+                    return;
+                }
+            }
+
+            var delay = TimeSpan.FromSeconds(BackoffSeconds[Math.Min(attempt, BackoffSeconds.Length - 1)]);
+            attempt++;
+            try { await Task.Delay(delay, _disposed.Token); }
+            catch (OperationCanceledException) { return; }
+        }
     }
 
     private void Spawn()
@@ -316,6 +427,7 @@ public sealed class DaemonManager : IDisposable
         string? token;
         Process? child;
         int? adoptedPid;
+        DaemonMode mode;
         lock (_gate)
         {
             if (_status == DaemonStatus.Stopped) return;
@@ -324,6 +436,16 @@ public sealed class DaemonManager : IDisposable
             token = _token;
             child = _child;
             adoptedPid = _adoptedPid;
+            mode = _mode;
+        }
+
+        // Remote backend: we don't own it. Closing/quitting this app must never
+        // stop the always-on engine — just detach the frontend and stop polling.
+        if (mode == DaemonMode.Remote)
+        {
+            lock (_gate) { _panelUrl = null; _token = null; }
+            SetStatus(DaemonStatus.Stopped);
+            return;
         }
 
         if (url is not null && token is not null)
@@ -400,12 +522,16 @@ public sealed class DaemonManager : IDisposable
                 Uri? url;
                 string? token;
                 bool adopted;
+                bool remote;
                 lock (_gate)
                 {
                     if (_status != DaemonStatus.Running) continue;
                     url = _panelUrl;
                     token = _token;
-                    adopted = _child is null && _adoptedPid is not null;
+                    remote = _mode == DaemonMode.Remote;
+                    // No child handle to raise Exited — true for both an adopted
+                    // local daemon and a remote one; both detect death by probe.
+                    adopted = _child is null && (_adoptedPid is not null || remote);
                 }
                 if (url is null || token is null) continue;
 
@@ -418,14 +544,22 @@ public sealed class DaemonManager : IDisposable
                 }
                 else if (adopted)
                 {
-                    // No child handle to raise Exited — detect death by probe.
                     int misses;
                     lock (_gate) { misses = ++_adoptedProbeMisses; }
                     if (misses >= 3)
                     {
-                        DaemonLog.Write("adopted daemon stopped responding");
-                        lock (_gate) { _adoptedPid = null; _panelUrl = null; _token = null; }
-                        SetStatus(DaemonStatus.Stopped);
+                        if (remote)
+                        {
+                            // Keep the link; reconnect in the background indefinitely.
+                            DaemonLog.Write("remote daemon stopped responding; reconnecting");
+                            _ = RecoverRemoteAsync();
+                        }
+                        else
+                        {
+                            DaemonLog.Write("adopted daemon stopped responding");
+                            lock (_gate) { _adoptedPid = null; _panelUrl = null; _token = null; }
+                            SetStatus(DaemonStatus.Stopped);
+                        }
                     }
                 }
             }

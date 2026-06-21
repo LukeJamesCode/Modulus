@@ -163,6 +163,7 @@ before(async () => {
       listProfiles: () => ({ chat: { model: 'qwen3.5:0.8b', contextTokens: 4096, heavy: false } }),
       health: async () => ({ ok: true, models: ['qwen3.5:0.8b'] }),
       providerModels: () => ['deepseek:deepseek-chat'],
+      updateModels: () => {},
     } as unknown as PanelDeps['llm'],
     memory: setupMemory({
       db,
@@ -528,6 +529,48 @@ test('settings: config exposes the instant-responses toggle', async () => {
   const body = (await res.json()) as { instantResponses: boolean; envLocks: object };
   assert.equal(typeof body.instantResponses, 'boolean');
   assert.equal(typeof body.envLocks, 'object');
+});
+
+test('settings: panelBind round-trips through /api/config, whitelisted to loopback/all', async () => {
+  // Defaults to loopback and is exposed alongside an env-lock flag.
+  const before = (await (await authed('/api/config')).json()) as {
+    panelBind: string;
+    envLocks: { panelBind?: boolean };
+  };
+  assert.equal(before.panelBind, '127.0.0.1');
+  assert.equal(before.envLocks.panelBind, false);
+
+  // 0.0.0.0 (the "host for other devices" choice) persists.
+  const ok = await authed('/api/config', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ panelBind: '0.0.0.0' }),
+  });
+  assert.equal(ok.status, 200);
+  const lan = (await (await authed('/api/config')).json()) as { panelBind: string };
+  assert.equal(lan.panelBind, '0.0.0.0');
+
+  // A non-whitelisted bind is ignored, not written.
+  await authed('/api/config', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ panelBind: '8.8.8.8' }),
+  });
+  const unchanged = (await (await authed('/api/config')).json()) as { panelBind: string };
+  assert.equal(unchanged.panelBind, '0.0.0.0');
+
+  // /api/state now hands the UI a tokenized connect link (lan address permitting).
+  const state = (await (await authed('/api/state')).json()) as {
+    connect: { lan: boolean; url: string | null };
+  };
+  assert.equal(typeof state.connect.lan, 'boolean');
+
+  // Restore loopback so later assertions (and a re-run) start clean.
+  await authed('/api/config', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ panelBind: '127.0.0.1' }),
+  });
 });
 
 test('maintenance: fresh refuses without RESET and hands off to the terminal with it', async () => {

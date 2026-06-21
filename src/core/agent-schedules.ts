@@ -11,10 +11,25 @@ import { parseCron, nextFireAfter } from './cron.js';
 
 export type AgentScheduleRecurrence = 'once' | 'daily' | 'weekly' | 'monthly' | 'yearly';
 
+// One step of a multi-step routine. `agentId` NULL is a "just message me this"
+// step (its instruction becomes output); otherwise the agent runs the
+// instruction (with earlier steps' output threaded in). `condition` is a simple
+// case-insensitive substring tested against the accumulated output — the step
+// runs only when it matches. The routine-runner walks these in order.
+export interface RoutineStep {
+  agentId: number | null;
+  instruction: string;
+  condition?: string;
+}
+
 export interface AgentSchedule {
   id: number;
   agentIds: number[];
   prompt: string;
+  // Ordered steps for a multi-step routine. NULL = legacy single-step (the
+  // sweep dispatches agentIds with `prompt`); a non-empty list is driven by the
+  // routine-runner instead.
+  steps: RoutineStep[] | null;
   nextRunAt: number;
   recurrence: AgentScheduleRecurrence;
   // When set, the row recurs on this 5-field cron (matched in `timeZone`) and
@@ -29,13 +44,19 @@ export interface AgentSchedule {
   active: boolean;
   lastRunAt: number | null;
   lastTaskIds: number[];
+  // Outcome of the most recent run, for the "ran ✓ / failed" trust line.
+  lastStatus: string | null;
+  lastResult: string | null;
   createdAt: number;
   updatedAt: number;
 }
 
 export interface CreateAgentScheduleInput {
   agentIds: number[];
-  prompt: string;
+  prompt?: string;
+  // Provide for a multi-step routine; the prompt then defaults to the first
+  // step's instruction (used for the list label).
+  steps?: RoutineStep[] | null;
   // Optional when `cron` is supplied — the store computes the first fire time.
   nextRunAt?: number;
   recurrence?: AgentScheduleRecurrence;
@@ -43,6 +64,11 @@ export interface CreateAgentScheduleInput {
   timeZone?: string | null;
   notifyChatId?: number | null;
 }
+
+// An edit. Every field is optional; an omitted field keeps its current value,
+// so the timing (cron vs nextRunAt+recurrence) is reconstructed from the
+// existing row when the patch doesn't touch it.
+export type UpdateAgentScheduleInput = Partial<CreateAgentScheduleInput>;
 
 // Per-row dispatch hook: enqueue the prompt for one agent, passing the schedule's
 // notify target through so the resulting task pings the chat when it finishes.
@@ -60,12 +86,22 @@ export interface SweepResult {
   nudges: Nudge[];
 }
 
+// Outcome the routine-runner records when a multi-step run completes.
+export interface RoutineRunOutcome {
+  status: 'ok' | 'error';
+  result: string;
+}
+
 export interface AgentScheduleStore {
   create(input: CreateAgentScheduleInput): AgentSchedule;
   get(id: number): AgentSchedule | undefined;
   list(options?: { active?: boolean; limit?: number; chatId?: number }): AgentSchedule[];
+  update(id: number, patch: UpdateAgentScheduleInput): AgentSchedule | undefined;
+  setActive(id: number, active: boolean): boolean;
   remove(id: number): boolean;
   removeForChat(chatId: number, id: number): boolean;
+  // Record the outcome of the most recent run (the runner calls this on finish).
+  recordRun(id: number, outcome: RoutineRunOutcome): void;
   sweepDue(dispatch: ScheduleDispatch, at?: Date): SweepResult;
 }
 
@@ -73,6 +109,7 @@ interface ScheduleRow {
   id: number;
   agent_ids: string;
   prompt: string;
+  steps_json: string | null;
   next_run_at: number;
   recurrence: string;
   cron: string | null;
@@ -81,6 +118,8 @@ interface ScheduleRow {
   active: number;
   last_run_at: number | null;
   last_task_ids: string | null;
+  last_status: string | null;
+  last_result: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -100,11 +139,38 @@ function parseNumberArray(json: string | null): number[] {
   }
 }
 
+// Parse + sanitize a stored/incoming steps array. A step needs a non-empty
+// instruction; agentId is an int>0 (an agent step) or null (a message step).
+function parseSteps(value: string | RoutineStep[] | null | undefined): RoutineStep[] | null {
+  let raw: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      raw = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(raw)) return null;
+  const steps: RoutineStep[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const s = item as Record<string, unknown>;
+    const instruction = String(s['instruction'] ?? '').trim();
+    if (!instruction) continue;
+    const rawId = Number(s['agentId']);
+    const agentId = Number.isInteger(rawId) && rawId > 0 ? rawId : null;
+    const condition = typeof s['condition'] === 'string' && s['condition'].trim() ? s['condition'].trim() : undefined;
+    steps.push(condition ? { agentId, instruction, condition } : { agentId, instruction });
+  }
+  return steps.length > 0 ? steps : null;
+}
+
 function rowToSchedule(row: ScheduleRow): AgentSchedule {
   return {
     id: row.id,
     agentIds: parseNumberArray(row.agent_ids),
     prompt: row.prompt,
+    steps: parseSteps(row.steps_json),
     nextRunAt: row.next_run_at,
     recurrence: row.recurrence as AgentScheduleRecurrence,
     cron: row.cron,
@@ -113,6 +179,8 @@ function rowToSchedule(row: ScheduleRow): AgentSchedule {
     active: row.active !== 0,
     lastRunAt: row.last_run_at,
     lastTaskIds: parseNumberArray(row.last_task_ids),
+    lastStatus: row.last_status,
+    lastResult: row.last_result,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -157,9 +225,9 @@ export function createAgentScheduleStore(
 ): AgentScheduleStore {
   const insert = db.prepare(
     `INSERT INTO agent_schedules
-       (agent_ids, prompt, next_run_at, recurrence, cron, time_zone, notify_chat_id,
+       (agent_ids, prompt, steps_json, next_run_at, recurrence, cron, time_zone, notify_chat_id,
         active, created_at, updated_at)
-     VALUES (@agent_ids, @prompt, @next_run_at, @recurrence, @cron, @time_zone, @notify_chat_id,
+     VALUES (@agent_ids, @prompt, @steps_json, @next_run_at, @recurrence, @cron, @time_zone, @notify_chat_id,
         1, @created_at, @updated_at)`,
   );
   const selectById = db.prepare(`SELECT * FROM agent_schedules WHERE id = ?`);
@@ -172,6 +240,7 @@ export function createAgentScheduleStore(
   interface NormalizedSchedule {
     agentIds: number[];
     prompt: string;
+    steps: RoutineStep[] | null;
     nextRunAt: number;
     recurrence: AgentScheduleRecurrence;
     cron: string | null;
@@ -181,21 +250,40 @@ export function createAgentScheduleStore(
 
   function validate(input: CreateAgentScheduleInput): NormalizedSchedule {
     const seen = new Set<number>();
-    const agentIds = input.agentIds
+    let agentIds = input.agentIds
       .map((id) => Number(id))
       .filter((id) => Number.isInteger(id) && id > 0 && !seen.has(id) && seen.add(id));
     for (const id of agentIds) {
       if (!registry.get(id)) throw new Error(`agent ${id} does not exist`);
     }
+    let steps = parseSteps(input.steps);
+    let stepPrompt: string | null = null;
+    // A single unconditional step is just a legacy schedule — store it that way
+    // (agentIds + prompt) so simple routines keep their exact prior fire-and-
+    // forget path and never engage the runner. Only 2+ steps need the runner.
+    if (steps && steps.length === 1 && !steps[0]!.condition) {
+      const only = steps[0]!;
+      if (only.agentId != null) agentIds = [only.agentId];
+      stepPrompt = only.instruction;
+      steps = null;
+    }
+    // Agent steps must reference a real agent (a message step's agentId is null).
+    for (const step of steps ?? []) {
+      if (step.agentId != null && !registry.get(step.agentId)) {
+        throw new Error(`agent ${step.agentId} does not exist`);
+      }
+    }
     const notifyChatId =
       input.notifyChatId != null && Number.isFinite(input.notifyChatId)
         ? Math.trunc(input.notifyChatId)
         : null;
-    // A schedule must do *something*: dispatch to an agent, or notify a chat.
-    if (agentIds.length === 0 && notifyChatId == null) {
+    // A routine must do *something*: run agents, walk steps, or notify a chat.
+    if (agentIds.length === 0 && !steps && notifyChatId == null) {
       throw new Error('a schedule needs at least one agent or a notify target');
     }
-    const prompt = input.prompt.trim();
+    // The prompt is the list label; default it to the first step's instruction.
+    const prompt =
+      (input.prompt ?? '').trim() || stepPrompt || (steps && steps[0] ? steps[0].instruction : '');
     if (!prompt) throw new Error('prompt is required');
 
     const cron = input.cron?.trim() || null;
@@ -207,12 +295,13 @@ export function createAgentScheduleStore(
       const parsed = parseCron(cron);
       const firstFire = nextFireAfter(parsed, new Date(), timeZone ?? undefined).getTime();
       const nextRunAt = Number.isFinite(input.nextRunAt) ? Math.trunc(input.nextRunAt!) : firstFire;
-      return { agentIds, prompt, nextRunAt, recurrence: 'once', cron, timeZone, notifyChatId };
+      return { agentIds, prompt, steps, nextRunAt, recurrence: 'once', cron, timeZone, notifyChatId };
     }
     if (!Number.isFinite(input.nextRunAt)) throw new Error('nextRunAt must be a timestamp');
     return {
       agentIds,
       prompt,
+      steps,
       nextRunAt: Math.trunc(input.nextRunAt!),
       recurrence: normalizeRecurrence(input.recurrence),
       cron: null,
@@ -227,6 +316,7 @@ export function createAgentScheduleStore(
     const info = insert.run({
       agent_ids: JSON.stringify(normalized.agentIds),
       prompt: normalized.prompt,
+      steps_json: normalized.steps ? JSON.stringify(normalized.steps) : null,
       next_run_at: normalized.nextRunAt,
       recurrence: normalized.recurrence,
       cron: normalized.cron,
@@ -272,6 +362,70 @@ export function createAgentScheduleStore(
       db.prepare(`DELETE FROM agent_schedules WHERE id = ? AND notify_chat_id = ?`).run(id, chatId)
         .changes > 0
     );
+  }
+
+  // Pause/resume. A resumed row whose next_run_at is already past fires on the
+  // next sweep (then advances) — same as any newly-due row.
+  function setActive(id: number, active: boolean): boolean {
+    return (
+      db
+        .prepare(`UPDATE agent_schedules SET active = ?, updated_at = ? WHERE id = ?`)
+        .run(active ? 1 : 0, Date.now(), id).changes > 0
+    );
+  }
+
+  // Edit an existing row. Untouched fields keep their value; the timing is
+  // re-validated through the same path create() uses (a cron is re-anchored, a
+  // bad cron throws), so an edit can never persist something the sweep can't fire.
+  function update(id: number, patch: UpdateAgentScheduleInput): AgentSchedule | undefined {
+    const existing = get(id);
+    if (!existing) return undefined;
+    const touchesTiming =
+      patch.cron !== undefined || patch.recurrence !== undefined || patch.nextRunAt !== undefined;
+    const timing: Pick<CreateAgentScheduleInput, 'cron' | 'timeZone' | 'nextRunAt' | 'recurrence'> =
+      touchesTiming
+        ? patch.cron
+          ? { cron: patch.cron, timeZone: patch.timeZone ?? existing.timeZone }
+          : {
+              nextRunAt: patch.nextRunAt ?? existing.nextRunAt,
+              recurrence: patch.recurrence ?? existing.recurrence,
+            }
+        : existing.cron
+          ? { cron: existing.cron, timeZone: existing.timeZone }
+          : { nextRunAt: existing.nextRunAt, recurrence: existing.recurrence };
+    const normalized = validate({
+      agentIds: patch.agentIds ?? existing.agentIds,
+      prompt: patch.prompt ?? existing.prompt,
+      steps: patch.steps !== undefined ? patch.steps : existing.steps,
+      notifyChatId: patch.notifyChatId !== undefined ? patch.notifyChatId : existing.notifyChatId,
+      ...timing,
+    });
+    db.prepare(
+      `UPDATE agent_schedules
+       SET agent_ids = ?, prompt = ?, steps_json = ?, next_run_at = ?, recurrence = ?, cron = ?,
+           time_zone = ?, notify_chat_id = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(
+      JSON.stringify(normalized.agentIds),
+      normalized.prompt,
+      normalized.steps ? JSON.stringify(normalized.steps) : null,
+      normalized.nextRunAt,
+      normalized.recurrence,
+      normalized.cron,
+      normalized.timeZone,
+      normalized.notifyChatId,
+      Date.now(),
+      id,
+    );
+    return get(id);
+  }
+
+  // Record the outcome of the most recent run. last_run_at was set to the fire
+  // time by the sweep; this fills in the result once the run actually finishes.
+  function recordRun(id: number, outcome: RoutineRunOutcome): void {
+    db.prepare(
+      `UPDATE agent_schedules SET last_status = ?, last_result = ?, updated_at = ? WHERE id = ?`,
+    ).run(outcome.status, outcome.result, Date.now(), id);
   }
 
   // Compute the post-fire (active, nextRunAt) for a row. Cron rows advance via
@@ -320,7 +474,11 @@ export function createAgentScheduleStore(
     for (const row of due) {
       const schedule = rowToSchedule(row);
       const taskIds: number[] = [];
-      if (schedule.agentIds.length > 0) {
+      if (schedule.steps && schedule.steps.length > 0) {
+        // Multi-step routine: the routine-runner (wired in setupAgentSchedules
+        // via onFired) drives it from the `fired` list. The runner owns the
+        // per-step task ids, so nothing is dispatched here.
+      } else if (schedule.agentIds.length > 0) {
         for (const agentId of schedule.agentIds) {
           if (!registry.get(agentId)) continue;
           taskIds.push(dispatch(agentId, schedule.prompt, schedule.notifyChatId).id);
@@ -346,7 +504,7 @@ export function createAgentScheduleStore(
     return { fired, nudges };
   }
 
-  return { create, get, list, remove, removeForChat, sweepDue };
+  return { create, get, list, update, setActive, remove, removeForChat, recordRun, sweepDue };
 }
 
 export interface AgentSchedulesOptions {
@@ -355,6 +513,10 @@ export interface AgentSchedulesOptions {
   registry: AgentRegistry;
   queue: AgentQueue;
   log: Logger;
+  // Called each sweep with the rows that fired. The daemon uses it to kick off
+  // the routine-runner for multi-step rows (single-step rows are dispatched
+  // inline by sweepDue). Kept as a hook so the store stays runner-agnostic.
+  onFired?: (fired: AgentSchedule[]) => void;
 }
 
 export function setupAgentSchedules(opts: AgentSchedulesOptions): AgentScheduleStore {
@@ -370,6 +532,7 @@ export function setupAgentSchedules(opts: AgentSchedulesOptions): AgentScheduleS
         firedAt,
       );
       if (fired.length > 0) log.info('agent schedules fired', { count: fired.length });
+      if (fired.length > 0) opts.onFired?.(fired);
       // Notify-only reminders flow back as nudges the scheduler dispatches.
       return nudges;
     },

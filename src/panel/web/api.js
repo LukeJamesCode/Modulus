@@ -200,6 +200,7 @@
     },
     get: (path) => request('GET', path),
     post: (path, body) => request('POST', path, body),
+    put: (path, body) => request('PUT', path, body),
     del: (path) => request('DELETE', path),
     postBlob,
     postRaw,

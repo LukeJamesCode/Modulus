@@ -222,3 +222,133 @@ test('agent schedules: removeForChat only deletes a reminder owned by that chat'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('agent schedules: setActive pauses and resumes a row', () => {
+  const dir = tmp();
+  const db = open({ path: join(dir, 'g.db') });
+  try {
+    const reg = createAgentRegistry(db);
+    const a = reg.create({ name: 'a', systemPrompt: 's', toolAllowlist: [] });
+    const store = createAgentScheduleStore(db, reg);
+    const s = store.create({ agentIds: [a.id], prompt: 'p', cron: '0 8 * * *' });
+    assert.equal(store.get(s.id)?.active, true);
+    assert.equal(store.setActive(s.id, false), true);
+    assert.equal(store.get(s.id)?.active, false);
+    assert.equal(store.setActive(s.id, true), true);
+    assert.equal(store.get(s.id)?.active, true);
+    assert.equal(store.setActive(999, false), false, 'missing id reports no change');
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('agent schedules: update edits fields and re-validates timing', () => {
+  const dir = tmp();
+  const db = open({ path: join(dir, 'g.db') });
+  try {
+    const reg = createAgentRegistry(db);
+    const a = reg.create({ name: 'a', systemPrompt: 's', toolAllowlist: [] });
+    const b = reg.create({ name: 'b', systemPrompt: 's', toolAllowlist: [] });
+    const store = createAgentScheduleStore(db, reg);
+    const s = store.create({ agentIds: [a.id], prompt: 'old', cron: '0 8 * * *' });
+
+    // Edit only the prompt + agents; timing is reconstructed from the existing row.
+    const u1 = store.update(s.id, { prompt: 'new', agentIds: [a.id, b.id] });
+    assert.equal(u1?.prompt, 'new');
+    assert.deepEqual(u1?.agentIds.sort((x, y) => x - y), [a.id, b.id]);
+    assert.equal(u1?.cron, '0 8 * * *', 'cron preserved when not touched');
+
+    // Switch from cron to a one-time run.
+    const future = Date.now() + 3_600_000;
+    const u2 = store.update(s.id, { cron: null, nextRunAt: future, recurrence: 'once' });
+    assert.equal(u2?.cron, null);
+    assert.equal(u2?.recurrence, 'once');
+    assert.equal(u2?.nextRunAt, future);
+
+    // A bad cron is rejected, leaving the row unchanged.
+    assert.throws(() => store.update(s.id, { cron: '99 99 * * *' }));
+    assert.equal(store.update(999, { prompt: 'x' }), undefined, 'missing id returns undefined');
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('agent schedules: a multi-step routine stores steps; the sweep leaves it for the runner', () => {
+  const dir = tmp();
+  const db = open({ path: join(dir, 'g.db') });
+  try {
+    const reg = createAgentRegistry(db);
+    const a = reg.create({ name: 'a', systemPrompt: 's', toolAllowlist: [] });
+    const b = reg.create({ name: 'b', systemPrompt: 's', toolAllowlist: [] });
+    const store = createAgentScheduleStore(db, reg);
+    const now = Date.now();
+
+    const s = store.create({
+      agentIds: [],
+      steps: [
+        { agentId: a.id, instruction: 'step one' },
+        { agentId: b.id, instruction: 'step two', condition: 'ok' },
+      ],
+      nextRunAt: now - 1,
+      recurrence: 'once',
+    });
+    assert.equal(s.steps?.length, 2);
+    assert.deepEqual(s.agentIds, []);
+    assert.equal(s.prompt, 'step one', 'prompt defaults to the first step');
+
+    // The sweep must NOT dispatch a stepped row — the runner owns it. The
+    // dispatch callback should never be called; the row still fires + advances.
+    let dispatched = 0;
+    const { fired } = store.sweepDue(() => {
+      dispatched += 1;
+      return reg.enqueue({ agentId: a.id, prompt: 'x' });
+    }, new Date(now));
+    assert.equal(dispatched, 0, 'stepped rows are not dispatched inline');
+    assert.equal(fired.length, 1);
+    assert.equal(fired[0]?.steps?.length, 2);
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('agent schedules: a single unconditional step collapses to the legacy path', () => {
+  const dir = tmp();
+  const db = open({ path: join(dir, 'g.db') });
+  try {
+    const reg = createAgentRegistry(db);
+    const a = reg.create({ name: 'a', systemPrompt: 's', toolAllowlist: [] });
+    const store = createAgentScheduleStore(db, reg);
+    const s = store.create({
+      agentIds: [],
+      steps: [{ agentId: a.id, instruction: 'just do this' }],
+      cron: '0 8 * * *',
+    });
+    assert.equal(s.steps, null, 'a single step is stored as a legacy schedule');
+    assert.deepEqual(s.agentIds, [a.id]);
+    assert.equal(s.prompt, 'just do this');
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('agent schedules: recordRun fills in the last run outcome', () => {
+  const dir = tmp();
+  const db = open({ path: join(dir, 'g.db') });
+  try {
+    const reg = createAgentRegistry(db);
+    const a = reg.create({ name: 'a', systemPrompt: 's', toolAllowlist: [] });
+    const store = createAgentScheduleStore(db, reg);
+    const s = store.create({ agentIds: [a.id], prompt: 'p', cron: '0 8 * * *' });
+    assert.equal(store.get(s.id)?.lastStatus, null);
+    store.recordRun(s.id, { status: 'ok', result: 'all good' });
+    assert.equal(store.get(s.id)?.lastStatus, 'ok');
+    assert.equal(store.get(s.id)?.lastResult, 'all good');
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

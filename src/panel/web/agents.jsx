@@ -1248,13 +1248,9 @@ function AgentsTab({
   const [view, setView] = useState(mode === 'fleet' ? 'run' : 'chats'); // chats | run | agents
   const [agents, setAgents] = useState([]);
   const [tasks, setTasks] = useState([]);
-  const [schedules, setSchedules] = useState([]);
-  const [standing, setStanding] = useState([]);
-  const [standingOpen, setStandingOpen] = useState(false);
   const [editing, setEditing] = useState(null); // agent object or EMPTY_AGENT when creating
   const [hiring, setHiring] = useState(false); // "Hire an agent" template gallery open
   const [dispatchFor, setDispatchFor] = useState(null); // agent to dispatch to
-  const [scheduleFor, setScheduleFor] = useState(null); // agent preselected for scheduling; null = choose in modal
   const [openTask, setOpenTask] = useState(null); // agent task id whose detail is open
   const [viewOutputFor, setViewOutputFor] = useState(null); // task object
   const [pauseTarget, setPauseTarget] = useState(null); // { task, isBulk }
@@ -1264,18 +1260,14 @@ function AgentsTab({
   const [notice, setNotice] = useState(''); // transient success line (e.g. "Sent to researcher")
 
   const load = useCallback(async () => {
-    const [a, t, s, p, o] = await Promise.all([
+    const [a, t, p] = await Promise.all([
       window.api.get('/api/agents'),
       window.api.get('/api/agents/tasks'),
-      window.api.get('/api/agents/schedules'),
       window.api.get('/api/agents/approvals'),
-      window.api.get('/api/agents/standing'),
     ]);
     if (a.ok) setAgents(a.data.agents || []);
     if (t.ok) setTasks(t.data.tasks || []);
-    if (s.ok) setSchedules(s.data.schedules || []);
     if (p.ok) setApprovals({ pending: p.data.pending || [], recent: p.data.recent || [] });
-    if (o.ok) setStanding(o.data.orders || []);
   }, []);
 
   const resolveApproval = async (id, approved) => {
@@ -1407,37 +1399,6 @@ function AgentsTab({
     load();
   };
 
-  const createSchedule = async (draft) => {
-    setError('');
-    const r = await window.api.post('/api/agents/schedules', draft);
-    if (!r.ok) {
-      setError(r.error || 'Schedule failed');
-      return;
-    }
-    setScheduleFor(null);
-    load();
-  };
-
-  const removeSchedule = async (schedule) => {
-    await fetchDelete(`/api/agents/schedules/${schedule.id}`);
-    load();
-  };
-
-  const createStanding = async (draft) => {
-    setError('');
-    const r = await window.api.post('/api/agents/standing', draft);
-    if (!r.ok) {
-      setError((r.data && r.data.error) || r.error || 'Could not create standing order');
-      return;
-    }
-    setStandingOpen(false);
-    load();
-  };
-
-  const removeStanding = async (order) => {
-    await fetchDelete(`/api/agents/standing/${order.id}`);
-    load();
-  };
 
   return (
     <div
@@ -1537,28 +1498,15 @@ function AgentsTab({
           />
 
           <window.SectionTitle
-            sub="Timed one-shot and recurring agent work."
+            sub="Schedule agents, repeat tasks, and watch for changes — all in one place."
             right={
-              <window.Button variant="primary" icon="plus" onClick={() => setScheduleFor({})}>
-                Add Schedule
+              <window.Button variant="subtle" icon="clock" onClick={() => onNavigate('routines')}>
+                Open Routines
               </window.Button>
             }
           >
-            Schedules
+            Routines
           </window.SectionTitle>
-          <ScheduleList schedules={schedules} onDelete={removeSchedule} />
-
-          <window.SectionTitle
-            sub="Conditional watches the heartbeat evaluates on its own."
-            right={
-              <window.Button variant="primary" icon="plus" onClick={() => setStandingOpen(true)}>
-                Add Standing Order
-              </window.Button>
-            }
-          >
-            Standing Orders
-          </window.SectionTitle>
-          <StandingList orders={standing} onDelete={removeStanding} />
         </>
       )}
 
@@ -1571,7 +1519,7 @@ function AgentsTab({
             onEdit={(a) => setEditing(a)}
             onDelete={removeAgent}
             onDispatch={(a) => setDispatchFor(a)}
-            onSchedule={(a) => setScheduleFor(a)}
+            onSchedule={() => onNavigate('routines')}
           />
           <ChannelsCard agents={agents} />
         </>
@@ -1602,21 +1550,6 @@ function AgentsTab({
           agent={dispatchFor}
           onClose={() => setDispatchFor(null)}
           onDispatch={(p, tm, st) => dispatch(dispatchFor, p, tm, st)}
-        />
-      )}
-      {scheduleFor && (
-        <ScheduleModal
-          agents={agents}
-          initialAgent={scheduleFor.id ? scheduleFor : null}
-          onClose={() => setScheduleFor(null)}
-          onSchedule={createSchedule}
-        />
-      )}
-      {standingOpen && (
-        <StandingModal
-          agents={agents}
-          onClose={() => setStandingOpen(false)}
-          onCreate={createStanding}
         />
       )}
       {pauseTarget && (
@@ -1951,385 +1884,6 @@ function PauseModal({ task, isBulk, onClose, onConfirm }) {
           />
         </Field>
       )}
-    </window.Modal>
-  );
-}
-
-function localDateTimeValue(ms) {
-  const d = new Date(ms);
-  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
-}
-
-function parseLocalDateTime(value) {
-  const t = Date.parse(value);
-  return Number.isNaN(t) ? null : t;
-}
-
-function ScheduleList({ schedules, onDelete }) {
-  if (schedules.length === 0) {
-    return (
-      <window.Card>
-        <div style={{ color: 'var(--text-3)', fontSize: 14 }}>No schedules yet.</div>
-      </window.Card>
-    );
-  }
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 26 }}>
-      {schedules.map((s) => (
-        <div
-          key={s.id}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            padding: '10px 14px',
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-sm)',
-          }}
-        >
-          <window.Badge tone={s.active ? 'accent' : 'neutral'}>
-            {!s.active ? 'done' : s.cron ? 'repeats' : s.recurrence}
-          </window.Badge>
-          <span style={{ fontWeight: 600, fontSize: 13, minWidth: 130 }}>
-            {(s.agentNames || []).join(', ')}
-          </span>
-          <span
-            style={{
-              flex: 1,
-              minWidth: 0,
-              fontSize: 13,
-              color: 'var(--text-2)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {s.prompt}
-          </span>
-          <span style={{ fontSize: 11.5, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-            {s.cron ? s.cron : new Date(s.nextRunAt).toLocaleString()}
-          </span>
-          <window.Button size="sm" variant="subtle" icon="trash" onClick={() => onDelete(s)} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ScheduleModal({ agents, initialAgent, onClose, onSchedule }) {
-  const [selected, setSelected] = useState(() => (initialAgent ? [initialAgent.id] : []));
-  const [prompt, setPrompt] = useState('');
-  const [when, setWhen] = useState(() => localDateTimeValue(Date.now() + 60 * 60_000));
-  const [recurrence, setRecurrence] = useState('once');
-  // Natural-language scheduling. When a phrase resolves to a repeating cron we
-  // keep it here and submit cron+timeZone instead of nextRunAt+recurrence; a
-  // one-time phrase just fills the date/time field below.
-  const [nlText, setNlText] = useState('');
-  const [nlCron, setNlCron] = useState(null);
-  const [nlTimeZone, setNlTimeZone] = useState(null);
-  const [nlHuman, setNlHuman] = useState('');
-  const [nlError, setNlError] = useState('');
-  const [parsing, setParsing] = useState(false);
-  const toggleAgent = (id) =>
-    setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
-  const nextRunAt = parseLocalDateTime(when);
-  const invalidTime = nextRunAt === null || nextRunAt <= Date.now();
-  // A resolved cron makes the structured time fields advisory, so they no
-  // longer gate the submit button.
-  const blockSubmit = selected.length === 0 || !prompt.trim() || (!nlCron && invalidTime);
-
-  const parseNl = async () => {
-    const text = nlText.trim();
-    if (!text) return;
-    setParsing(true);
-    setNlError('');
-    const r = await window.api.post('/api/agents/schedules/parse', { text });
-    setParsing(false);
-    const d = (r && r.data) || {};
-    if (!r.ok || d.error) {
-      setNlCron(null);
-      setNlHuman('');
-      setNlError(d.error || (r && r.error) || 'Could not read a time from that.');
-      return;
-    }
-    if (d.cron) {
-      setNlCron(d.cron);
-      setNlTimeZone(d.timeZone || null);
-      setNlHuman(d.human || `repeats (${d.cron})`);
-    } else if (d.nextRunAt) {
-      setNlCron(null);
-      setNlTimeZone(null);
-      setWhen(localDateTimeValue(d.nextRunAt));
-      setRecurrence('once');
-      setNlHuman(d.human || '');
-    }
-  };
-
-  const submit = () => {
-    const base = { agentIds: selected, prompt: prompt.trim() };
-    onSchedule(
-      nlCron ? { ...base, cron: nlCron, timeZone: nlTimeZone } : { ...base, nextRunAt, recurrence },
-    );
-  };
-  return (
-    <window.Modal
-      open
-      onClose={onClose}
-      width={560}
-      title="Schedule agents"
-      footer={
-        <>
-          <window.Button variant="subtle" onClick={onClose}>
-            Cancel
-          </window.Button>
-          <window.Button variant="primary" icon="send" disabled={blockSubmit} onClick={submit}>
-            Schedule
-          </window.Button>
-        </>
-      }
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <Field label="Plain English (optional)">
-          <div style={{ display: 'flex', gap: 8 }}>
-            <window.Input
-              value={nlText}
-              placeholder='e.g. "every weekday at 8am" or "in 2 hours"'
-              onChange={(e) => {
-                setNlText(e.target.value);
-                setNlError('');
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  parseNl();
-                }
-              }}
-              style={{ flex: 1 }}
-            />
-            <window.Button variant="subtle" onClick={parseNl} disabled={parsing || !nlText.trim()}>
-              {parsing ? 'Reading…' : 'Read time'}
-            </window.Button>
-          </div>
-          {nlError && (
-            <div style={{ color: 'var(--err)', fontSize: 12.5, marginTop: 6 }}>{nlError}</div>
-          )}
-          {nlHuman && !nlError && (
-            <div style={{ color: 'var(--ok)', fontSize: 12.5, marginTop: 6 }}>
-              {nlCron ? 'Repeats: ' : 'Runs: '}
-              {nlHuman}
-            </div>
-          )}
-        </Field>
-        <Field label="Agents">
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {agents.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                onClick={() => toggleAgent(a.id)}
-                style={{
-                  padding: '7px 10px',
-                  borderRadius: 'var(--radius-sm)',
-                  border: `1px solid ${selected.includes(a.id) ? 'var(--accent)' : 'var(--border)'}`,
-                  background: selected.includes(a.id) ? 'var(--accent-soft)' : 'var(--surface-2)',
-                  color: 'var(--text)',
-                  cursor: 'pointer',
-                  font: 'inherit',
-                  fontSize: 13,
-                }}
-              >
-                {a.name}
-              </button>
-            ))}
-          </div>
-        </Field>
-        <Field label="Task">
-          <textarea
-            autoFocus
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            rows={4}
-            placeholder="e.g. Run my morning briefing and draft today's priorities"
-            style={{
-              width: '100%',
-              resize: 'vertical',
-              padding: '10px 12px',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border)',
-              background: 'var(--surface-2)',
-              color: 'var(--text)',
-              font: 'inherit',
-            }}
-          />
-        </Field>
-        <Row>
-          <Field label="Date and time">
-            <window.Input
-              type="datetime-local"
-              value={when}
-              min={localDateTimeValue(Date.now() + 60_000)}
-              disabled={!!nlCron}
-              onChange={(e) => setWhen(e.target.value)}
-            />
-          </Field>
-          <Field label="Repeat">
-            <window.Select
-              value={recurrence}
-              disabled={!!nlCron}
-              onChange={(e) => setRecurrence(e.target.value)}
-            >
-              <option value="once">once (specific date)</option>
-              <option value="daily">daily</option>
-              <option value="weekly">weekly</option>
-              <option value="monthly">monthly</option>
-              <option value="yearly">yearly</option>
-            </window.Select>
-          </Field>
-        </Row>
-        {nlCron && (
-          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-            Using the repeating schedule from the phrase above; the date/time fields are ignored.
-          </div>
-        )}
-      </div>
-    </window.Modal>
-  );
-}
-
-function StandingList({ orders, onDelete }) {
-  if (orders.length === 0) {
-    return (
-      <window.Card>
-        <div style={{ color: 'var(--text-3)', fontSize: 14 }}>No standing orders yet.</div>
-      </window.Card>
-    );
-  }
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 26 }}>
-      {orders.map((o) => (
-        <div
-          key={o.id}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            padding: '10px 14px',
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-sm)',
-          }}
-        >
-          <window.Badge tone={o.active ? 'accent' : 'neutral'}>
-            {o.active ? (o.agentName ? 'agent' : 'notify') : 'off'}
-          </window.Badge>
-          <span style={{ fontWeight: 600, fontSize: 13, minWidth: 110 }}>
-            {o.agentName || 'notify-only'}
-          </span>
-          <span
-            style={{
-              flex: 1,
-              minWidth: 0,
-              fontSize: 13,
-              color: 'var(--text-2)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {o.instruction}
-          </span>
-          <span style={{ fontSize: 11.5, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-            {o.cron || 'each beat'}
-          </span>
-          <window.Button size="sm" variant="subtle" icon="trash" onClick={() => onDelete(o)} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function StandingModal({ agents, onClose, onCreate }) {
-  const [agentId, setAgentId] = useState(() => (agents[0] ? String(agents[0].id) : ''));
-  const [instruction, setInstruction] = useState('');
-  const [cron, setCron] = useState('');
-  const noAgents = agents.length === 0;
-  return (
-    <window.Modal
-      open
-      onClose={onClose}
-      width={560}
-      title="New standing order"
-      footer={
-        <>
-          <window.Button variant="subtle" onClick={onClose}>
-            Cancel
-          </window.Button>
-          <window.Button
-            variant="primary"
-            icon="send"
-            disabled={noAgents || !agentId || !instruction.trim()}
-            onClick={() =>
-              onCreate({
-                instruction: instruction.trim(),
-                agentId: Number(agentId),
-                cron: cron.trim() || null,
-              })
-            }
-          >
-            Create
-          </window.Button>
-        </>
-      }
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
-          The heartbeat runs this on its own and reports the result in the task view. Leave the
-          schedule blank to evaluate every beat, or pin it with a cron.
-        </div>
-        <Field label="Agent">
-          {noAgents ? (
-            <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
-              Create an agent first — standing orders run an agent.
-            </div>
-          ) : (
-            <window.Select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </window.Select>
-          )}
-        </Field>
-        <Field label="Instruction">
-          <textarea
-            autoFocus
-            value={instruction}
-            onChange={(e) => setInstruction(e.target.value)}
-            rows={4}
-            placeholder="e.g. Check my calendar for tomorrow and flag anything outdoors at weather risk"
-            style={{
-              width: '100%',
-              resize: 'vertical',
-              padding: '10px 12px',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border)',
-              background: 'var(--surface-2)',
-              color: 'var(--text)',
-              font: 'inherit',
-            }}
-          />
-        </Field>
-        <Field label="Schedule (cron, optional)">
-          <window.Input
-            value={cron}
-            placeholder="blank = every beat · e.g. 0 8 * * 1-5"
-            onChange={(e) => setCron(e.target.value)}
-          />
-        </Field>
-      </div>
     </window.Modal>
   );
 }

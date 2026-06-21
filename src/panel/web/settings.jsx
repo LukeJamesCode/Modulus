@@ -43,6 +43,7 @@ function SettingsTab({ onReRunWizard, onSaved }) {
     const body = {
       allowlist: cfg.allowlist,
       ollamaUrl: cfg.ollamaUrl,
+      panelBind: cfg.panelBind,
       chatModel: cfg.chatModel,
       reasoningModel: cfg.reasoningModel,
       toolsModel: cfg.toolsModel,
@@ -147,6 +148,7 @@ function SettingsTab({ onReRunWizard, onSaved }) {
           {showAdvanced && (
             <>
               <HardwareSection cfg={cfg} set={set} locks={locks} />
+              <NetworkSection cfg={cfg} set={set} locks={locks} />
               <BehaviourSection cfg={cfg} set={set} />
               <LoggingSection cfg={cfg} set={set} locks={locks} />
               <MemoryBrowserSection />
@@ -592,6 +594,47 @@ function MoreInfo({ children }) {
         {children}
       </p>
     </details>
+  );
+}
+
+function NetworkSection({ cfg, set, locks }) {
+  // panelBind is '127.0.0.1' (loopback) or '0.0.0.0' (LAN). The toggle flips
+  // between the two; the GET defaults it to loopback. Takes effect on the next
+  // restart, so the panel rebinds to the new address.
+  const locked = !!locks.panelBind;
+  const lan = cfg.panelBind === '0.0.0.0';
+  return (
+    <Group
+      icon="plug"
+      title="Network access"
+      desc="Whether other devices on your network can reach this Modulus."
+    >
+      <div>
+        <window.Label
+          hint={
+            locked
+              ? 'Pinned by the MODULUS_PANEL_BIND environment variable.'
+              : 'Off keeps Modulus to this machine only. On lets the desktop app or a browser on another device connect — useful for an always-on mini PC.'
+          }
+        >
+          Let other devices connect {locked && <EnvLock />}
+        </window.Label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <window.Toggle
+            checked={lan}
+            onChange={(v) => !locked && set({ panelBind: v ? '0.0.0.0' : '127.0.0.1' })}
+            disabled={locked}
+            label="Let other devices connect"
+          />
+          <span style={{ fontSize: 13.5, color: 'var(--text-2)' }}>{lan ? 'On' : 'Off'}</span>
+        </div>
+        <MoreInfo>
+          {lan
+            ? 'Modulus is reachable on your local network. Anyone with the secret link can control it — keep it private. The link to paste into the desktop app is shown on the System tab and in the log. Takes effect after the next restart.'
+            : 'Modulus only answers requests from this machine. Takes effect after the next restart.'}
+        </MoreInfo>
+      </div>
+    </Group>
   );
 }
 
