@@ -115,6 +115,53 @@ test('handleUserMessage streams a reply and persists user+assistant messages', a
   }
 });
 
+test('activityReporter brackets a turn: live during, cleared after', async () => {
+  const dir = tmp();
+  try {
+    const db = open({ path: join(dir, 'g.db') });
+    const llm = fakeLlm([stream(['Hi'])]);
+    const tools = createToolRegistry({ log: silentLogger() });
+    const events: string[] = [];
+    let liveDuringTurn = -1;
+    let live = 0;
+    const orch = createOrchestrator({
+      db,
+      llm,
+      tools,
+      log: silentLogger(),
+      activityReporter: {
+        start: (info) => {
+          events.push(`start:${info.chatId}:${info.text}`);
+          live++;
+          return {
+            end: () => {
+              live--;
+            },
+          };
+        },
+      },
+    });
+
+    await orch.handleUserMessage({
+      chatId: 100,
+      userId: 1,
+      text: 'Hello',
+      send: async (c) => {
+        // The marker must be live while the turn streams.
+        if (!c.done) liveDuringTurn = live;
+      },
+    });
+
+    assert.deepEqual(events, ['start:100:Hello']);
+    assert.equal(liveDuringTurn, 1, 'marker should be live while replying');
+    assert.equal(live, 0, 'marker should be cleared once the turn settles');
+    await orch.shutdown();
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a per-message thinkMode is forwarded to llm.chat', async () => {
   const dir = tmp();
   try {

@@ -124,6 +124,9 @@ function buildFeed(tasks, filter) {
         title: root.agentName || `Task #${root.id}`,
         prompt: root.prompt,
         status: root.status,
+        // Live = an in-flight chat turn (the main assistant answering a message),
+        // not a real task row. Rendered read-only: no open/cancel/pause.
+        live: !!root.live,
         when: root.createdAt || 0,
         meta,
         percent,
@@ -186,6 +189,13 @@ function RunCard({ item, selected, onSelect, onOpen, onCancel, onPause, onResume
           ))}
         </div>
       )}
+      {item.live ? (
+        // A live chat turn has no backing task row, so there's nothing to open,
+        // cancel, or pause — it just shows the assistant is busy right now.
+        <div className="card-actions">
+          <span style={{ color: 'var(--text-3)', fontSize: 13 }}>Replying…</span>
+        </div>
+      ) : (
       <div className="card-actions">
         <button
           className="dash-btn"
@@ -252,6 +262,7 @@ function RunCard({ item, selected, onSelect, onOpen, onCancel, onPause, onResume
           )
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -323,17 +334,23 @@ function LiveRunLog({ tasks, onOpen }) {
           {tasks.slice(0, 6).map((t) => {
             const meta = wfStatusOf(t.status);
             const when = t.finishedAt || t.startedAt || t.createdAt;
+            // A live chat turn has no backing task row, so it isn't openable.
+            const openable = !t.live;
             return (
               <div
                 key={t.id}
                 className={`log-row${t.status === 'error' ? ' yellow-bg' : ''}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => onOpen(t.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') onOpen(t.id);
-                }}
-                style={{ cursor: 'pointer' }}
+                role={openable ? 'button' : undefined}
+                tabIndex={openable ? 0 : undefined}
+                onClick={openable ? () => onOpen(t.id) : undefined}
+                onKeyDown={
+                  openable
+                    ? (e) => {
+                        if (e.key === 'Enter') onOpen(t.id);
+                      }
+                    : undefined
+                }
+                style={{ cursor: openable ? 'pointer' : 'default' }}
               >
                 <span className="time">{wfRelTime(when)}</span>
                 <window.Icon

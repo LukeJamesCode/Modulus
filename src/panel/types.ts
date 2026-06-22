@@ -5,6 +5,7 @@ import type { DB } from '../storage/db.js';
 import type { Logger } from '../util/log.js';
 import type { createScheduler } from '../core/scheduler.js';
 import type { createAgentRegistry, createAgentRuntime } from '../core/agents.js';
+import type { ChatActivityRegistry } from '../core/chat-activity.js';
 import type { createAgentQueue } from '../core/agent-queue.js';
 import type { createRoutedLLM } from '../core/llm-router.js';
 import type { MemoryStore } from '../core/memory.js';
@@ -41,6 +42,11 @@ export interface PanelDeps {
   // The runtime's live event bus: the run-view SSE subscribes per task so the
   // browser updates on real events instead of polling checkpointed DB state.
   agentRuntime: ReturnType<typeof createAgentRuntime>;
+  // Live read of the main assistant's in-flight turns. The Agents tab's task
+  // list surfaces these as synthetic running entries of the built-in Modulus
+  // agent so a Telegram/Dashboard message shows the assistant as "running".
+  // Absent in tests that don't exercise it.
+  chatActivity?: ChatActivityRegistry;
   llm: ReturnType<typeof createRoutedLLM>;
   // The hive-mind memory store, for the Settings memory browser (list/search/
   // delete) — the same store every agent reads and writes.

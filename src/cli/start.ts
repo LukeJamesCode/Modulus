@@ -26,6 +26,7 @@ import { createRoutedLLM } from '../core/llm-router.js';
 import { profilesForTier } from './profiles.js';
 import { createToolRegistry, type ToolHandler, type ToolContext } from '../core/tools.js';
 import { createOrchestrator } from '../core/orchestrator.js';
+import { createChatActivityRegistry } from '../core/chat-activity.js';
 import { createScheduler, type Nudge } from '../core/scheduler.js';
 import { setupFollowups } from '../core/followups.js';
 import { setupMemory } from '../core/memory.js';
@@ -390,6 +391,11 @@ async function bootDaemon(
     // the fleet during loadAll. Only needs the DB, so the early construction is
     // free; all the run-time machinery (runtime, queue) still wires up below.
     const agentRegistry = createAgentRegistry(db);
+    // Live read of the main assistant's in-flight turns. Wired into the main
+    // orchestrator below and shared with the panel so the Agents tab shows the
+    // built-in Modulus agent as "running" while it answers a message — from
+    // Telegram or the Dashboard chat, not just the browser stream in front of you.
+    const chatActivity = createChatActivityRegistry();
     // Channel→agent bindings (v2.0.0). Late-bound: the router is built once the
     // main orchestrator + module loader exist (below), but the registry's
     // remove/update wrappers — set here, where the registry is created — must
@@ -517,6 +523,7 @@ async function bootDaemon(
       turnGuards: () => loader.turnGuards().map((r) => r.guard),
       budgetTokens,
       toolResultMaxChars,
+      activityReporter: chatActivity,
       ...(cfg.models.tools ? { toolProfile: 'tools' as const } : {}),
       ...(maxToolRounds !== undefined ? { maxToolRounds } : {}),
       ...(skillActivation ? { skills: skillActivation } : {}),
@@ -1109,6 +1116,7 @@ async function bootDaemon(
           agentRegistry,
           agentQueue,
           agentRuntime,
+          chatActivity,
           llm,
           memory,
           orchestrator,

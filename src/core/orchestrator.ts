@@ -16,6 +16,7 @@ import { LLMEmptyResponseError, LLMHttpError } from './llm.js';
 import { toSchema, type ToolRegistry } from './tools.js';
 import { build as buildContext, type HistoryMessage } from './context.js';
 import type { AfterTurnContext, AfterTurnToolCallSummary, TurnGuard } from './modules.js';
+import type { ChatActivityReporter } from './chat-activity.js';
 
 // The 0.8b/2b chat models occasionally answer a tool-routed question by
 // PRINTING what a tool call looks like as plain text, instead of using the
@@ -260,6 +261,12 @@ export interface OrchestratorOptions {
   // by each activated skill's consented tools (intersected with this registry).
   // Unset for agent orchestrators and tests.
   skills?: OrchestratorSkillApi;
+  // Live-activity reporter. When set, each in-flight user turn is registered for
+  // the duration of its processing so a surface (the panel's Agents tab) can show
+  // the assistant as "running" regardless of which chat surface the message came
+  // from. Wired ONLY for the main Modulus orchestrator — agent-run and bound-agent
+  // orchestrators leave it unset (their tasks already surface via agent_tasks).
+  activityReporter?: ChatActivityReporter;
 }
 
 export interface Orchestrator {
@@ -1215,6 +1222,14 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
     try {
       while (slot.queue.length > 0 && !shuttingDown) {
         const next = slot.queue.shift()!;
+        // Mark this turn live for the duration of processing so the panel can
+        // show the assistant as "running" no matter the surface. end() in the
+        // finally so an error/abort still clears the marker.
+        const activity = opts.activityReporter?.start({
+          chatId,
+          userId: next.userId,
+          text: next.text,
+        });
         try {
           await process(next, slot);
           next.resolve();
@@ -1223,6 +1238,8 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
           lastErrors.set(chatId, m);
           log.error('orchestrator pump error', { chatId, error: m });
           next.reject(e);
+        } finally {
+          activity?.end();
         }
       }
       if (shuttingDown) {

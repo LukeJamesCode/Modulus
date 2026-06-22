@@ -649,7 +649,28 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
       const tasks = reg
         .listTasks({ limit: 60 })
         .map((t) => ({ ...t, agentName: names.get(t.agentId) ?? null }));
-      sendJson(res, 200, { tasks });
+      // Surface the main assistant's in-flight turns (Telegram / Dashboard chat)
+      // as synthetic running rows of the built-in Modulus agent, so the Activity
+      // tab shows "Modulus is running" while it answers. These are ephemeral —
+      // not real agent_tasks (a chat turn already ran through the orchestrator
+      // directly) — so they carry `live: true` and a synthetic negative id, and
+      // the UI renders them read-only (no open/cancel/pause).
+      const liveTasks = builtin
+        ? (deps.chatActivity?.list() ?? []).map((a) => ({
+            id: -a.id,
+            agentId: builtin.id,
+            agentName: builtin.name,
+            parentId: null,
+            prompt: a.text,
+            status: 'running',
+            live: true,
+            createdAt: a.startedAt,
+            startedAt: a.startedAt,
+            finishedAt: null,
+            error: null,
+          }))
+        : [];
+      sendJson(res, 200, { tasks: [...liveTasks, ...tasks] });
       return true;
     }
     const taskIdMatch = /^\/api\/agents\/tasks\/(\d+)$/.exec(path);
