@@ -335,6 +335,37 @@ test('agent schedules: a single unconditional step collapses to the legacy path'
   }
 });
 
+test('agent schedules: a lone step with tools/preapproved keeps the runner path', () => {
+  const dir = tmp();
+  const db = open({ path: join(dir, 'g.db') });
+  try {
+    const reg = createAgentRegistry(db);
+    const a = reg.create({ name: 'a', systemPrompt: 's', toolAllowlist: [] });
+    const store = createAgentScheduleStore(db, reg);
+    const s = store.create({
+      agentIds: [],
+      steps: [
+        {
+          agentId: a.id,
+          instruction: 'watch it',
+          tools: ['modulus-browser', 'browser_read'],
+          preapprovedTools: ['browser_read'],
+        },
+      ],
+      cron: '0 8 * * *',
+    });
+    // A tool grant blocks the legacy collapse so the override can survive.
+    assert.equal(s.steps?.length, 1, 'a step with tools is NOT collapsed to legacy');
+    assert.deepEqual(s.steps?.[0]?.tools, ['modulus-browser', 'browser_read']);
+    assert.deepEqual(s.steps?.[0]?.preapprovedTools, ['browser_read']);
+    // Round-trips off the row.
+    assert.deepEqual(store.get(s.id)!.steps?.[0]?.preapprovedTools, ['browser_read']);
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('agent schedules: recordRun fills in the last run outcome', () => {
   const dir = tmp();
   const db = open({ path: join(dir, 'g.db') });

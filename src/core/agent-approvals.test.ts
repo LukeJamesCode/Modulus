@@ -6,7 +6,20 @@ import { join } from 'node:path';
 import { open } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import { createAgentRegistry } from './agents.js';
-import { createAgentApprovalStore, createApprovalManager } from './agent-approvals.js';
+import { createAgentApprovalStore, createApprovalManager, isToolPreapproved } from './agent-approvals.js';
+import type { ToolHandler, ToolPermissionTier } from './tools.js';
+
+// Minimal handler for the isToolPreapproved truth table.
+function handler(name: string, tier: ToolPermissionTier, module?: string): ToolHandler {
+  return {
+    name,
+    description: '',
+    tier,
+    ...(module ? { module } : {}),
+    parameters: { type: 'object', properties: {} },
+    invoke: async () => '',
+  };
+}
 
 function silentLogger() {
   return createLogger({ level: 'error', out: () => {}, err: () => {} });
@@ -31,6 +44,24 @@ function setup() {
 }
 
 const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms));
+
+test('isToolPreapproved: confirm-tier only, by tool name or module', () => {
+  // Matches by exact tool name.
+  assert.equal(isToolPreapproved(['browser_read'], handler('browser_read', 'confirm')), true);
+  // Matches by the registering module name.
+  assert.equal(
+    isToolPreapproved(['modulus-browser'], handler('browser_read', 'confirm', 'modulus-browser')),
+    true,
+  );
+  // Owner-tier NEVER bypasses, even when explicitly listed.
+  assert.equal(isToolPreapproved(['danger_tool'], handler('danger_tool', 'owner')), false);
+  // Auto-tier doesn't go through the confirm gate, so it's never "pre-approved".
+  assert.equal(isToolPreapproved(['web_search'], handler('web_search', 'auto')), false);
+  // Empty / null / non-matching lists => fail closed.
+  assert.equal(isToolPreapproved([], handler('browser_read', 'confirm')), false);
+  assert.equal(isToolPreapproved(null, handler('browser_read', 'confirm')), false);
+  assert.equal(isToolPreapproved(['other'], handler('browser_read', 'confirm')), false);
+});
 
 test('store: a new approval is pending and decide() is one-shot', () => {
   const t = setup();

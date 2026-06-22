@@ -86,6 +86,57 @@ test('an agentic order enqueues a task and emits no nudge', () => {
   }
 });
 
+test('a watch persists tools/preapproved and passes them to dispatch', () => {
+  const { store, cleanup } = setup();
+  try {
+    const order = store.create({
+      instruction: 'check the page',
+      agentId: 9,
+      notifyChatId: 3,
+      tools: ['modulus-browser', ' ', 'browser_read'],
+      preapprovedTools: ['browser_read'],
+    });
+    // Sanitized on the way in (blank dropped) and round-trips off the row.
+    assert.deepEqual(order.tools, ['modulus-browser', 'browser_read']);
+    assert.deepEqual(order.preapprovedTools, ['browser_read']);
+    assert.deepEqual(store.get(order.id)!.tools, ['modulus-browser', 'browser_read']);
+
+    let seen: { tools?: string[] | null; preapprovedTools?: string[] | null } | undefined;
+    const h: StandingOrderHandlers = {
+      dispatchAgent: (_id, _instr, _chat, grant) => {
+        seen = grant;
+        return 1;
+      },
+    };
+    store.evaluateDue(h, new Date('2026-06-15T12:00:00Z'));
+    assert.deepEqual(seen?.tools, ['modulus-browser', 'browser_read']);
+    assert.deepEqual(seen?.preapprovedTools, ['browser_read']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('editing a watch can clear its tools/preapproved', () => {
+  const { store, cleanup } = setup();
+  try {
+    const order = store.create({
+      instruction: 'check',
+      agentId: 2,
+      notifyChatId: 1,
+      tools: ['web_search'],
+      preapprovedTools: ['web_search'],
+    });
+    const updated = store.update(order.id, { tools: null, preapprovedTools: [] });
+    assert.equal(updated!.tools, null);
+    assert.equal(updated!.preapprovedTools, null);
+    // An untouched field keeps its value.
+    const again = store.update(order.id, { instruction: 'check again' });
+    assert.equal(again!.tools, null);
+  } finally {
+    cleanup();
+  }
+});
+
 test('a vanished agent (dispatch returns null) does not fire', () => {
   const { store, cleanup } = setup();
   try {

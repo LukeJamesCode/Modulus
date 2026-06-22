@@ -16,8 +16,23 @@
 
 import type { DB } from '../storage/db.js';
 import type { Logger } from '../util/log.js';
-import type { ToolRegistry } from './tools.js';
+import type { ToolHandler, ToolRegistry } from './tools.js';
 import { REQUEST_APPROVAL_TOOL_NAME, type AgentRegistry } from './agents.js';
+
+// Whether a routine pre-approved this tool, so its confirm-tier call may run
+// unattended WITHOUT parking for a human. The single home for the "confirm-tier
+// only" rule: owner-tier tools always return false here (and are gated by the
+// separate isOwner check anyway), so a pre-approval can never let an owner-tier
+// action run silently. A list entry matches the tool by its own name or by the
+// module that registered it (same convention as an agent's tool allowlist).
+export function isToolPreapproved(
+  preapproved: string[] | null | undefined,
+  handler: ToolHandler,
+): boolean {
+  if (handler.tier !== 'confirm' || !preapproved || preapproved.length === 0) return false;
+  const set = new Set(preapproved);
+  return set.has(handler.name) || (handler.module !== undefined && set.has(handler.module));
+}
 
 export type AgentApprovalStatus = 'pending' | 'approved' | 'rejected';
 // Where a decision came from. 'cancelled' = the task was cancelled while parked;

@@ -36,6 +36,10 @@ function harness(opts?: { allowedIds?: number[] }): Harness {
     agentRegistry: reg,
     standingOrders: createStandingOrderStore(db, log),
     llm: {},
+    toolCatalog: () => [
+      { name: 'web_search', module: 'modulus-websearch', tier: 'auto', description: 'search' },
+      { name: 'browser_read', module: 'modulus-browser', tier: 'confirm', description: 'read' },
+    ],
   } as unknown as PanelDeps;
   const route = createRoutinesRoutes(deps);
 
@@ -67,6 +71,71 @@ function harness(opts?: { allowedIds?: number[] }): Harness {
     },
   };
 }
+
+test('routines: GET /api/tools returns the selectable tool catalog', async () => {
+  const h = harness();
+  try {
+    const r = await h.call('GET', '/api/tools');
+    assert.equal(r.status, 200);
+    const tools = r.json['tools'] as Array<Record<string, unknown>>;
+    assert.equal(tools.length, 2);
+    const browser = tools.find((t) => t['name'] === 'browser_read');
+    assert.equal(browser!['tier'], 'confirm');
+    assert.equal(browser!['module'], 'modulus-browser');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('routines: a multi-step schedule round-trips per-step tools + pre-approval', async () => {
+  const h = harness();
+  try {
+    const a = h.reg.create({ name: 'assistant', systemPrompt: 's', toolAllowlist: null });
+    const created = await h.call('POST', '/api/routines', {
+      kind: 'schedule',
+      steps: [
+        {
+          agentId: a.id,
+          instruction: 'open the page',
+          tools: ['modulus-browser', 'browser_read'],
+          preapprovedTools: ['browser_read'],
+        },
+        { agentId: a.id, instruction: 'summarize' },
+      ],
+      cron: '0 8 * * *',
+    });
+    assert.equal(created.status, 200);
+    const steps = (created.json['routine'] as Record<string, unknown>)['steps'] as Array<
+      Record<string, unknown>
+    >;
+    assert.deepEqual(steps[0]!['tools'], ['modulus-browser', 'browser_read']);
+    assert.deepEqual(steps[0]!['preapprovedTools'], ['browser_read']);
+    // The second step carries no grant.
+    assert.equal(steps[1]!['tools'], undefined);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('routines: a watch round-trips its tools + pre-approval', async () => {
+  const h = harness();
+  try {
+    const a = h.reg.create({ name: 'watcher', systemPrompt: 's', toolAllowlist: null });
+    const created = await h.call('POST', '/api/routines', {
+      kind: 'watch',
+      agentId: a.id,
+      prompt: 'watch the price',
+      tools: ['modulus-browser'],
+      preapprovedTools: ['browser_read'],
+    });
+    assert.equal(created.status, 200);
+    const routine = created.json['routine'] as Record<string, unknown>;
+    assert.deepEqual(routine['tools'], ['modulus-browser']);
+    assert.deepEqual(routine['preapprovedTools'], ['browser_read']);
+  } finally {
+    h.cleanup();
+  }
+});
 
 test('routines: create a repeating schedule and list it as one Routine', async () => {
   const h = harness();

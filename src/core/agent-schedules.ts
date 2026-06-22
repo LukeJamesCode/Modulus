@@ -20,6 +20,13 @@ export interface RoutineStep {
   agentId: number | null;
   instruction: string;
   condition?: string;
+  // The step agent's tool ceiling (module/tool names), ANDed with the agent's
+  // own allowlist for this step's run. Omit/empty = no extra restriction (the
+  // agent may choose any tool it already has).
+  tools?: string[];
+  // Confirm-tier tools this step may run unattended without parking for
+  // approval. Omit/empty = nothing pre-approved (a confirm-tier call parks).
+  preapprovedTools?: string[];
 }
 
 export interface AgentSchedule {
@@ -139,6 +146,17 @@ function parseNumberArray(json: string | null): number[] {
   }
 }
 
+// A JSON value → a clean string[] of trimmed, non-empty names (or undefined
+// when there's nothing usable), for a step's tools / preapprovedTools.
+function parseNameList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out = value
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0);
+  return out.length > 0 ? out : undefined;
+}
+
 // Parse + sanitize a stored/incoming steps array. A step needs a non-empty
 // instruction; agentId is an int>0 (an agent step) or null (a message step).
 function parseSteps(value: string | RoutineStep[] | null | undefined): RoutineStep[] | null {
@@ -160,7 +178,13 @@ function parseSteps(value: string | RoutineStep[] | null | undefined): RoutineSt
     const rawId = Number(s['agentId']);
     const agentId = Number.isInteger(rawId) && rawId > 0 ? rawId : null;
     const condition = typeof s['condition'] === 'string' && s['condition'].trim() ? s['condition'].trim() : undefined;
-    steps.push(condition ? { agentId, instruction, condition } : { agentId, instruction });
+    const tools = parseNameList(s['tools']);
+    const preapprovedTools = parseNameList(s['preapprovedTools']);
+    const step: RoutineStep = { agentId, instruction };
+    if (condition) step.condition = condition;
+    if (tools) step.tools = tools;
+    if (preapprovedTools) step.preapprovedTools = preapprovedTools;
+    steps.push(step);
   }
   return steps.length > 0 ? steps : null;
 }
@@ -258,10 +282,18 @@ export function createAgentScheduleStore(
     }
     let steps = parseSteps(input.steps);
     let stepPrompt: string | null = null;
-    // A single unconditional step is just a legacy schedule — store it that way
-    // (agentIds + prompt) so simple routines keep their exact prior fire-and-
-    // forget path and never engage the runner. Only 2+ steps need the runner.
-    if (steps && steps.length === 1 && !steps[0]!.condition) {
+    // A single unconditional step with no per-step tool grant is just a legacy
+    // schedule — store it that way (agentIds + prompt) so simple routines keep
+    // their exact prior fire-and-forget path and never engage the runner. A
+    // condition, a tool ceiling, or a pre-approval all need the runner (the
+    // legacy inline dispatch can't carry them), so they keep the step list.
+    if (
+      steps &&
+      steps.length === 1 &&
+      !steps[0]!.condition &&
+      !steps[0]!.tools &&
+      !steps[0]!.preapprovedTools
+    ) {
       const only = steps[0]!;
       if (only.agentId != null) agentIds = [only.agentId];
       stepPrompt = only.instruction;

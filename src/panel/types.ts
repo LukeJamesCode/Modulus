@@ -16,7 +16,7 @@ import type { ConversationRouter } from '../core/conversation-routing.js';
 import type { ModuleLoader } from '../core/modules.js';
 import type { SkillLoader } from '../core/skills.js';
 import type { SkillProposalStore, ProposalManager } from '../core/skill-improve.js';
-import type { ToolRegistry } from '../core/tools.js';
+import type { ToolPermissionTier, ToolRegistry } from '../core/tools.js';
 import type { InstantResponder } from '../core/instant-responses.js';
 import type { ModulusConfig } from '../cli/config-store.js';
 import type { PanelConfirmBus } from './confirm-bus.js';
@@ -83,6 +83,10 @@ export interface PanelDeps {
   // multi-step routine that is mid-run (drives the card's "running" flash).
   // Absent in tests that don't exercise the runner.
   routineRunner?: { isRunning(routineId: number): boolean };
+  // The base tool registry's user-selectable tools, for the Routines step
+  // editor's per-step tool picker. Excludes agent-internal built-ins (delegation,
+  // approval, planning). Absent in tests that don't exercise the picker.
+  toolCatalog?: () => ToolCatalogEntry[];
   // Shared with the daemon's confirm router so a confirm-tier tool fired during
   // a browser turn prompts inline in the browser (fail-closed otherwise).
   confirmBus: PanelConfirmBus;
@@ -114,6 +118,15 @@ export interface PanelDeps {
   // mode this is absent and the setup routes spin up their own getUpdates-based
   // manager instead.
   pairing?: PairingManager;
+}
+
+// One user-selectable tool in the Routines step editor. `tier` drives the UI:
+// 'confirm' tools can be pre-approved (with a warning); 'owner' tools always ask.
+export interface ToolCatalogEntry {
+  name: string;
+  module: string | null;
+  tier: ToolPermissionTier;
+  description: string;
 }
 
 export interface PanelHandle {

@@ -7,7 +7,12 @@ import type { RoutineStep } from './agent-schedules.js';
 const log = createLogger({ level: 'error', out: () => {}, err: () => {} });
 
 interface Harness {
-  dispatched: { agentId: number; prompt: string; taskId: number }[];
+  dispatched: {
+    agentId: number;
+    prompt: string;
+    taskId: number;
+    grant?: { tools?: string[] | null; preapprovedTools?: string[] | null };
+  }[];
   notified: { chatId: number; text: string }[];
   finishes: { routineId: number; status: string; result: string }[];
   runner: ReturnType<typeof createRoutineRunner>;
@@ -21,9 +26,9 @@ function harness(opts?: { missingAgents?: number[] }): Harness {
   const finishes: Harness['finishes'] = [];
   let nextTaskId = 100;
   const deps: RoutineRunnerDeps = {
-    dispatch: (agentId, prompt) => {
+    dispatch: (agentId, prompt, grant) => {
       const taskId = nextTaskId++;
-      dispatched.push({ agentId, prompt, taskId });
+      dispatched.push({ agentId, prompt, taskId, ...(grant ? { grant } : {}) });
       return taskId;
     },
     agentExists: (id) => !(opts?.missingAgents ?? []).includes(id),
@@ -70,6 +75,24 @@ test('routine-runner: threads each step output into the next and notifies the fi
   assert.ok(h.finishes[0]!.result.includes('AGENDA') && h.finishes[0]!.result.includes('NEWS'));
   assert.equal(h.notified.length, 1);
   assert.equal(h.notified[0]!.chatId, 555);
+});
+
+test('routine-runner: passes each step its tool ceiling + pre-approval to dispatch', () => {
+  const h = harness();
+  const steps: RoutineStep[] = [
+    { agentId: 1, instruction: 'open the page', tools: ['browser_read'], preapprovedTools: ['browser_read'] },
+    { agentId: 2, instruction: 'no grant here' },
+  ];
+  h.runner.start({ routineId: 9, steps, notifyChatId: null });
+
+  assert.deepEqual(h.dispatched[0]!.grant, {
+    tools: ['browser_read'],
+    preapprovedTools: ['browser_read'],
+  });
+  h.complete('READ');
+  // A step with no grant passes nulls (no restriction, nothing pre-approved).
+  assert.deepEqual(h.dispatched[1]!.grant, { tools: null, preapprovedTools: null });
+  h.complete('DONE');
 });
 
 test('routine-runner: isRunning tracks a multi-step run from start to finish', () => {

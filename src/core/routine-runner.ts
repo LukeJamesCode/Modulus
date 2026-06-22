@@ -26,8 +26,14 @@ export interface RoutineRunTask {
 
 export interface RoutineRunnerDeps {
   // Dispatch one agent step; returns the new task id. Intermediate steps carry
-  // no notify target — the runner sends the final result itself.
-  dispatch: (agentId: number, prompt: string) => number;
+  // no notify target — the runner sends the final result itself. `tools` is the
+  // step's tool ceiling (null = no extra restriction); `preapprovedTools` are
+  // confirm-tier tools the step may run unattended without parking.
+  dispatch: (
+    agentId: number,
+    prompt: string,
+    grant?: { tools?: string[] | null; preapprovedTools?: string[] | null },
+  ) => number;
   // Whether an agent still exists (a deleted agent's step is skipped).
   agentExists: (agentId: number) => boolean;
   // Deliver the final result to the user (Telegram). Omitted ⇒ no delivery.
@@ -112,7 +118,10 @@ export function createRoutineRunner(deps: RoutineRunnerDeps): RoutineRunner {
       const prompt = run.accumulated
         ? `${step.instruction}\n\nContext from earlier steps:\n${run.accumulated}`
         : step.instruction;
-      const taskId = deps.dispatch(step.agentId, prompt);
+      const taskId = deps.dispatch(step.agentId, prompt, {
+        tools: step.tools ?? null,
+        preapprovedTools: step.preapprovedTools ?? null,
+      });
       runsByTask.set(taskId, run);
       return; // resume in onTaskComplete
     }

@@ -22,6 +22,11 @@ export interface StandingOrder {
   cadenceMs: number | null;
   // Notify-only: fire only when the probed state differs from lastState.
   notifyOnChange: boolean;
+  // Agentic: the agent's tool ceiling for this watch (null = no extra
+  // restriction). preapprovedTools are confirm-tier tools the watch may run
+  // unattended without parking for approval (null/empty = fail closed).
+  tools: string[] | null;
+  preapprovedTools: string[] | null;
   active: boolean;
   lastEvaluatedAt: number | null;
   lastFiredAt: number | null;
@@ -38,16 +43,20 @@ export interface CreateStandingOrderInput {
   timeZone?: string | null;
   cadenceMs?: number | null;
   notifyOnChange?: boolean;
+  tools?: string[] | null;
+  preapprovedTools?: string[] | null;
 }
 
 // Per-evaluation wiring the heartbeat supplies.
 export interface StandingOrderHandlers {
   // Enqueue an agent task for an agentic order; return its task id, or null if
   // the agent no longer exists (the order simply doesn't fire this beat).
+  // `grant` carries the watch's tool ceiling + pre-approved confirm-tier tools.
   dispatchAgent: (
     agentId: number,
     instruction: string,
     notifyChatId: number | null,
+    grant?: { tools?: string[] | null; preapprovedTools?: string[] | null },
   ) => number | null;
   // Optional state probe for notify_on_change orders. Returns the current
   // observed state; the order fires only when it differs from lastState.
@@ -83,12 +92,40 @@ interface OrderRow {
   time_zone: string | null;
   cadence_ms: number | null;
   notify_on_change: number;
+  tools: string | null;
+  preapproved_tools: string | null;
   active: number;
   last_evaluated_at: number | null;
   last_fired_at: number | null;
   last_state: string | null;
   created_at: number;
   updated_at: number;
+}
+
+// A stored JSON array of names → a clean string[] (or null when empty/absent).
+function parseNameList(json: string | null): string[] | null {
+  if (!json) return null;
+  try {
+    const v = JSON.parse(json);
+    if (!Array.isArray(v)) return null;
+    const out = v
+      .filter((x): x is string => typeof x === 'string')
+      .map((x) => x.trim())
+      .filter((x) => x.length > 0);
+    return out.length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+// An incoming name list → the JSON to store (null when there's nothing usable).
+function serializeNameList(value: string[] | null | undefined): string | null {
+  if (!Array.isArray(value)) return null;
+  const out = value
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0);
+  return out.length > 0 ? JSON.stringify(out) : null;
 }
 
 function rowToOrder(row: OrderRow): StandingOrder {
@@ -101,6 +138,8 @@ function rowToOrder(row: OrderRow): StandingOrder {
     timeZone: row.time_zone,
     cadenceMs: row.cadence_ms,
     notifyOnChange: row.notify_on_change !== 0,
+    tools: parseNameList(row.tools),
+    preapprovedTools: parseNameList(row.preapproved_tools),
     active: row.active !== 0,
     lastEvaluatedAt: row.last_evaluated_at,
     lastFiredAt: row.last_fired_at,
@@ -114,9 +153,9 @@ export function createStandingOrderStore(db: DB, log?: Logger): StandingOrderSto
   const insert = db.prepare(
     `INSERT INTO standing_orders
        (instruction, agent_id, notify_chat_id, cron, time_zone, cadence_ms,
-        notify_on_change, active, created_at, updated_at)
+        notify_on_change, tools, preapproved_tools, active, created_at, updated_at)
      VALUES (@instruction, @agent_id, @notify_chat_id, @cron, @time_zone, @cadence_ms,
-        @notify_on_change, 1, @created_at, @updated_at)`,
+        @notify_on_change, @tools, @preapproved_tools, 1, @created_at, @updated_at)`,
   );
   const selectById = db.prepare(`SELECT * FROM standing_orders WHERE id = ?`);
 
@@ -152,6 +191,8 @@ export function createStandingOrderStore(db: DB, log?: Logger): StandingOrderSto
       time_zone: timeZone,
       cadence_ms: cadenceMs,
       notify_on_change: input.notifyOnChange ? 1 : 0,
+      tools: serializeNameList(input.tools),
+      preapproved_tools: serializeNameList(input.preapprovedTools),
       created_at: now,
       updated_at: now,
     });
@@ -232,10 +273,15 @@ export function createStandingOrderStore(db: DB, log?: Logger): StandingOrderSto
         : existing.cadenceMs;
     const notifyOnChange =
       patch.notifyOnChange !== undefined ? !!patch.notifyOnChange : existing.notifyOnChange;
+    const tools = patch.tools !== undefined ? serializeNameList(patch.tools) : serializeNameList(existing.tools);
+    const preapprovedTools =
+      patch.preapprovedTools !== undefined
+        ? serializeNameList(patch.preapprovedTools)
+        : serializeNameList(existing.preapprovedTools);
     db.prepare(
       `UPDATE standing_orders
        SET instruction = ?, agent_id = ?, notify_chat_id = ?, cron = ?, time_zone = ?,
-           cadence_ms = ?, notify_on_change = ?, updated_at = ?
+           cadence_ms = ?, notify_on_change = ?, tools = ?, preapproved_tools = ?, updated_at = ?
        WHERE id = ?`,
     ).run(
       instruction,
@@ -245,6 +291,8 @@ export function createStandingOrderStore(db: DB, log?: Logger): StandingOrderSto
       timeZone,
       cadenceMs,
       notifyOnChange ? 1 : 0,
+      tools,
+      preapprovedTools,
       Date.now(),
       id,
     );
@@ -305,7 +353,10 @@ export function createStandingOrderStore(db: DB, log?: Logger): StandingOrderSto
       let nextState = order.lastState;
 
       if (order.agentId != null) {
-        const taskId = handlers.dispatchAgent(order.agentId, order.instruction, order.notifyChatId);
+        const taskId = handlers.dispatchAgent(order.agentId, order.instruction, order.notifyChatId, {
+          tools: order.tools,
+          preapprovedTools: order.preapprovedTools,
+        });
         if (taskId != null) {
           didFire = true;
           tasksEnqueued += 1;

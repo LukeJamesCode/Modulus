@@ -192,6 +192,31 @@ test('AgentRegistry: tasks enqueue, list by status, and transition', () => {
   }
 });
 
+test('AgentRegistry: enqueue persists preapprovedTools (null when absent)', () => {
+  const dir = tmp();
+  try {
+    const db = open({ path: join(dir, 'g.db') });
+    const reg = createAgentRegistry(db);
+    const agent = reg.create({ name: 'a', systemPrompt: 'hi' });
+
+    const withPre = reg.enqueue({
+      agentId: agent.id,
+      prompt: 'do it',
+      toolAllowlistOverride: ['modulus-browser'],
+      preapprovedTools: ['browser_read'],
+    });
+    assert.deepEqual(reg.getTask(withPre.id)!.preapprovedTools, ['browser_read']);
+    assert.deepEqual(reg.getTask(withPre.id)!.toolAllowlistOverride, ['modulus-browser']);
+
+    // Absent → null (the fail-closed default).
+    const plain = reg.enqueue({ agentId: agent.id, prompt: 'plain' });
+    assert.equal(reg.getTask(plain.id)!.preapprovedTools, null);
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('seedStarterAgents: seeds a fleet once and is idempotent', () => {
   const dir = tmp();
   try {

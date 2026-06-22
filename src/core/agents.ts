@@ -234,6 +234,10 @@ export interface AgentTask {
   virtualChatId: number | null;
   // Grant ceiling inherited from the spawning task (null = none).
   toolAllowlistOverride: string[] | null;
+  // Confirm-tier tools this run may execute WITHOUT parking for approval — a
+  // user-authored pre-approval from the owning routine. null/empty = nothing
+  // pre-approved (a confirm-tier call still parks). Owner-tier never bypasses.
+  preapprovedTools: string[] | null;
   // Per-run thinking override. null = inherit the agent's thinkMode; otherwise
   // wins over it for this run only.
   thinkMode: ThinkMode | null;
@@ -290,6 +294,9 @@ export interface EnqueueTaskInput {
   priority?: number;
   depth?: number;
   toolAllowlistOverride?: string[] | null;
+  // Confirm-tier tools this run may run without parking for approval (a routine
+  // pre-approval). Omit/null = nothing pre-approved.
+  preapprovedTools?: string[] | null;
   // Per-run thinking override (auto|on|off). Omit/null to inherit the agent's.
   thinkMode?: ThinkMode | null;
   // Chat to notify when the task finishes. Set by chat-surface dispatches
@@ -399,6 +406,7 @@ interface TaskRow {
   conversation_id: number | null;
   virtual_chat_id: number | null;
   tool_allowlist_override: string | null;
+  preapproved_tools: string | null;
   think_mode: string | null;
   plan_json: string | null;
   step_cursor: number;
@@ -429,6 +437,8 @@ function rowToTask(r: TaskRow): AgentTask {
     virtualChatId: r.virtual_chat_id,
     toolAllowlistOverride:
       r.tool_allowlist_override === null ? null : parseStringArray(r.tool_allowlist_override),
+    preapprovedTools:
+      r.preapproved_tools === null ? null : parseStringArray(r.preapproved_tools),
     thinkMode: r.think_mode === null ? null : (r.think_mode as ThinkMode),
     plan: parsePlan(r.plan_json),
     stepCursor: r.step_cursor ?? 0,
@@ -533,9 +543,9 @@ export function createAgentRegistry(db: DB): AgentRegistry {
   const insertTask = db.prepare(
     `INSERT INTO agent_tasks
        (agent_id, parent_id, prompt, status, execution_mode, priority, depth,
-        tool_allowlist_override, think_mode, notify_chat_id, created_at)
+        tool_allowlist_override, preapproved_tools, think_mode, notify_chat_id, created_at)
      VALUES (@agent_id, @parent_id, @prompt, 'queued', @execution_mode, @priority, @depth,
-             @tool_allowlist_override, @think_mode, @notify_chat_id, @created_at)`,
+             @tool_allowlist_override, @preapproved_tools, @think_mode, @notify_chat_id, @created_at)`,
   );
   const selectTaskById = db.prepare(`SELECT * FROM agent_tasks WHERE id = ?`);
 
@@ -655,6 +665,7 @@ export function createAgentRegistry(db: DB): AgentRegistry {
 
   function enqueue(input: EnqueueTaskInput): AgentTask {
     const override = input.toolAllowlistOverride;
+    const preapproved = input.preapprovedTools;
     const info = insertTask.run({
       agent_id: input.agentId,
       parent_id: input.parentId ?? null,
@@ -664,6 +675,8 @@ export function createAgentRegistry(db: DB): AgentRegistry {
       depth: input.depth ?? 0,
       tool_allowlist_override:
         override === undefined || override === null ? null : JSON.stringify(override),
+      preapproved_tools:
+        preapproved === undefined || preapproved === null ? null : JSON.stringify(preapproved),
       think_mode: input.thinkMode ?? null,
       notify_chat_id: input.notifyChatId ?? null,
       created_at: Date.now(),

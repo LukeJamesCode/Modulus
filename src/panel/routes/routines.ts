@@ -90,6 +90,8 @@ function watchView(o: StandingOrder, names: AgentNameMap, tz: string) {
     cron: o.cron,
     timeZone: o.timeZone,
     notifyOnChange: o.notifyOnChange,
+    tools: o.tools,
+    preapprovedTools: o.preapprovedTools,
     notify: o.notifyChatId != null,
     active: o.active,
     lastRunAt: o.lastFiredAt,
@@ -135,8 +137,19 @@ function normalizeScheduleBody(body: Record<string, unknown>): {
   };
 }
 
+// A JSON value → a clean string[] of trimmed names (or undefined when empty).
+function nameList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out = value
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0);
+  return out.length > 0 ? out : undefined;
+}
+
 // Untrusted JSON body → a sanitized step list (drops steps with no instruction).
-// The store collapses a single unconditional step back to the legacy path.
+// The store collapses a single unconditional step (with no tool grant) back to
+// the legacy path; a step carrying tools/preapproved stays in the runner path.
 function normalizeSteps(body: Record<string, unknown>): RoutineStep[] {
   const raw = Array.isArray(body['steps']) ? body['steps'] : [];
   const steps: RoutineStep[] = [];
@@ -149,7 +162,13 @@ function normalizeSteps(body: Record<string, unknown>): RoutineStep[] {
     const agentId = Number.isInteger(rawId) && rawId > 0 ? rawId : null;
     const condition =
       typeof s['condition'] === 'string' && s['condition'].trim() ? s['condition'].trim() : undefined;
-    steps.push(condition ? { agentId, instruction, condition } : { agentId, instruction });
+    const tools = nameList(s['tools']);
+    const preapprovedTools = nameList(s['preapprovedTools']);
+    const step: RoutineStep = { agentId, instruction };
+    if (condition) step.condition = condition;
+    if (tools) step.tools = tools;
+    if (preapprovedTools) step.preapprovedTools = preapprovedTools;
+    steps.push(step);
   }
   return steps;
 }
@@ -215,6 +234,14 @@ export function createRoutinesRoutes(deps: PanelDeps): RouteModule {
       return true;
     }
 
+    // The tools a routine step / watch can be restricted to + pre-approve. Drawn
+    // from the base registry (minus agent-internal built-ins); 'confirm'-tier
+    // entries are the ones the UI offers a pre-approve toggle for.
+    if (path === '/api/tools' && method === 'GET') {
+      sendJson(res, 200, { tools: deps.toolCatalog?.() ?? [] });
+      return true;
+    }
+
     // Preview a plain-English time without creating anything.
     if (path === '/api/routines/parse' && method === 'POST') {
       const body = await readJson<{ text?: string }>(req);
@@ -268,6 +295,8 @@ export function createRoutinesRoutes(deps: PanelDeps): RouteModule {
               ? { timeZone: body['timeZone'].trim() }
               : {}),
             notifyOnChange: body['notifyOnChange'] === true,
+            tools: nameList(body['tools']) ?? null,
+            preapprovedTools: nameList(body['preapprovedTools']) ?? null,
           });
           sendJson(res, 200, { routine: watchView(order, names(), tz()) });
         } catch (e) {
@@ -376,6 +405,8 @@ export function createRoutinesRoutes(deps: PanelDeps): RouteModule {
                 : null;
           }
           if (body['notifyOnChange'] !== undefined) patch.notifyOnChange = body['notifyOnChange'] === true;
+          if ('tools' in body) patch.tools = nameList(body['tools']) ?? null;
+          if ('preapprovedTools' in body) patch.preapprovedTools = nameList(body['preapprovedTools']) ?? null;
           try {
             const order = deps.standingOrders.update(id, patch);
             if (!order) sendJson(res, 404, { error: 'not found' });

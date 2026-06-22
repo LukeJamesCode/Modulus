@@ -44,12 +44,13 @@ import {
   SPAWN_AGENT_TOOL_NAME,
   SPAWN_AGENTS_TOOL_NAME,
   REQUEST_APPROVAL_TOOL_NAME,
+  isPlanningTool,
   type AgentDefinition,
 } from '../core/agents.js';
 import { createConversationRouter, type ConversationRouter } from '../core/conversation-routing.js';
 import { createAgentQueue } from '../core/agent-queue.js';
 import { formatTaskNotification } from '../adapters/agent-commands.js';
-import { setupAgentApprovals } from '../core/agent-approvals.js';
+import { setupAgentApprovals, isToolPreapproved } from '../core/agent-approvals.js';
 import { setupAgentDelegation } from '../core/agent-delegation.js';
 import { setupAgentEscalation, ESCALATE_TOOL_NAME } from '../core/agent-escalation.js';
 import {
@@ -781,7 +782,13 @@ async function bootDaemon(
     // intermediate steps stay silent), threads output forward, and on finish
     // records the outcome + sends the final result to the routine's chat.
     routineRef.runner = createRoutineRunner({
-      dispatch: (agentId, prompt) => agentQueue.dispatch({ agentId, prompt }).id,
+      dispatch: (agentId, prompt, grant) =>
+        agentQueue.dispatch({
+          agentId,
+          prompt,
+          toolAllowlistOverride: grant?.tools ?? null,
+          preapprovedTools: grant?.preapprovedTools ?? null,
+        }).id,
       agentExists: (id) => !!agentRegistry.get(id),
       notify: (chatId, text) => void sendTaskNotification(chatId, text),
       onFinish: (id, outcome) => agentSchedules.recordRun(id, outcome),
@@ -985,6 +992,19 @@ async function bootDaemon(
         return viaPanel ?? false;
       }
       if (ctx.chatId !== undefined && isAgentChatId(ctx.chatId)) {
+        const taskId = ctx.chatId - AGENT_CHAT_ID_BASE;
+        // The owning routine may have pre-approved this exact confirm-tier tool,
+        // so it runs unattended without parking. isToolPreapproved is confirm-
+        // tier only, so an owner-tier call can never take this path — it still
+        // parks below. Default (nothing pre-approved) is unchanged: park.
+        const task = agentRegistry.getTask(taskId);
+        if (task && isToolPreapproved(task.preapprovedTools, handler)) {
+          log.info('confirm-tier tool pre-approved by routine; running unattended', {
+            taskId,
+            tool: handler.name,
+          });
+          return true;
+        }
         let preview: string;
         try {
           preview = handler.confirmPrompt
@@ -994,7 +1014,7 @@ async function bootDaemon(
           preview = `Run \`${handler.name}\`?`;
         }
         return approvalManager.request({
-          taskId: ctx.chatId - AGENT_CHAT_ID_BASE,
+          taskId,
           toolName: handler.name,
           preview,
           args,
@@ -1132,6 +1152,26 @@ async function bootDaemon(
           // A multi-step routine's run state lives in the runner's memory; expose
           // a read-only probe so /api/routines can flag one that's mid-run.
           routineRunner: { isRunning: (id) => routineRef.runner?.isRunning(id) ?? false },
+          // User-selectable tools for the Routines step editor. Drawn from the
+          // base registry minus the agent-internal built-ins (delegation,
+          // approval, planning) — those aren't user-pickable per step.
+          toolCatalog: () =>
+            tools
+              .list()
+              .filter(
+                (h) =>
+                  h.name !== SPAWN_AGENT_TOOL_NAME &&
+                  h.name !== SPAWN_AGENTS_TOOL_NAME &&
+                  h.name !== REQUEST_APPROVAL_TOOL_NAME &&
+                  !isPlanningTool(h.name),
+              )
+              .map((h) => ({
+                name: h.name,
+                module: h.module ?? null,
+                tier: h.tier,
+                description: h.description,
+              }))
+              .sort((a, b) => a.name.localeCompare(b.name)),
           confirmBus: panelConfirmBus,
           pairing,
           ...(instantResponder ? { instantResponder } : {}),

@@ -65,9 +65,15 @@ export function setupHeartbeat(opts: HeartbeatOptions): Heartbeat {
   function beat(at: Date = new Date()): Nudge[] {
     const { fired, nudges, tasksEnqueued } = opts.orders.evaluateDue(
       {
-        dispatchAgent: (agentId, instruction, notifyChatId) => {
+        dispatchAgent: (agentId, instruction, notifyChatId, grant) => {
           if (!opts.registry.get(agentId)) return null;
-          return opts.queue.dispatch({ agentId, prompt: instruction, notifyChatId }).id;
+          return opts.queue.dispatch({
+            agentId,
+            prompt: instruction,
+            notifyChatId,
+            toolAllowlistOverride: grant?.tools ?? null,
+            preapprovedTools: grant?.preapprovedTools ?? null,
+          }).id;
         },
       },
       at,

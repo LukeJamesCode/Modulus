@@ -37,9 +37,142 @@ const textareaStyle = {
   font: 'inherit',
 };
 
+// Small tier label next to a tool. 'confirm'/'owner' tools normally pause an
+// unattended run for a Yes/No; 'auto' tools run freely.
+function tierBadge(tier) {
+  if (tier === 'owner') return <window.Badge tone="err">owner · always asks</window.Badge>;
+  if (tier === 'confirm') return <window.Badge tone="warn">asks first</window.Badge>;
+  return null;
+}
+
+// Per-step (or per-watch) tool control. Collapsed it shows a one-line summary;
+// expanded it lists every selectable tool grouped by module. Leaving all
+// unchecked = no restriction (the agent may use any tool it already has). A
+// selected 'confirm'-tier tool can be PRE-APPROVED so the routine runs it
+// unattended without the Yes/No prompt — behind a clear warning. 'owner'-tier
+// tools can be restricted-to but never pre-approved; they always ask.
+function ToolPicker({ catalog, tools, preapproved, onChange }) {
+  const [open, setOpen] = useState(false);
+  if (!catalog || catalog.length === 0) return null;
+  const sel = new Set(tools || []);
+  const pre = new Set(preapproved || []);
+
+  const toggleTool = (name) => {
+    const nextSel = new Set(sel);
+    const nextPre = new Set(pre);
+    if (nextSel.has(name)) {
+      nextSel.delete(name);
+      nextPre.delete(name); // dropping a tool drops its pre-approval too
+    } else {
+      nextSel.add(name);
+    }
+    onChange({ tools: [...nextSel], preapprovedTools: [...nextPre] });
+  };
+  const togglePre = (name) => {
+    const nextPre = new Set(pre);
+    if (nextPre.has(name)) nextPre.delete(name);
+    else nextPre.add(name);
+    onChange({ tools: [...sel], preapprovedTools: [...nextPre] });
+  };
+
+  // Group by module so a long catalog stays scannable.
+  const groups = new Map();
+  for (const t of catalog) {
+    const key = t.module || 'Built-in';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  }
+
+  const summary =
+    sel.size === 0
+      ? 'Any tool the agent has'
+      : `${sel.size} tool${sel.size > 1 ? 's' : ''}${pre.size ? ` · ${pre.size} pre-approved` : ''}`;
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'var(--surface-2)' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          width: '100%',
+          padding: '8px 10px',
+          background: 'transparent',
+          border: 'none',
+          color: 'var(--text-2)',
+          cursor: 'pointer',
+          font: 'inherit',
+          fontSize: 12.5,
+        }}
+      >
+        <window.Icon name={open ? 'chevron-up' : 'chevron-down'} size={13} />
+        <span style={{ fontWeight: 600 }}>Tools</span>
+        <span style={{ color: 'var(--text-3)' }}>{summary}</span>
+      </button>
+      {open && (
+        <div style={{ padding: '4px 12px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)', lineHeight: 1.45 }}>
+            Leave everything unchecked to let the agent use any of its own tools. Check tools to
+            restrict this step to just those. Pre-approving a tool lets this routine run it
+            unattended — without asking you first.
+          </div>
+          {[...groups.entries()].map(([mod, list]) => (
+            <div key={mod} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                {mod}
+              </div>
+              {list.map((t) => {
+                const checked = sel.has(t.name);
+                return (
+                  <div key={t.name} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleTool(t.name)} />
+                      <code style={{ fontSize: 12.5 }}>{t.name}</code>
+                      {tierBadge(t.tier)}
+                    </label>
+                    {checked && t.tier === 'confirm' && (
+                      <label
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          fontSize: 12,
+                          color: 'var(--text-2)',
+                          marginLeft: 24,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <input type="checkbox" checked={pre.has(t.name)} onChange={() => togglePre(t.name)} />
+                        Pre-approve — run without asking me
+                      </label>
+                    )}
+                    {checked && t.tier === 'confirm' && pre.has(t.name) && (
+                      <div style={{ fontSize: 11, color: 'var(--warn, #b9770e)', marginLeft: 24, lineHeight: 1.4 }}>
+                        ⚠ This routine will run <code>{t.name}</code> unattended, with no confirmation
+                        prompt.
+                      </div>
+                    )}
+                    {checked && t.tier === 'owner' && (
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 24 }}>
+                        Always asks for approval — can’t be pre-approved.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // One row of the schedule step editor: who runs it, what to do, and (after the
 // first step) an optional condition gating it on earlier output.
-function StepEditor({ index, step, agents, canRemove, canMoveUp, canMoveDown, onChange, onRemove, onMove }) {
+function StepEditor({ index, step, agents, catalog, canRemove, canMoveUp, canMoveDown, onChange, onRemove, onMove }) {
   return (
     <div
       style={{
@@ -88,6 +221,12 @@ function StepEditor({ index, step, agents, canRemove, canMoveUp, canMoveDown, on
           onChange={(e) => onChange({ condition: e.target.value })}
         />
       )}
+      <ToolPicker
+        catalog={catalog}
+        tools={step.tools}
+        preapproved={step.preapprovedTools}
+        onChange={onChange}
+      />
     </div>
   );
 }
@@ -371,7 +510,7 @@ function RoutineCard({ routine, onToggle, onEdit, onDelete, onView }) {
   );
 }
 
-function RoutineModal({ agents, telegram, initial, onClose, onSave }) {
+function RoutineModal({ agents, telegram, catalog, initial, onClose, onSave }) {
   const editing = !!(initial && initial.id);
   const [trigger, setTrigger] = useState(initial?.kind === 'watch' ? 'watch' : initial?.trigger || 'recurring');
   // Steps drive both kinds: a schedule runs the whole list in order; a watch
@@ -381,6 +520,10 @@ function RoutineModal({ agents, telegram, initial, onClose, onSave }) {
   // adopts Modulus when reopened for editing.
   const defaultAgentId = agents[0] ? String(agents[0].id) : '';
   const [steps, setSteps] = useState(() => {
+    // A watch round-trips its tool grant at the top level (single agent), not
+    // per-step; fold it onto the first step so the editor is uniform.
+    const watchTools = initial?.kind === 'watch' ? initial?.tools : null;
+    const watchPre = initial?.kind === 'watch' ? initial?.preapprovedTools : null;
     const init =
       initial?.steps && initial.steps.length
         ? initial.steps
@@ -388,12 +531,16 @@ function RoutineModal({ agents, telegram, initial, onClose, onSave }) {
             {
               agentId: initial?.agentIds?.[0] ?? (agents[0] ? agents[0].id : null),
               instruction: initial?.prompt || '',
+              tools: watchTools,
+              preapprovedTools: watchPre,
             },
           ];
     return init.map((s) => ({
       agentId: s.agentId != null ? String(s.agentId) : defaultAgentId,
       instruction: s.instruction || '',
       condition: s.condition || '',
+      tools: Array.isArray(s.tools) ? s.tools : [],
+      preapprovedTools: Array.isArray(s.preapprovedTools) ? s.preapprovedTools : [],
     }));
   });
   const [notify, setNotify] = useState(!!initial?.notify);
@@ -415,7 +562,13 @@ function RoutineModal({ agents, telegram, initial, onClose, onSave }) {
   const addStep = () =>
     setSteps((cur) => [
       ...cur,
-      { agentId: agents[0] ? String(agents[0].id) : '', instruction: '', condition: '' },
+      {
+        agentId: agents[0] ? String(agents[0].id) : '',
+        instruction: '',
+        condition: '',
+        tools: [],
+        preapprovedTools: [],
+      },
     ]);
   const removeStep = (i) => setSteps((cur) => (cur.length > 1 ? cur.filter((_, idx) => idx !== i) : cur));
   const moveStep = (i, dir) =>
@@ -462,6 +615,11 @@ function RoutineModal({ agents, telegram, initial, onClose, onSave }) {
       agentId: s.agentId ? Number(s.agentId) : null,
       instruction: s.instruction.trim(),
       condition: s.condition.trim(),
+      tools: Array.isArray(s.tools) ? s.tools : [],
+      // Pre-approval only sticks for a tool that's actually selected.
+      preapprovedTools: (Array.isArray(s.preapprovedTools) ? s.preapprovedTools : []).filter((t) =>
+        (s.tools || []).includes(t),
+      ),
     }))
     .filter((s) => s.instruction);
   const hasAgentStep = cleanSteps.some((s) => s.agentId != null);
@@ -490,15 +648,21 @@ function RoutineModal({ agents, telegram, initial, onClose, onSave }) {
         kind: 'watch',
         agentId: first.agentId,
         prompt: first.instruction,
+        tools: first.tools,
+        preapprovedTools: first.preapprovedTools,
         notify: effectiveNotify,
         ...timing,
       };
     } else {
       body = {
         kind: 'schedule',
-        steps: cleanSteps.map((s) =>
-          s.condition ? s : { agentId: s.agentId, instruction: s.instruction },
-        ),
+        steps: cleanSteps.map((s) => {
+          const step = { agentId: s.agentId, instruction: s.instruction };
+          if (s.condition) step.condition = s.condition;
+          if (s.tools.length) step.tools = s.tools;
+          if (s.preapprovedTools.length) step.preapprovedTools = s.preapprovedTools;
+          return step;
+        }),
         notify: effectiveNotify,
         ...timing,
       };
@@ -572,6 +736,17 @@ function RoutineModal({ agents, telegram, initial, onClose, onSave }) {
                 ))}
               </window.Select>
             </Field>
+            <Field
+              label="Tools"
+              hint="Restrict the check to specific tools, and pre-approve any that should run without asking you."
+            >
+              <ToolPicker
+                catalog={catalog}
+                tools={steps[0]?.tools}
+                preapproved={steps[0]?.preapprovedTools}
+                onChange={(patch) => setStep(0, patch)}
+              />
+            </Field>
           </>
         ) : (
           <Field label="What should happen?">
@@ -582,6 +757,7 @@ function RoutineModal({ agents, telegram, initial, onClose, onSave }) {
                   index={i}
                   step={s}
                   agents={agents}
+                  catalog={catalog}
                   canRemove={steps.length > 1}
                   canMoveUp={i > 0}
                   canMoveDown={i < steps.length - 1}
@@ -839,6 +1015,7 @@ function ResultModal({ routine, onClose }) {
 function RoutinesTab({ onNavigate, enabledModules }) {
   const [routines, setRoutines] = useState([]);
   const [agents, setAgents] = useState([]);
+  const [catalog, setCatalog] = useState([]);
   const [telegram, setTelegram] = useState(false);
   const [editing, setEditing] = useState(null); // routine | {} (new) | null
   const [galleryOpen, setGalleryOpen] = useState(false);
@@ -868,6 +1045,13 @@ function RoutinesTab({ onNavigate, enabledModules }) {
     const id = setInterval(load, 5000);
     return () => clearInterval(id);
   }, [load]);
+
+  // The tool catalog is stable across a session; fetch it once for the editor.
+  useEffect(() => {
+    window.api.get('/api/tools').then((r) => {
+      if (r.ok) setCatalog(r.data.tools || []);
+    });
+  }, []);
 
   const toggle = async (routine) => {
     await window.api.post(`/api/routines/${routine.kind}/${routine.id}/active`, {
@@ -970,6 +1154,7 @@ function RoutinesTab({ onNavigate, enabledModules }) {
         <RoutineModal
           agents={agents}
           telegram={telegram}
+          catalog={catalog}
           initial={editing && (editing.id || editing.steps) ? editing : null}
           onClose={() => setEditing(null)}
           onSave={() => {
