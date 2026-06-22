@@ -6,6 +6,7 @@
 // module readiness sweep, the metrics snapshot the daemon writes, and a
 // couple of cheap counts off the agent_tasks table.
 
+import { randomUUID } from 'node:crypto';
 import { cpus, freemem, networkInterfaces, totalmem } from 'node:os';
 import type { DB } from '../storage/db.js';
 import { configFileExists, effectiveConfig, type ModulusConfig } from '../cli/config-store.js';
@@ -30,6 +31,12 @@ export interface BuildStateDeps {
   setupMode?: boolean;
   setupError?: string | null;
 }
+
+// Random id minted once per daemon process. The panel polls it in /api/state
+// and reloads the page when it changes — so after `modulus update` re-execs a
+// fresh daemon (or any restart), the open web/desktop UI auto-refreshes onto
+// the freshly-built assets instead of silently running the old ones.
+const BOOT_ID = randomUUID();
 
 function lanAddress(): string | null {
   for (const addrs of Object.values(networkInterfaces())) {
@@ -180,6 +187,7 @@ export async function buildState(deps: BuildStateDeps): Promise<unknown> {
       : null,
     activity,
     version: HOST_VERSION,
+    bootId: BOOT_ID,
     lan: lanAddress(),
     // When the panel is LAN-bound (the "host for other devices" topology), hand
     // the UI the exact tokenized link to paste into the desktop app or another

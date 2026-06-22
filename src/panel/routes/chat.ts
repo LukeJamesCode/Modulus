@@ -135,6 +135,7 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
         chatId,
         userId,
         text,
+        source: 'dashboard',
         ...(thinkMode !== 'auto' ? { thinkMode } : {}),
         send: (chunk) => {
           if (controller.signal.aborted) return;

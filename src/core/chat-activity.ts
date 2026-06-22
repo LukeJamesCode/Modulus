@@ -18,6 +18,10 @@ export interface ChatActivity {
   chatId: number;
   userId: number;
   text: string;
+  // Which chat surface the turn arrived on ('telegram', 'dashboard', a module
+  // surface name, …), so the panel can say "Replying on Telegram". undefined when
+  // the caller didn't label it.
+  source?: string;
   startedAt: number;
 }
 
@@ -30,7 +34,12 @@ export interface ChatActivityHandle {
 // The write side, handed to the main orchestrator. Kept structural so the
 // orchestrator never imports the registry implementation.
 export interface ChatActivityReporter {
-  start(info: { chatId: number; userId: number; text: string }): ChatActivityHandle;
+  start(info: {
+    chatId: number;
+    userId: number;
+    text: string;
+    source?: string;
+  }): ChatActivityHandle;
 }
 
 // Reporter + read side. The panel reads list() to surface live runs.
@@ -44,7 +53,14 @@ export function createChatActivityRegistry(): ChatActivityRegistry {
   return {
     start(info) {
       const id = ++seq;
-      live.set(id, { id, chatId: info.chatId, userId: info.userId, text: info.text, startedAt: Date.now() });
+      live.set(id, {
+        id,
+        chatId: info.chatId,
+        userId: info.userId,
+        text: info.text,
+        ...(info.source ? { source: info.source } : {}),
+        startedAt: Date.now(),
+      });
       let ended = false;
       return {
         end() {

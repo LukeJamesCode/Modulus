@@ -1051,6 +1051,7 @@ export function createTelegram(opts: TelegramOptions): TelegramAdapter {
     isCoreCommand: (head) => CORE_COMMANDS.has(head),
     getDevmode,
     getThinkMode: getChatThinkMode,
+    source: 'telegram',
     instantResponder: opts.instantResponder,
     ...(opts.memoryExtractor ? { memoryExtractor: opts.memoryExtractor } : {}),
   });

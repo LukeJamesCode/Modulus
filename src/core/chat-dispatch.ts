@@ -38,6 +38,10 @@ export interface InboundMessage {
   // assembled text; may be called more than once per turn (e.g. an intercept ack
   // followed by the orchestrator's answer).
   reply: (text: string) => Promise<void>;
+  // Per-message surface label, overriding the dispatcher's `source`. Lets a
+  // shared dispatcher (the module loader's, serving several chat surfaces) tag
+  // each turn with the right surface. Omit to fall back to the dispatcher's.
+  source?: string;
 }
 
 export interface ChatDispatcherDeps {
@@ -61,6 +65,10 @@ export interface ChatDispatcherDeps {
   // Per-chat devmode flag. When true the orchestrator reply is annotated with
   // model/timing/tool metadata. Telegram only; omit elsewhere.
   getDevmode?: (chatId: number) => boolean;
+  // Surface label for this dispatcher ('telegram', a module surface, …). Tags
+  // each turn's live-activity marker so the panel can show "Replying on
+  // Telegram". Omit when the surface doesn't want to label itself.
+  source?: string;
   // Per-chat sticky reasoning mode (Telegram /think · /fast), applied to every
   // turn. Omit (or return 'auto') to leave the model/profile default in place.
   getThinkMode?: (chatId: number) => ThinkMode;
@@ -158,6 +166,7 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
     userId: number,
     text: string,
     reply: (text: string) => Promise<void>,
+    source: string | undefined,
   ): void => {
     let buffer = '';
     const devmode = deps.getDevmode?.(chatId) ?? false;
@@ -172,6 +181,7 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
         text,
         // Omit 'auto' so the orchestrator's own default stays authoritative.
         ...(thinkMode && thinkMode !== 'auto' ? { thinkMode } : {}),
+        ...(source ? { source } : {}),
         send: async (chunk: HostReplyChunk) => {
           if (chunk.delta) buffer += chunk.delta;
           if (!chunk.done) return;
@@ -225,6 +235,8 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
 
   async function dispatchInbound(msg: InboundMessage): Promise<void> {
     const { chatId, userId, text, reply } = msg;
+    // Per-message label wins over the dispatcher's; either tags the live marker.
+    const source = msg.source ?? deps.source;
 
     if (text.startsWith('/')) {
       const space = text.indexOf(' ');
@@ -259,7 +271,7 @@ export function createChatDispatcher(deps: ChatDispatcherDeps): ChatDispatcher {
     const runOrchestrator = async (): Promise<void> => {
       if (handed) return;
       handed = true;
-      dispatchOrchestratorTurn(chatId, userId, text, reply);
+      dispatchOrchestratorTurn(chatId, userId, text, reply, source);
     };
     let i = 0;
     const runNext = async (): Promise<void> => {

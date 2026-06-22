@@ -226,6 +226,17 @@ test('GET /api/state returns live state with a valid token', async () => {
   assert.equal(typeof body.version, 'string');
 });
 
+test('GET /api/state carries a stable per-process bootId for auto-reload', async () => {
+  // The panel reloads itself when this changes (a restart/update re-execs the
+  // daemon, minting a new id). Within one process it must stay constant so a
+  // plain poll never triggers a spurious reload.
+  const first = (await (await authed('/api/state')).json()) as { bootId: string };
+  const second = (await (await authed('/api/state')).json()) as { bootId: string };
+  assert.equal(typeof first.bootId, 'string');
+  assert.ok(first.bootId.length > 0);
+  assert.equal(first.bootId, second.bootId);
+});
+
 test('a bad token is rejected', async () => {
   const res = await fetch(`${base}/api/state`, { headers: { authorization: 'Bearer nope' } });
   assert.equal(res.status, 401);

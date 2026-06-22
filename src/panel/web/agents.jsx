@@ -77,6 +77,14 @@ function wfClip(text, n) {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 }
 
+// Human label for the chat surface a live turn arrived on (drives "Replying on
+// Telegram"). Falls back to a capitalized form for unknown surfaces.
+const SOURCE_LABELS = { telegram: 'Telegram', dashboard: 'Dashboard', discord: 'Discord' };
+function sourceLabel(source) {
+  if (!source) return '';
+  return SOURCE_LABELS[source] || source.charAt(0).toUpperCase() + source.slice(1);
+}
+
 function matchesRunFilter(status, filter) {
   if (filter === 'Active')
     return status === 'queued' || status === 'running' || status === 'paused';
@@ -127,6 +135,7 @@ function buildFeed(tasks, filter) {
         // Live = an in-flight chat turn (the main assistant answering a message),
         // not a real task row. Rendered read-only: no open/cancel/pause.
         live: !!root.live,
+        source: root.source || null,
         when: root.createdAt || 0,
         meta,
         percent,
@@ -191,9 +200,13 @@ function RunCard({ item, selected, onSelect, onOpen, onCancel, onPause, onResume
       )}
       {item.live ? (
         // A live chat turn has no backing task row, so there's nothing to open,
-        // cancel, or pause — it just shows the assistant is busy right now.
+        // cancel, or pause — it just shows the assistant is busy right now, and
+        // on which surface (e.g. "Replying on Telegram").
         <div className="card-actions">
-          <span style={{ color: 'var(--text-3)', fontSize: 13 }}>Replying…</span>
+          <span className="agent-tag blue">
+            <window.Icon name="chat" size={12} />{' '}
+            {item.source ? `Replying on ${sourceLabel(item.source)}` : 'Replying…'}
+          </span>
         </div>
       ) : (
       <div className="card-actions">
@@ -359,7 +372,10 @@ function LiveRunLog({ tasks, onOpen }) {
                   className={`${meta.tone}-text${meta.spin ? ' spin' : ''}`}
                 />
                 <span className={`msg${t.status === 'error' ? ' red-text' : ''}`}>
-                  {t.status === 'error' && t.error ? t.error : wfClip(t.prompt, 80)}
+                  {t.status === 'error' && t.error
+                    ? t.error
+                    : (t.live && t.source ? `${sourceLabel(t.source)} · ` : '') +
+                      wfClip(t.prompt, 80)}
                 </span>
                 <span className={`tag ${wfTagTone(t.agentId)}`}>
                   {t.agentName || `#${t.agentId}`}

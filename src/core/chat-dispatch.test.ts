@@ -357,3 +357,26 @@ test('without resolveOrchestrator every chat uses the default orchestrator', asy
   await flush();
   assert.deepEqual(calls, ['hi']);
 });
+
+test('the surface source label is forwarded to the orchestrator turn', async () => {
+  const sources: Array<string | undefined> = [];
+  const orchestrator: HostOrchestrator = {
+    handleUserMessage: async (msg) => {
+      sources.push(msg.source);
+      await msg.send({ delta: 'ok', done: true });
+    },
+  };
+  // Dispatcher-level source tags every turn (Telegram wires source: 'telegram').
+  const d = createChatDispatcher(deps({ orchestrator, source: 'telegram' }));
+  await d.dispatchInbound({ chatId: 5, userId: 2, text: 'hi', reply: async () => {} });
+  // A per-message source overrides the dispatcher default (shared module router).
+  await d.dispatchInbound({
+    chatId: 6,
+    userId: 2,
+    text: 'yo',
+    source: 'discord',
+    reply: async () => {},
+  });
+  await flush();
+  assert.deepEqual(sources, ['telegram', 'discord']);
+});

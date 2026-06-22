@@ -664,6 +664,7 @@ export function createAgentRoutes(deps: PanelDeps): RouteModule {
             prompt: a.text,
             status: 'running',
             live: true,
+            source: a.source ?? null,
             createdAt: a.startedAt,
             startedAt: a.startedAt,
             finishedAt: null,

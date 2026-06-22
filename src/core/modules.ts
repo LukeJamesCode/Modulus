@@ -364,6 +364,9 @@ export interface HostUserMessage {
   // Per-turn reasoning override. A surface's sticky per-chat setting (Telegram
   // /think · /fast) flows through here; omitted (or 'auto') keeps the default.
   thinkMode?: ThinkMode;
+  // Which chat surface the turn arrived on ('telegram', 'dashboard', …). Used
+  // only to label the panel's live-activity marker; never affects the prompt.
+  source?: string;
   send: (chunk: HostReplyChunk) => void | Promise<void>;
 }
 

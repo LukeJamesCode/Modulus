@@ -167,6 +167,10 @@ export interface UserMessage {
   // Per-turn override of the model's thinking mode (the panel's think toggle).
   // Overrides the orchestrator's defaultThinkMode and the profile default.
   thinkMode?: ThinkMode;
+  // Which chat surface this turn arrived on ('telegram', 'dashboard', a module
+  // surface, …). Used only to label the live-activity marker (activityReporter)
+  // so the panel can show "Replying on Telegram"; never affects the prompt.
+  source?: string;
   // Base64 images to attach to THIS user turn for a multimodal model (agent task
   // image attachments). Ride the initial model call only; not persisted to
   // history. Callers must have gated on LLM.supportsVision already.
@@ -1229,6 +1233,7 @@ export function createOrchestrator(opts: OrchestratorOptions): Orchestrator {
           chatId,
           userId: next.userId,
           text: next.text,
+          ...(next.source ? { source: next.source } : {}),
         });
         try {
           await process(next, slot);

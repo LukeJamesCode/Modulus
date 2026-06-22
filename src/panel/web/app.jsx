@@ -25,10 +25,24 @@ function App() {
   const [busy, setBusy] = useState(null); // agent action in flight: start|stop|restart|null
   const [forcedView, setForcedView] = useState(null); // override configured-based view
   const pollRef = useRef(null);
+  // The daemon's per-process boot id, captured on first contact. When a later
+  // poll reports a different one the daemon has re-execed (an update via the
+  // Settings/System Update button, or any restart) and is now serving freshly
+  // built assets — reload so this page runs the new code instead of the stale
+  // bundle it booted with.
+  const bootRef = useRef(null);
 
   const refresh = useCallback(async () => {
     const r = await window.api.get('/api/state');
     if (r.ok) {
+      const boot = r.data && r.data.bootId;
+      if (boot) {
+        if (bootRef.current === null) bootRef.current = boot;
+        else if (bootRef.current !== boot) {
+          location.reload();
+          return r.data;
+        }
+      }
       setState(r.data);
       setOffline(false);
       setLoadError(null);
