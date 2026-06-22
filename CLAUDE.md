@@ -1,10 +1,14 @@
 # Modulus
 
+**Current version: 1.5.3** — SemVer; the canonical value lives in `package.json` and is read
+into `HOST_VERSION` (`src/core/version.ts`). Bump it on every change (see Versioning below).
+
 Local AI orchestrator for everyday people (evolved from Gurney, `../GurneyAgent/`). One Node
 daemon = Telegram bot + agent engine + web panel + scheduler; Ollama is the only separate
-process, never bundled. v1.0.0 shipped: in-process panel, marketplace, Power Mode, instant
-responses, and the 8 first-party modules all exist. HANDOFF.md is a historical build log —
-never take task lists or "what exists" claims from it; the code is the source of truth.
+process, never bundled. The 1.0.0 release shipped the in-process panel, marketplace, Power
+Mode, instant responses, and the 8 first-party modules; the line has since advanced through the
+1.5.x series (CHANGELOG.md is the running record). HANDOFF.md is a historical build log — never
+take task lists or "what exists" claims from it; the code is the source of truth.
 
 Settled design lives in `docs/`: blueprint.md (architecture), registry.md, power-mode.md,
 memory-extraction.md. Consult these for design questions instead of re-deriving — the
@@ -64,6 +68,24 @@ decisions there are final.
   abstractions, config options, or wrappers nobody asked for. Comments say WHY only (never
   narrate the diff); commits are terse, imperative, why-not-what.
 
+## Versioning
+
+SemVer (`MAJOR.MINOR.PATCH`), Keep-a-Changelog. The **single source of truth is
+`package.json`'s `version`** — `src/core/version.ts` reads it into `HOST_VERSION`, and the panel
+`/api/state` report plus the registry `minCoreVersion` gate derive from it, so they never drift.
+Never hardcode the version anywhere else.
+
+- **Bump on every change.** Any shippable edit to `src/`, `modules/`, or `desktop/` bumps the
+  version in the same commit: PATCH for fixes/internals, MINOR for a user-facing feature, MAJOR
+  for a breaking change or a broken invariant. Comment-/docs-only edits don't need a bump.
+- **Three places move together, every bump:** (1) `package.json` `version`, (2) the
+  `**Current version:**` line at the top of this file, (3) a `CHANGELOG.md` entry — under
+  `[Unreleased]` while in flight, promoted to a dated `[x.y.z] - YYYY-MM-DD` section when shipped.
+- The desktop installer version (`MODULUS_DESKTOP_VERSION`) must match the same number and stay
+  ahead of the latest in `desktop/Releases`, or vpk aborts (see the desktop section below).
+- bug fix example 1.5.1 to 1.5.11
+- small feature added example 1.5.1 to 1.5.2
+- bug feature or multifeature example 1.5.1 to 1.6.0
 ## This dev box (Windows)
 
 NEVER delete `node_modules` or reinstall from scratch: better-sqlite3 has no prebuilt binary

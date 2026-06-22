@@ -1,6 +1,6 @@
 import type { Host } from '../../../src/core/modules.js';
 import { formatEventLine, getClient, hasClockTime, todayRangeIso } from '../helpers/calendar.js';
-import { dateRangeForDate } from '../helpers/range.js';
+import { addCalendarDays, dateRangeForDate, zonedDateParts } from '../helpers/range.js';
 import { briefingTimeZone } from '../gather.js';
 
 const NOT_CONFIGURED = 'Google Calendar is not configured. Run `modulus auth modulus-assistant`.';
@@ -19,14 +19,22 @@ const CALENDAR_DELETE_INTENT =
   '\\b(cancel|delete|remove|drop|get rid of|nuke).*(event|meeting|appointment|calendar)\\b' +
   '|\\b(cancel|delete|remove|drop|get rid of|nuke)\\b.*\\b(today|tomorrow|tonight|on|this|next|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|mon|tue|wed|thu|fri|sat|sun|\\d{1,2}(st|nd|rd|th)?)\\b';
 
-// Deterministic 0-LLM route for the canonical "what's on today" calendar
-// questions. Matched against the WHOLE trimmed message (anchored ^…$), so a
-// compound request ("…and remind me to call mom") never matches and falls
-// through to the model. The target tool is read-only, self-replying, and takes
-// no args (defaults to today), so even a rare false match just shows today's
-// agenda — there is no destructive side effect to get wrong. When this claims
-// the turn the orchestrator skips both LLM rounds (tool-selection and
-// paraphrase) and ships the formatted list directly. Exported for tests.
+// Deterministic 0-LLM route for the canonical "what's on today / tomorrow"
+// calendar questions. Matched against the WHOLE trimmed message (anchored ^…$),
+// so a compound request ("…and remind me to call mom") never matches and falls
+// through to the model. The target tool is read-only and self-replying, so even
+// a rare false match just shows an agenda — there is no destructive side effect
+// to get wrong. When this claims the turn the orchestrator skips both LLM rounds
+// (tool-selection and paraphrase) and ships the formatted list directly.
+//
+// "tomorrow" is included because it is just as canonical as "today" yet, left to
+// the 2B tools model, regularly fails: the model omits `date` (tool defaults to
+// today), miscopies tomorrow's ISO from the clock anchor, or emits a degenerate
+// time_min==time_max window — all of which return "Nothing on your calendar".
+// Resolving the date here in code removes that dependency. The tomorrow token is
+// spelled tolerantly (tomorrow/tomorow/tommorow…) so a common typo still routes.
+const TMRW = String.raw`tom{1,2}or{1,2}ow`;
+
 const TODAY_CALENDAR_PATTERNS: RegExp[] = [
   /^what(?:'?s| is) on (?:my )?(?:calendar|agenda|schedule)(?: today)?\??$/i,
   /^what(?:'?s| is) on today\??$/i,
@@ -38,21 +46,64 @@ const TODAY_CALENDAR_PATTERNS: RegExp[] = [
   /^today'?s (?:calendar|agenda|schedule|events?)\??$/i,
 ];
 
-export function calendarTodayAutoRoute(message: string): Record<string, never> | null {
+const TOMORROW_CALENDAR_PATTERNS: RegExp[] = [
+  new RegExp(String.raw`^what(?:'?s| is) on (?:my )?(?:calendar|agenda|schedule) ${TMRW}\??$`, 'i'),
+  new RegExp(String.raw`^what(?:'?s| is) on ${TMRW}\??$`, 'i'),
+  new RegExp(
+    String.raw`^what(?:'?s| do i have) (?:on )?(?:my )?(?:calendar|agenda) ${TMRW}\??$`,
+    'i',
+  ),
+  new RegExp(String.raw`^what do i have (?:on (?:my (?:calendar|agenda|schedule) )?)?${TMRW}\??$`, 'i'),
+  new RegExp(
+    String.raw`^do i have (?:anything|something|any (?:events?|meetings?)) (?:on )?${TMRW}\??$`,
+    'i',
+  ),
+  new RegExp(String.raw`^am i (?:free|busy) ${TMRW}\??$`, 'i'),
+  new RegExp(String.raw`^(?:my )?(?:calendar|agenda|schedule) (?:for )?${TMRW}\??$`, 'i'),
+  new RegExp(String.raw`^${TMRW}'?s (?:calendar|agenda|schedule|events?)\??$`, 'i'),
+];
+
+// Resolve the YYYY-MM-DD date `offsetDays` from `now`, in the configured zone
+// (falling back to host-local when none is set, matching the rest of the tool).
+function isoForOffsetDay(now: Date, offsetDays: number, timeZone?: string): string {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  if (!timeZone) {
+    const d = new Date(now);
+    d.setDate(d.getDate() + offsetDays);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+  const p = addCalendarDays(zonedDateParts(now, timeZone), offsetDays);
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}`;
+}
+
+// Returns the tool args to force when the message is a canonical day-agenda
+// question: `{}` for today (tool defaults to today), `{ date }` for tomorrow
+// (date resolved here so the model never has to). null = let the model decide.
+// Exported for tests.
+export function calendarRelativeDayAutoRoute(
+  message: string,
+  now: Date = new Date(),
+  timeZone?: string,
+): Record<string, unknown> | null {
   // Fold smart quotes (mobile keyboards autocorrect ' → ’) to straight quotes so
   // "What’s on my calendar today" matches the same as "What's …".
   const t = message
     .trim()
     .replace(/\s+/g, ' ')
     .replace(/[’‘]/g, "'");
-  return TODAY_CALENDAR_PATTERNS.some((re) => re.test(t)) ? {} : null;
+  if (TODAY_CALENDAR_PATTERNS.some((re) => re.test(t))) return {};
+  if (TOMORROW_CALENDAR_PATTERNS.some((re) => re.test(t))) {
+    return { date: isoForOffsetDay(now, 1, timeZone) };
+  }
+  return null;
 }
 
 export function register(host: Host): void {
   host.tools.register({
     name: 'calendar_list_events',
     intentPattern: CALENDAR_LIST_INTENT,
-    autoRoute: calendarTodayAutoRoute,
+    autoRoute: (message) =>
+      calendarRelativeDayAutoRoute(message, new Date(), briefingTimeZone(host)),
     description:
       "List Google Calendar events for a day or range. ALWAYS call for 'do I have anything tomorrow / am I free at 3pm / what's on my calendar / show my events this week'. " +
       'For a single named day, pass `date` as YYYY-MM-DD (resolve the day the user named against the current date in the system prompt) — do NOT compute ISO bounds yourself. ' +
@@ -104,7 +155,17 @@ export function register(host: Host): void {
         const e = parseBound(a.time_max);
         if (!s) return `Invalid time_min: ${a.time_min}`;
         if (!e) return `Invalid time_max: ${a.time_max}`;
-        range = { timeMin: s.toISOString(), timeMax: e.toISOString() };
+        // Small models routinely emit time_min == time_max (or end < start)
+        // for a single named day — a degenerate window Google answers with
+        // zero events. Treat a non-positive span as "the day starting at
+        // time_min" so a one-day query still returns that day's events.
+        if (e.getTime() <= s.getTime()) {
+          const end = new Date(s);
+          end.setDate(end.getDate() + 1);
+          range = { timeMin: s.toISOString(), timeMax: end.toISOString() };
+        } else {
+          range = { timeMin: s.toISOString(), timeMax: e.toISOString() };
+        }
       } else if (a.time_min) {
         const start = parseBound(a.time_min);
         if (!start) return `Invalid time_min: ${a.time_min}`;

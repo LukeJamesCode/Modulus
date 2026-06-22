@@ -56,4 +56,16 @@ public static partial class PanelLocator
     }
 
     public static Uri Origin(Uri url) => new($"{url.Scheme}://{url.Host}:{url.Port}/");
+
+    // The local daemon advertises its LAN IP on stdout when panel.bind is
+    // 0.0.0.0, but this app runs the daemon on this very machine, so the in-app
+    // WebView must reach it over loopback. A LAN http:// origin is not a secure
+    // context, which silently strips navigator.mediaDevices and breaks the Voice
+    // Hub mic; loopback http:// IS a secure context, and 0.0.0.0 already listens
+    // on it. Port, path, and token are preserved.
+    public static Uri ToLoopback(Uri url)
+    {
+        if (url.Host is "127.0.0.1" or "localhost") return url;
+        return new UriBuilder(url) { Host = "127.0.0.1" }.Uri;
+    }
 }

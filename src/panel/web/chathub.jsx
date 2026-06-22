@@ -69,6 +69,24 @@ function loadThinkMode() {
   }
 }
 
+// Collapsed/expanded state of the command-button bar, remembered across reloads.
+// Defaults to expanded so the buttons stay discoverable until the user folds them.
+const CMDBAR_KEY = 'modulus_cmdbar_collapsed';
+function loadCmdbarCollapsed() {
+  try {
+    return localStorage.getItem(CMDBAR_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+function saveCmdbarCollapsed(collapsed) {
+  try {
+    localStorage.setItem(CMDBAR_KEY, collapsed ? '1' : '0');
+  } catch {
+    /* quota — the preference just won't persist */
+  }
+}
+
 function MainChatPane({
   agentStatus,
   onStart,
@@ -780,13 +798,21 @@ function commandNeedsArgs(desc) {
   return desc.includes('<') || /\b\w+\|\w+/.test(desc);
 }
 
-/* ---- command bar: core + module command buttons ---- */
+/* ---- command bar: core + module command buttons (collapsible) ---- */
 function CommandBar({ commands, disabled, onCommand }) {
+  const [collapsed, setCollapsed] = useStateCH(loadCmdbarCollapsed);
   const core = (commands.core || []).filter((c) =>
     ['/help', '/status', '/model', '/modules'].includes(c.cmd),
   );
   const mods = commands.modules || [];
   if (core.length === 0 && mods.length === 0) return null;
+  const total = core.length + mods.length;
+  const toggle = () =>
+    setCollapsed((prev) => {
+      const next = !prev;
+      saveCmdbarCollapsed(next);
+      return next;
+    });
   const chip = (c, accent) => (
     <button
       key={c.cmd}
@@ -808,20 +834,44 @@ function CommandBar({ commands, disabled, onCommand }) {
     </button>
   );
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 7,
-        marginBottom: 10,
-        alignItems: 'center',
-      }}
-    >
-      {mods.map((c) => chip(c, true))}
-      {mods.length > 0 && core.length > 0 && (
-        <span style={{ width: 1, height: 18, background: 'var(--border)', margin: '0 2px' }} />
+    <div style={{ marginBottom: 10 }}>
+      <button
+        type="button"
+        onClick={toggle}
+        title={collapsed ? 'Show command buttons' : 'Hide command buttons'}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          background: 'none',
+          border: 'none',
+          padding: '2px 0',
+          cursor: 'pointer',
+          color: 'var(--text-dim)',
+          fontSize: 12,
+          fontFamily: 'var(--font-ui)',
+        }}
+      >
+        <window.Icon name={collapsed ? 'chevron-down' : 'chevron-up'} size={12} />
+        Commands ({total})
+      </button>
+      {!collapsed && (
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 7,
+            marginTop: 8,
+            alignItems: 'center',
+          }}
+        >
+          {mods.map((c) => chip(c, true))}
+          {mods.length > 0 && core.length > 0 && (
+            <span style={{ width: 1, height: 18, background: 'var(--border)', margin: '0 2px' }} />
+          )}
+          {core.map((c) => chip(c, false))}
+        </div>
       )}
-      {core.map((c) => chip(c, false))}
     </div>
   );
 }

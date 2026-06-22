@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-06-21
+
+### Fixed
+
+- **Voice Hub mic on the desktop app**: when the panel is LAN-bound (`panel.bind = 0.0.0.0`) the
+  daemon advertises its LAN IP, and the desktop shell was navigating its WebView there — a
+  non-loopback `http://` origin is not a secure context, so the browser hides
+  `navigator.mediaDevices` and the Voice Hub fell back to "The microphone needs HTTPS." The
+  shell now reaches its own local daemon over loopback (`127.0.0.1`, which `0.0.0.0` already
+  listens on and which *is* a secure context) regardless of what host is advertised, and
+  auto-grants the microphone permission for the trusted panel origin so voice works without a
+  WebView2 prompt. The LAN URL is still shown in the System tab for connecting other devices.
+
+## [1.5.2] - 2026-06-21
+
+### Added
+
+- **Collapsible command bar in the chat window**: the row of core + module command buttons above
+  the chat input now folds behind a `Commands (N)` toggle, reclaiming vertical space once the
+  buttons are familiar. The collapsed/expanded choice is remembered across reloads
+  (`modulus_cmdbar_collapsed` in localStorage); it defaults to expanded so the buttons stay
+  discoverable.
+
+## [1.5.1] - 2026-06-21
+
+### Changed
+
+- **Versioning policy + version reconcile**: `package.json`'s `version` is now the documented
+  single source of truth for the host version (already what `HOST_VERSION` reads), with the
+  bump checklist and current-version marker recorded in `CLAUDE.md`. Bumped `package.json`
+  1.5.0 → 1.5.1 to match the desktop installer already built in `desktop/Releases`, so code,
+  installer, and docs finally agree.
+
 ## [1.5.0] - 2026-06-16
 
 This release rolls up everything built since 1.0.0 — the 1.1.0 through 1.5.0

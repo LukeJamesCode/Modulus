@@ -287,6 +287,10 @@ public sealed class DaemonManager : IDisposable
             var url = PanelLocator.FromStdoutLine(line);
             if (url is not null)
             {
+                // We own this daemon locally; reach it over loopback even when it
+                // advertises a LAN IP, so the WebView stays a secure context and
+                // the Voice Hub mic works.
+                url = PanelLocator.ToLoopback(url);
                 lock (_gate)
                 {
                     _panelUrl = url;

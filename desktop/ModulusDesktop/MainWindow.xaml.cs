@@ -186,6 +186,20 @@ public sealed partial class MainWindow : Window
                 LaunchExternal(external);
             }
         };
+        // The Voice Hub needs the mic. The in-app panel is our own trusted local
+        // origin, so grant microphone silently for it rather than making the user
+        // chase a WebView2 permission prompt. Anything off-origin keeps default
+        // (prompt) handling.
+        core.PermissionRequested += (_, e) =>
+        {
+            if (e.PermissionKind == CoreWebView2PermissionKind.Microphone &&
+                _panelUrl is not null &&
+                Uri.TryCreate(e.Uri, UriKind.Absolute, out var origin) &&
+                PanelLocator.Origin(origin) == PanelLocator.Origin(_panelUrl))
+            {
+                e.State = CoreWebView2PermissionState.Allow;
+            }
+        };
         core.NavigationCompleted += (_, e) =>
         {
             var onPanel = _panelUrl is not null &&
