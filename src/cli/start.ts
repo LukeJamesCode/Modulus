@@ -41,6 +41,7 @@ import {
   seedStarterAgents,
   ensureBuiltinModulusAgent,
   AGENT_CHAT_ID_BASE,
+  REAL_TELEGRAM_CHAT_SQL,
   SPAWN_AGENT_TOOL_NAME,
   SPAWN_AGENTS_TOOL_NAME,
   REQUEST_APPROVAL_TOOL_NAME,
@@ -163,7 +164,7 @@ function knownAllowedChats(
     .prepare(
       `SELECT chat_id
        FROM telegram_chats
-       WHERE user_id IN (${placeholders})
+       WHERE user_id IN (${placeholders}) AND ${REAL_TELEGRAM_CHAT_SQL}
        ORDER BY last_seen_at DESC`,
     )
     .all(...allowedUserIds) as Array<{ chat_id: number }>;

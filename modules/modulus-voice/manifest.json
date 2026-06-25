@@ -1,6 +1,6 @@
 {
   "name": "modulus-voice",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Two-way voice for Telegram: outbound replies via Piper TTS, inbound voice-note transcription via whisper.cpp. /voice on enables voice replies; /voice transcribe on enables voice-in.",
   "modulus": ">=0.1.0",
   "deps": [],

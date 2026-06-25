@@ -19,6 +19,7 @@ import { readJson, readRawBody, sendJson, sse as sseWrite, writeSseHead } from '
 import type { RouteModule } from '../router.js';
 import type { PanelDeps } from '../types.js';
 import { createConfirmRegistry } from './confirm-registry.js';
+import { REAL_TELEGRAM_CHAT_SQL } from '../../core/agents.js';
 
 // Matches the Telegram adapter's confirm timeout: an unanswered prompt fails
 // closed after this long.
@@ -39,7 +40,7 @@ export function ownerChat(db: DB, cfg: ModulusConfig): { chatId: number; userId:
   const row = db
     .prepare(
       `SELECT chat_id AS chatId, user_id AS userId FROM telegram_chats
-        WHERE user_id IN (${placeholders})
+        WHERE user_id IN (${placeholders}) AND ${REAL_TELEGRAM_CHAT_SQL}
         ORDER BY last_seen_at DESC LIMIT 1`,
     )
     .get(...cfg.telegram.allowedIds) as { chatId: number; userId: number } | undefined;

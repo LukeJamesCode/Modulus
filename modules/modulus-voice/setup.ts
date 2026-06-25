@@ -10,6 +10,7 @@ import {
   statSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ModuleSetupContext } from '../../src/core/modules.js';
@@ -80,6 +81,24 @@ export function defaultCommandPath(command: string): string | undefined {
 function defaultRunStep(step: InstallStep): number | null {
   const result = spawnSync(step.command, step.args, { stdio: 'inherit' });
   return result.status;
+}
+
+// Interactive y/n prompt for the CLI install path. Deliberately node:readline,
+// not @inquirer/prompts: this file runs from the module's own folder
+// (~/.modulus/modules/modulus-voice/), where a core-only dep can't resolve and a
+// bare import would abort the whole install. The headless wizard never reaches
+// this — setup() overrides confirm with `() => true` when not interactive.
+function readlineConfirm(message: string, defaultValue: boolean): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const suffix = defaultValue ? ' [Y/n] ' : ' [y/N] ';
+  return new Promise((resolveConfirm) => {
+    rl.question(message + suffix, (answer) => {
+      rl.close();
+      const v = answer.trim().toLowerCase();
+      if (v === '') return resolveConfirm(defaultValue);
+      resolveConfirm(v === 'y' || v === 'yes');
+    });
+  });
 }
 
 // Abort a download if no bytes arrive for this long. Reset-on-progress stall
@@ -245,15 +264,7 @@ export async function ensureFfmpegForTts(
   const commandPath = opts.commandPath ?? defaultCommandPath;
   const stdout = opts.stdout ?? ((text: string) => process.stdout.write(text));
   const runStep = opts.runStep ?? defaultRunStep;
-  const confirm =
-    opts.confirm ??
-    (async () => {
-      const { confirm: promptConfirm } = await import('@inquirer/prompts');
-      return promptConfirm({
-        message: `ffmpeg is required for modulus-voice. Install it now?`,
-        default: true,
-      });
-    });
+  const confirm = opts.confirm ?? readlineConfirm;
 
   if (commandExists(binary)) {
     const found = commandPath(binary) ?? binary;
@@ -1003,15 +1014,7 @@ export async function ensureWhisperForVoice(
   const commandPath = opts.commandPath ?? defaultCommandPath;
   const stdout = opts.stdout ?? ((text: string) => process.stdout.write(text));
   const runStep = opts.runStep ?? defaultRunStep;
-  const confirm =
-    opts.confirm ??
-    (async () => {
-      const { confirm: promptConfirm } = await import('@inquirer/prompts');
-      return promptConfirm({
-        message: `whisper.cpp is required for voice-in. Install it now?`,
-        default: true,
-      });
-    });
+  const confirm = opts.confirm ?? readlineConfirm;
 
   // whisper.cpp's binary has shipped under both `whisper-cli` (modern releases)
   // and `whisper` / `main` (older builds, distro packages). Check the

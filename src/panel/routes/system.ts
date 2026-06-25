@@ -25,6 +25,7 @@ import type { DB } from '../../storage/db.js';
 import type { ModulusConfig } from '../../cli/config-store.js';
 import { logFilePath, metricsFilePath } from '../../cli/daemon.js';
 import { collectDoctorChecks } from '../../cli/doctor.js';
+import { REAL_TELEGRAM_CHAT_SQL } from '../../core/agents.js';
 import { parseCron, nextFireAfter } from '../../core/cron.js';
 import { describeCron } from '../../core/schedule-parse.js';
 import { readMetrics } from '../../core/metrics.js';
@@ -75,7 +76,7 @@ function ownerChatId(db: DB, cfg: ModulusConfig): number | null {
   const row = db
     .prepare(
       `SELECT chat_id AS chatId FROM telegram_chats
-        WHERE user_id IN (${placeholders})
+        WHERE user_id IN (${placeholders}) AND ${REAL_TELEGRAM_CHAT_SQL}
         ORDER BY last_seen_at DESC LIMIT 1`,
     )
     .get(...cfg.telegram.allowedIds) as { chatId: number } | undefined;

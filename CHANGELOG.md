@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Scheduled routine results and briefings reach Telegram again**: every agent run upserts a
+  `telegram_chats` row under a *virtual* chat id (`AGENT_CHAT_ID_BASE + taskId`, and the agent-DM
+  band above it) to isolate its conversation history. Owner/nudge resolution picked "the
+  allowlisted user's most recently active chat" with no guard, so right after any background agent
+  ran, that "most recent" row was a virtual agent chat — and every proactive Telegram send (a
+  routine's delivered result, the morning/night briefings, setup-issue nudges) went to a phantom id
+  and failed `400: chat not found`, swallowed as a warn. Added a shared `REAL_TELEGRAM_CHAT_SQL`
+  predicate (`chat_id > 0 AND chat_id < AGENT_CHAT_ID_BASE`) and applied it to all five resolvers
+  (`ownerChat` in the chat/modules/system panel routes, `knownAllowedChats` in the daemon, and the
+  module host's `knownChats()`), so the owner always resolves to a real Telegram DM (or the
+  allowlisted-id fallback). Existing routines keep firing; the next delivery lands.
+
+- **`modulus mod install modulus-voice` no longer aborts on a fresh box**: the voice module's setup
+  wizard imported `@inquirer/prompts` (a *core* dependency) directly from its own folder to ask the
+  interactive "install ffmpeg/whisper now?" prompt. Once installed standalone to
+  `~/.modulus/modules/modulus-voice/`, that package isn't reachable from the module's location, so the
+  bare import threw `Cannot find package '@inquirer/prompts'` and killed the install. The setup
+  entrypoint now uses a dependency-free `node:readline` confirm, so the module's folder stays
+  self-contained (North Star #3). The headless panel path is unaffected — it already overrides the
+  prompt with an auto-yes. (modulus-voice 1.0.1)
+
 ## [1.7.0] - 2026-06-24
 
 ### Added

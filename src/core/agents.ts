@@ -38,6 +38,16 @@ export function isAgentChatId(chatId: number): boolean {
   return chatId >= AGENT_CHAT_ID_BASE;
 }
 
+// SQL predicate selecting only real Telegram chats from telegram_chats. Agent
+// runs upsert virtual-chat rows into this table too (the task and DM bands
+// above both clear AGENT_CHAT_ID_BASE), so any owner/nudge resolution that
+// orders by last_seen_at WITHOUT this guard can resolve the owner to a virtual
+// agent chat — and every proactive Telegram send then targets a phantom id
+// (Telegram 400 "chat not found", silently swallowed). Mirrors isAgentChatId:
+// real Telegram chats (positive DMs, negative groups/channels) sit below the
+// virtual band, so a single upper bound is enough.
+export const REAL_TELEGRAM_CHAT_SQL = `chat_id < ${AGENT_CHAT_ID_BASE}`;
+
 // Per-agent direct-message ("DM") virtual ids live in their own band above the
 // task band: dm_chat_id = AGENT_DM_CHAT_ID_BASE + agent.id. A DM is ONE
 // persistent conversation per agent (the panel's Slack-style chat), unlike

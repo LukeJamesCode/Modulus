@@ -18,6 +18,7 @@ import { discover, runAuthForModule, type AuthRunnerIO } from '../../cli/auth.js
 import { ensurePrivateDir } from '../../cli/config-store.js';
 import { configureNativeDepsForModule } from '../../cli/ext-setup.js';
 import { collectModuleReadiness } from '../../core/module-readiness.js';
+import { REAL_TELEGRAM_CHAT_SQL } from '../../core/agents.js';
 import type { Manifest, SettingsSchema, TelegramCommandContext } from '../../core/modules.js';
 import { readJson, readRawBody, sendJson, sse, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
@@ -196,7 +197,7 @@ function ownerChat(db: DB, cfg: ModulusConfig): { chatId: number; userId: number
   const row = db
     .prepare(
       `SELECT chat_id AS chatId, user_id AS userId FROM telegram_chats
-        WHERE user_id IN (${placeholders})
+        WHERE user_id IN (${placeholders}) AND ${REAL_TELEGRAM_CHAT_SQL}
         ORDER BY last_seen_at DESC LIMIT 1`,
     )
     .get(...cfg.telegram.allowedIds) as { chatId: number; userId: number } | undefined;

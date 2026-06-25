@@ -44,6 +44,7 @@ import {
 import { namespacedCache } from './fast-cache.js';
 import { createChatDispatcher, type ChatDispatcher, type InboundMessage } from './chat-dispatch.js';
 import { createModuleWatcher } from './module-watcher.js';
+import { REAL_TELEGRAM_CHAT_SQL } from './agents.js';
 
 // ---------------------------------------------------------------------------
 // Manifest + Host API
@@ -1718,7 +1719,7 @@ function knownTelegramChats(db: DB, allowedUserIds: number[]): KnownTelegramChat
     .prepare(
       `SELECT chat_id, user_id, devmode, last_seen_at
        FROM telegram_chats
-       WHERE user_id IN (${placeholders})
+       WHERE user_id IN (${placeholders}) AND ${REAL_TELEGRAM_CHAT_SQL}
        ORDER BY last_seen_at DESC`,
     )
     .all(...allowedUserIds) as Array<{
