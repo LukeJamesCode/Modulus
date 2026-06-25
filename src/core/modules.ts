@@ -35,6 +35,7 @@ import type { Scheduler, JobHandler, ScheduledJob, NudgeAction, Nudge } from './
 import { matchesCron, parseCron } from './cron.js';
 import type { FastCache } from './fast-cache.js';
 import type { ModulePermissions } from './installer.js';
+import type { VoiceService, SttProvider, TtsProvider } from './voice.js';
 import {
   createModuleTripwires,
   type ModuleTripwires,
@@ -538,6 +539,15 @@ export interface Host {
     // The surface provides `reply` to render/length-cap output its own way.
     dispatchInbound: (msg: InboundMessage) => Promise<void>;
   };
+  // Speech engines for the panel's two-way voice. A voice module (modulus-voice)
+  // registers whisper.cpp STT / Piper TTS here; core's panel voice routes call
+  // whatever is registered. Mirrors host.llm.registerProvider. Optional — wired
+  // by start.ts but absent in test harnesses; register through `?.` and the
+  // returned disposer is auto-dropped on unload.
+  voice?: {
+    registerStt: (fn: SttProvider) => () => void;
+    registerTts: (fn: TtsProvider) => () => void;
+  };
 }
 
 export interface EntrypointModule {
@@ -655,6 +665,10 @@ export interface ModuleLoaderOptions {
   // implementation here; tests leave it undefined and the loader hands a no-op
   // to modules so registration still succeeds.
   sendVoice?: (chatId: number, voice: VoicePayload) => Promise<void>;
+  // Optional core voice service. When provided, modules can register STT/TTS
+  // engines via host.voice and the panel's voice routes use them. Tests omit it
+  // and host.voice is absent on the module's host.
+  voice?: VoiceService;
   // Fired after an explicit or watched hot-reload completes. Startup calls
   // loadAll() directly and handles its own notification after Telegram is up.
   onDidReload?: () => void | Promise<void>;
@@ -1313,6 +1327,22 @@ export function createModuleLoader(opts: ModuleLoaderOptions): ModuleLoader {
           await d.dispatchInbound(msg);
         },
       },
+      ...(opts.voice
+        ? {
+            voice: {
+              registerStt: (fn) => {
+                const off = opts.voice!.registerStt(fn);
+                reg.disposers.push(off);
+                return off;
+              },
+              registerTts: (fn) => {
+                const off = opts.voice!.registerTts(fn);
+                reg.disposers.push(off);
+                return off;
+              },
+            },
+          }
+        : {}),
     };
 
     const entrypoints = manifest.entrypoints ?? {};

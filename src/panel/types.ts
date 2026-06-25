@@ -6,6 +6,7 @@ import type { Logger } from '../util/log.js';
 import type { createScheduler } from '../core/scheduler.js';
 import type { createAgentRegistry, createAgentRuntime } from '../core/agents.js';
 import type { ChatActivityRegistry } from '../core/chat-activity.js';
+import type { ActivityStore } from '../core/activity.js';
 import type { createAgentQueue } from '../core/agent-queue.js';
 import type { createRoutedLLM } from '../core/llm-router.js';
 import type { MemoryStore } from '../core/memory.js';
@@ -13,7 +14,8 @@ import type { StandingOrderStore } from '../core/standing-orders.js';
 import type { Heartbeat } from '../core/heartbeat.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ConversationRouter } from '../core/conversation-routing.js';
-import type { ModuleLoader } from '../core/modules.js';
+import type { AfterTurnContext, ModuleLoader } from '../core/modules.js';
+import type { VoiceService } from '../core/voice.js';
 import type { SkillLoader } from '../core/skills.js';
 import type { SkillProposalStore, ProposalManager } from '../core/skill-improve.js';
 import type { ToolPermissionTier, ToolRegistry } from '../core/tools.js';
@@ -47,10 +49,19 @@ export interface PanelDeps {
   // agent so a Telegram/Dashboard message shows the assistant as "running".
   // Absent in tests that don't exercise it.
   chatActivity?: ChatActivityRegistry;
+  // The durable Activity record (migration 0039). The Activity tab reads it as a
+  // newest-first feed plus a time-bucketed timeline. Absent in tests that don't
+  // exercise it (the route then reports an empty feed instead of 500-ing).
+  activity?: ActivityStore;
   llm: ReturnType<typeof createRoutedLLM>;
   // The hive-mind memory store, for the Settings memory browser (list/search/
   // delete) — the same store every agent reads and writes.
   memory: MemoryStore;
+  // Core memory extraction, invoked detached after a Dashboard chat turn ships —
+  // the same handler the Telegram dispatch path runs, so a panel-only install
+  // also auto-saves durable user facts into the hive store. Absent disables it
+  // (e.g. tests that don't exercise it, or Small-tier where extraction is off).
+  memoryExtractor?: (turn: AfterTurnContext) => Promise<void>;
   // The daemon's live orchestrator + module loader: browser chat runs through
   // the exact same pipeline as Telegram (intercepts → orchestrator → SSE).
   orchestrator: Orchestrator;
@@ -60,6 +71,11 @@ export interface PanelDeps {
   // exercise bindings (the Dashboard then always uses the default orchestrator).
   conversationRouter?: ConversationRouter;
   loader: ModuleLoader;
+  // Two-way panel voice engines (STT/TTS) contributed by modulus-voice via
+  // host.voice. The chat routes use it for /api/chat/voice-in, the one-shot voice
+  // clip store, and the TTS step of the chat stream. Absent when no voice module
+  // is active (the Voice Hub mic then reports "not set up" instead of 404-ing).
+  voice?: VoiceService;
   // The declarative-skill loader plus the chat tool registry its tiers resolve
   // against, so the Skills section can list/enable/disable/install skills and
   // render each one's tools in the same everyday language as the install

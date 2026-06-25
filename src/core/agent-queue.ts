@@ -43,6 +43,11 @@ export interface AgentQueueOptions {
   // Fired whenever a task changes state (started/finished). Wired to SSE /
   // checkpoint nudges by the surfaces; optional.
   onTaskUpdate?: (task: AgentTask) => void;
+  // Fired EXACTLY ONCE per executed task, on its terminal transition. Unlike
+  // onTaskUpdate (which also fires on start/pause/resume and can fire twice for
+  // a cancel), this is the append-once hook the durable Activity log records on.
+  // A task cancelled while still queued never executed, so it never fires here.
+  onTaskFinished?: (task: AgentTask) => void;
   // Re-scan the DB on this interval (ms). The web panel runs in a SEPARATE
   // process and enqueues tasks by inserting rows; the daemon — the single
   // owner of task execution — can't be notified in-process, so it polls. 0 or
@@ -146,7 +151,11 @@ export function createAgentQueue(opts: AgentQueueOptions): AgentQueue {
       .finally(() => {
         running.delete(task.id);
         const finished = opts.registry.getTask(task.id);
-        if (finished) opts.onTaskUpdate?.(finished);
+        if (finished) {
+          opts.onTaskUpdate?.(finished);
+          // Terminal, append-once: this runs exactly once per executed task.
+          opts.onTaskFinished?.(finished);
+        }
         // A heavy task just finished (done/error/cancelled) and the queue has
         // drained — unload the resident heavy model now instead of letting it
         // pin RAM through the keep_alive / idle-sweep window. Gated on `heavy`

@@ -49,6 +49,7 @@ import {
 } from '../core/agents.js';
 import { createConversationRouter, type ConversationRouter } from '../core/conversation-routing.js';
 import { createAgentQueue } from '../core/agent-queue.js';
+import { createActivityStore, recordActivitySafe } from '../core/activity.js';
 import { formatTaskNotification } from '../adapters/agent-commands.js';
 import { setupAgentApprovals, isToolPreapproved } from '../core/agent-approvals.js';
 import { setupAgentDelegation } from '../core/agent-delegation.js';
@@ -76,6 +77,7 @@ import { setupHeartbeat } from '../core/heartbeat.js';
 import { setupDreaming } from '../core/dreaming.js';
 import type { Tier } from './profiles.js';
 import { createModuleLoader, type HostOrchestrator, type VoicePayload } from '../core/modules.js';
+import { createVoiceService } from '../core/voice.js';
 import { createSkillLoader } from '../core/skills.js';
 import { setupSkillImprove } from '../core/skill-improve.js';
 import {
@@ -397,6 +399,11 @@ async function bootDaemon(
     // built-in Modulus agent as "running" while it answers a message — from
     // Telegram or the Dashboard chat, not just the browser stream in front of you.
     const chatActivity = createChatActivityRegistry();
+    // The durable Activity record (migration 0039). Written at terminal choke
+    // points below (a finished agent run, a fired routine) and read by the
+    // panel's Activity tab as a timeline + feed. recordActivitySafe never throws
+    // into the hot path, so a logging failure can't break a run.
+    const activity = createActivityStore(db);
     // Channel→agent bindings (v2.0.0). Late-bound: the router is built once the
     // main orchestrator + module loader exist (below), but the registry's
     // remove/update wrappers — set here, where the registry is created — must
@@ -424,6 +431,11 @@ async function bootDaemon(
       if (next) conversationRouter?.onAgentUpdated(id);
       return next;
     };
+    // Two-way panel voice: core owns the HTTP surface (the Voice Hub / chat mic),
+    // modulus-voice registers the whisper.cpp + Piper engines into this service
+    // via host.voice. Shared with the panel deps below.
+    const voiceService = createVoiceService();
+
     const loader = createModuleLoader({
       roots: modulesRoots,
       stateRoot,
@@ -433,6 +445,7 @@ async function bootDaemon(
       scheduler,
       tools,
       agents: agentRegistry,
+      voice: voiceService,
       hostVersion: HOST_VERSION,
       // 0 = "no owner chat" (panel-only install with no Telegram allowlist).
       // Proactive nudges have nowhere to go in that case and no-op safely.
@@ -700,6 +713,23 @@ async function bootDaemon(
         const text = formatTaskNotification(task, agent?.name ?? 'agent');
         if (text) void sendTaskNotification(task.notifyChatId, text);
       },
+      // Durable Activity: one append-once row per executed task. A delegated
+      // sub-task (depth > 0) is a 'delegation'; a top-level run is 'user'.
+      // Scheduled runs ALSO produce a 'routine_fire' row (below), so the
+      // schedule that triggered them shows on the timeline's schedule band.
+      onTaskFinished: (task) => {
+        const agent = agentRegistry.get(task.agentId);
+        recordActivitySafe(activity, log, {
+          kind: 'agent_run',
+          actor: agent?.name ?? 'agent',
+          trigger: task.depth > 0 ? 'delegation' : 'user',
+          status: task.status === 'done' ? 'ok' : 'failed',
+          summary: task.prompt.slice(0, 140),
+          ts: task.finishedAt ?? Date.now(),
+          refTable: 'agent_tasks',
+          refId: task.id,
+        });
+      },
     });
     // escalate_to_agent: the main chat's hand-off to the autonomous operator on
     // the queue. Registered on the full registry so chatTools (which only hides
@@ -772,6 +802,17 @@ async function bootDaemon(
       // Multi-step rows are driven by the runner rather than dispatched inline.
       onFired: (fired) => {
         for (const s of fired) {
+          // Durable Activity: the schedule fired — the timeline's 'schedule'
+          // band. The agent work it kicks off records its own agent_run row(s).
+          recordActivitySafe(activity, log, {
+            kind: 'routine_fire',
+            actor: 'modulus',
+            trigger: 'schedule',
+            status: 'ok',
+            summary: (s.prompt.trim() || 'Scheduled routine').slice(0, 140),
+            refTable: 'agent_schedules',
+            refId: s.id,
+          });
           if (s.steps && s.steps.length > 0) {
             routineRef.runner?.start({ routineId: s.id, steps: s.steps, notifyChatId: s.notifyChatId });
           }
@@ -1137,11 +1178,17 @@ async function bootDaemon(
           agentQueue,
           agentRuntime,
           chatActivity,
+          activity,
           llm,
           memory,
+          // Same extractor the Telegram dispatch path runs, so a Dashboard turn
+          // also auto-saves durable user facts (panel-only installs otherwise
+          // never would).
+          memoryExtractor,
           orchestrator,
           conversationRouter,
           loader,
+          voice: voiceService,
           // Skills section of the Modules tab; tiers resolve against chatTools,
           // the same registry the use_skill activation intersects against.
           skills: { loader: skills, tools: chatTools },

@@ -1,6 +1,6 @@
 # Modulus
 
-**Current version: 1.5.3** — SemVer; the canonical value lives in `package.json` and is read
+**Current version: 1.7.0** — SemVer; the canonical value lives in `package.json` and is read
 into `HOST_VERSION` (`src/core/version.ts`). Bump it on every change (see Versioning below).
 
 Local AI orchestrator for everyday people (evolved from Gurney, `../GurneyAgent/`). One Node

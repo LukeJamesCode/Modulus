@@ -16,6 +16,7 @@ import { loadOrCreatePanelToken, PANEL_CSP, requestToken, tokensMatch } from './
 import { createAuthBackoff } from './auth-backoff.js';
 import { sendJson } from './http.js';
 import { dispatch, type RouteContext, type RouteModule } from './router.js';
+import { createActivityRoutes } from './routes/activity.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createChatRoutes } from './routes/chat.js';
 import { createImproveRoutes } from './routes/improve.js';
@@ -105,6 +106,7 @@ export async function createPanel(deps: PanelDeps): Promise<PanelHandle> {
     createChatRoutes(deps),
     createImproveRoutes(deps),
     createAgentRoutes(deps),
+    createActivityRoutes(deps),
     createRoutinesRoutes(deps),
     // Before modules: its /:name/install regex would otherwise claim
     // /api/modules/registry/install (name='registry').

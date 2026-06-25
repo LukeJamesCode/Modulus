@@ -150,7 +150,27 @@ public sealed partial class MainWindow : Window
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Modulus", "WebView2");
         Directory.CreateDirectory(dataDir);
-        var env = await CoreWebView2Environment.CreateWithOptionsAsync(null, dataDir, null);
+
+        // Remote mode points the WebView at another box's Modulus panel over a
+        // LAN http:// URL, which is not a secure context — so navigator.mediaDevices
+        // is hidden and the Voice Hub mic dies with "needs HTTPS". The shell only
+        // ever loads the user's own explicitly-configured Modulus origin (locked
+        // down in NavigationStarting), so it's safe to tell the embedded browser
+        // to treat that one origin as secure, restoring getUserMedia over plain
+        // http. Local mode uses loopback, already a secure context, so no flag.
+        CoreWebView2EnvironmentOptions? options = null;
+        var cfg = DesktopConfig.Load();
+        if (cfg?.Mode == "remote" && !string.IsNullOrEmpty(cfg.RemoteUrl) &&
+            Uri.TryCreate(cfg.RemoteUrl, UriKind.Absolute, out var remote) &&
+            remote.Scheme == "http")
+        {
+            options = new CoreWebView2EnvironmentOptions
+            {
+                AdditionalBrowserArguments =
+                    $"--unsafely-treat-insecure-origin-as-secure=http://{remote.Host}:{remote.Port}",
+            };
+        }
+        var env = await CoreWebView2Environment.CreateWithOptionsAsync(null, dataDir, options);
         await Web.EnsureCoreWebView2Async(env);
         _webReady = true;
 

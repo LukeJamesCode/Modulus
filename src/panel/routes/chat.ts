@@ -3,17 +3,19 @@
 // streams tokens back over SSE. Confirm-tier tools fired mid-turn render inline
 // in the browser via the confirm bus (fail-closed on disconnect/timeout).
 //
-// Deferred to follow-ups: voice in/out, chat file attachments, and the post-turn
-// afterReply/afterTurn hooks (they drive voice/learning modules that need a
+// Memory extraction runs here too (reply-first, detached), mirroring the Telegram
+// dispatch path — so a panel-only install still auto-saves durable user facts.
+// Deferred to follow-ups: chat file attachments, and the module afterReply/
+// afterTurn hook chains (they drive voice/learning modules that need a
 // browser-side sink).
 
 import { randomUUID } from 'node:crypto';
 import type { DB } from '../../storage/db.js';
 import type { ModulusConfig } from '../../cli/config-store.js';
-import type { TelegramInterceptContext } from '../../core/modules.js';
+import type { AfterTurnContext, TelegramInterceptContext } from '../../core/modules.js';
 import type { ThinkMode } from '../../core/llm.js';
 import type { ToolContext, ToolHandler } from '../../core/tools.js';
-import { readJson, sendJson, sse as sseWrite, writeSseHead } from '../http.js';
+import { readJson, readRawBody, sendJson, sse as sseWrite, writeSseHead } from '../http.js';
 import type { RouteModule } from '../router.js';
 import type { PanelDeps } from '../types.js';
 import { createConfirmRegistry } from './confirm-registry.js';
@@ -157,6 +159,18 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
               tools: chunk.meta.afterTurn?.toolCalls ?? [],
             });
           }
+          // Reply has streamed; pull durable user facts into the hive store
+          // detached, exactly as the Telegram dispatch path does — otherwise a
+          // panel-only install never auto-saves memory. `full` is the shipped
+          // text (already reflects any hallucination-guard replace above).
+          if (chunk.done && chunk.meta?.afterTurn && deps.memoryExtractor) {
+            const turn: AfterTurnContext = { ...chunk.meta.afterTurn, assistantText: full };
+            void deps.memoryExtractor(turn).catch((e) =>
+              deps.log.warn('panel memory extraction failed', {
+                error: e instanceof Error ? e.message : String(e),
+              }),
+            );
+          }
         },
       });
     };
@@ -207,6 +221,22 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
 
     try {
       if (!instantTerminal) await runNext();
+      // Two-way voice: if a voice module is active and voice-out is on for this
+      // chat, synthesize the finished reply and hand the browser a one-shot clip
+      // id BEFORE `done` — the client settles without audio if no voice arrives.
+      // Best-effort: a synth failure never derails the text turn.
+      if (orchestratorRan && full.trim() && deps.voice?.hasTts() && !controller.signal.aborted) {
+        try {
+          const clip = await deps.voice.synthesize(full, chatId);
+          if (clip && !controller.signal.aborted) {
+            sse('voice', { id: deps.voice.putClip(clip.audio, clip.mime) });
+          }
+        } catch (e) {
+          deps.log.warn('panel voice synth failed', {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
       sse('done', { text: orchestratorRan ? full : '' });
     } catch (e) {
       sse('error', { message: e instanceof Error ? e.message : String(e) });
@@ -239,6 +269,61 @@ export function createChatRoutes(deps: PanelDeps): RouteModule {
       const owner = ownerChat(deps.db, deps.config);
       if (owner) deps.orchestrator.newChat(owner.chatId);
       sendJson(res, 200, { ok: true });
+      return true;
+    }
+
+    // Transcribe a recorded clip from the chat-window mic / Voice Hub. The
+    // engine is contributed by a voice module via host.voice; with none active
+    // we report it plainly rather than 404-ing, so the UI shows a real cause.
+    if (path === '/api/chat/voice-in' && method === 'POST') {
+      if (!deps.voice?.hasStt()) {
+        sendJson(res, 200, {
+          ok: false,
+          error:
+            'Voice transcription isn’t set up. Enable the modulus-voice module and install its whisper model.',
+        });
+        return true;
+      }
+      let audio: Buffer;
+      try {
+        audio = await readRawBody(req);
+      } catch {
+        sendJson(res, 200, { ok: false, error: 'Recording was too large.' });
+        return true;
+      }
+      if (audio.length === 0) {
+        sendJson(res, 200, { ok: false, error: 'Empty recording.' });
+        return true;
+      }
+      const mime = (req.headers['content-type'] ?? 'audio/webm').split(';')[0]!.trim();
+      try {
+        const { transcript } = await deps.voice.transcribe(audio, mime);
+        sendJson(res, 200, { ok: true, transcript });
+      } catch (e) {
+        // Surface the provider's own message (e.g. "No whisper model is
+        // configured…") so the user sees the actual cause and can act on it.
+        const message = e instanceof Error ? e.message : 'Could not transcribe that recording.';
+        deps.log.warn('panel voice-in failed', { error: message });
+        sendJson(res, 200, { ok: false, error: message });
+      }
+      return true;
+    }
+
+    // Serve a synthesized voice reply once, then drop it (one-shot clip store).
+    const voiceClip = /^\/api\/chat\/voice\/([a-f0-9-]+)$/i.exec(path);
+    if (voiceClip && method === 'GET') {
+      const clip = deps.voice?.takeClip(voiceClip[1]!);
+      if (!clip) {
+        res.writeHead(404, { 'cache-control': 'no-store' });
+        res.end('not found');
+        return true;
+      }
+      res.writeHead(200, {
+        'content-type': clip.mime,
+        'content-length': String(clip.audio.length),
+        'cache-control': 'no-store',
+      });
+      res.end(clip.audio);
       return true;
     }
 

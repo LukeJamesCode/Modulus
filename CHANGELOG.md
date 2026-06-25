@@ -7,18 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-06-24
+
+### Added
+
+- **Activity tab — a durable record of what Modulus did**: the panel gains an Activity surface that
+  answers "what has my agent been doing while I wasn't watching?" A new append-only `activity` table
+  (migration 0039) records a headline row whenever a background **agent run** finishes or a
+  **scheduled routine** fires, linking back to the existing detail (the run view) rather than copying
+  it. The tab shows it two ways: a **timeline** strip (one bar per hour, coloured by what triggered
+  the work — you, a schedule, a chat, or a delegation — and red-capped when something failed) over a
+  newest-first **feed** with a plain-English summary, trigger tag, status chip, and relative time.
+  Clicking a timeline bar filters the feed to that window. The record is observability-only: writes
+  go through a fail-safe path that can never break the run that produced the event. (Per-tool-call
+  and chat-turn rows are a planned follow-up; the schema and writer seam are already in place.)
+
+## [1.6.2] - 2026-06-21
+
+### Fixed
+
+- **Changing a module setting now takes effect without a restart**: saving a module's settings in
+  the panel wrote the new value to `module_settings` but never reloaded the module, so any
+  registration derived from settings at `register()` time kept its stale value. Most visibly, the
+  assistant's morning/night briefing crons are scheduled once from `morning_time`/`night_time`, so
+  setting the night brief to 10:30 PM landed in the DB while the live `night-briefing` job kept
+  firing at the old time (or not at all) — the brief never arrived. The settings-save route now
+  hot-reloads the module after a successful save, matching the auth and enable flows, so the
+  scheduler re-registers the briefing crons with the new time immediately.
+
+## [1.6.1] - 2026-06-21
+
+### Fixed
+
+- **Dashboard chat now saves memories**: the panel/Dashboard chat surface ran the orchestrator
+  directly and never invoked memory extraction — that handler was only wired into the Telegram
+  adapter. Since Telegram is optional and a panel-only install is a supported state, the hive
+  store never gained the 0–2 durable user facts a normal turn should yield (it only filled from
+  the rarely-called `remember` tool and agent findings), so the Settings → Hive memory browser
+  looked broken. The panel chat route now hands each finished turn to the same `memoryExtractor`
+  the Telegram path uses (reply-first, detached), so panel-only installs auto-save memory too.
+
+## [1.6.0] - 2026-06-21
+
+### Added
+
+- **Two-way voice in the panel (Voice Hub + chat-window mic)**: the panel's voice backend, deferred
+  since the in-process panel landed, is now implemented. Core owns the HTTP surface — `POST
+  /api/chat/voice-in` transcribes a recording, the chat SSE stream emits a one-shot `voice` clip id
+  after the reply, and `GET /api/chat/voice/:id` serves it once — but the speech *engines* stay a
+  module's job. A new `host.voice` registration (mirroring `host.llm.registerProvider`) lets
+  `modulus-voice` contribute whisper.cpp STT and Piper TTS; with no voice module active the routes
+  report "not set up" instead of 404-ing, and the stream simply emits no clip. The new
+  `src/core/voice.ts` service holds the provider registry plus a size-capped, one-shot clip store.
+  Per-chat voice-out stays pref-gated inside `modulus-voice` (the TTS provider returns null when
+  voice is off for the chat), so core never reads module settings. Requires whisper.cpp + Piper +
+  their models on whichever box runs the daemon (installed via `modulus-voice` setup).
+
 ## [1.5.3] - 2026-06-21
 
 ### Fixed
 
-- **Voice Hub mic on the desktop app**: when the panel is LAN-bound (`panel.bind = 0.0.0.0`) the
-  daemon advertises its LAN IP, and the desktop shell was navigating its WebView there — a
-  non-loopback `http://` origin is not a secure context, so the browser hides
-  `navigator.mediaDevices` and the Voice Hub fell back to "The microphone needs HTTPS." The
-  shell now reaches its own local daemon over loopback (`127.0.0.1`, which `0.0.0.0` already
-  listens on and which *is* a secure context) regardless of what host is advertised, and
-  auto-grants the microphone permission for the trusted panel origin so voice works without a
-  WebView2 prompt. The LAN URL is still shown in the System tab for connecting other devices.
+- **Voice Hub mic on the desktop app**: the Voice Hub fell back to "The microphone needs HTTPS"
+  whenever the WebView loaded a non-loopback `http://` origin — not a secure context, so the
+  browser hides `navigator.mediaDevices`. Two cases are now covered. (1) **Local LAN bind**
+  (`panel.bind = 0.0.0.0`): the daemon advertises its LAN IP, but the shell owns that daemon on
+  this machine, so it now reaches it over loopback (`127.0.0.1`, which `0.0.0.0` already listens
+  on and which *is* a secure context) regardless of the advertised host. (2) **Remote mode**
+  (the desktop is a frontend for a Modulus daemon on another box over a LAN `http://` URL): the
+  shell now starts the embedded browser with that one user-configured origin treated as a secure
+  context (`--unsafely-treat-insecure-origin-as-secure`), restoring `getUserMedia` over plain
+  http — scoped to the single origin the shell is already locked to navigating. In both cases the
+  microphone permission is auto-granted for the trusted panel origin so voice works without a
+  WebView2 prompt. Changing the remote connection takes effect on the next app launch.
 
 ## [1.5.2] - 2026-06-21
 

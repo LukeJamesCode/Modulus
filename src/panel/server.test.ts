@@ -18,6 +18,7 @@ import { after, before, test } from 'node:test';
 import { open as openDb, type DB } from '../storage/db.js';
 import { createLogger } from '../util/log.js';
 import { createAgentRegistry, type AgentRunEvent } from '../core/agents.js';
+import { createActivityStore } from '../core/activity.js';
 import { setupMemory } from '../core/memory.js';
 import { createPrefsStore } from '../core/prefs.js';
 import { createScheduler } from '../core/scheduler.js';
@@ -25,7 +26,9 @@ import { createToolRegistry } from '../core/tools.js';
 import { effectiveConfig } from '../cli/config-store.js';
 import { logFilePath, panelTokenPath } from '../cli/daemon.js';
 import { createPanelConfirmBus } from './confirm-bus.js';
+import { createVoiceService } from '../core/voice.js';
 import type { InstantResponse } from '../core/instant-responses.js';
+import type { AfterTurnContext } from '../core/modules.js';
 import { createPanel, type PanelDeps, type PanelHandle } from './server.js';
 
 let home: string;
@@ -36,10 +39,24 @@ let base: string;
 let token: string;
 let stopCalls = 0;
 let restartCalls = 0;
+// The activity store the panel reads; the route test records rows on it directly.
+let activityStore: ReturnType<typeof createActivityStore>;
 // Drives deps.instantResponder. Default null → the responder stays out of the
 // way of every other chat test; an instant test sets it for one request and
 // resets after. Mirrors the stopCalls/restartCalls mutable-state pattern above.
 let instantStub: InstantResponse | null = null;
+// Two-way voice. The STT stub always transcribes; the TTS stub returns this clip
+// (null by default so other chat tests emit no `voice` event). A voice test sets
+// it for one request and resets, mirroring instantStub.
+let ttsClip: { audio: Buffer; mime: string } | null = null;
+const voiceService = createVoiceService();
+// Records turns handed to the panel's memory extractor, so a chat test can assert
+// the Dashboard save path fires (mirrors the Telegram dispatch path).
+const extractedTurns: AfterTurnContext[] = [];
+// Records modules the panel asked the loader to hot-reload. The settings-save
+// test asserts a changed setting reaches the live registrations (the stale
+// briefing-cron bug) instead of only landing in module_settings.
+const reloadCalls: string[] = [];
 
 function authed(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${base}${path}`, {
@@ -100,6 +117,22 @@ function sseFrames(res: Response): {
 
 before(async () => {
   home = mkdtempSync(join(tmpdir(), 'modulus-panel-'));
+  // A minimal on-disk module so the settings route can resolve a folder +
+  // schema (findModuleFolder needs a manifest.json; saveModuleSettings needs a
+  // settings.schema.json). Used by the settings-save reload test.
+  const moduleRootsDir = join(home, 'test-modules');
+  mkdirSync(join(moduleRootsDir, 'briefer'), { recursive: true });
+  writeFileSync(
+    join(moduleRootsDir, 'briefer', 'manifest.json'),
+    JSON.stringify({ name: 'briefer', version: '0.0.0' }),
+  );
+  writeFileSync(
+    join(moduleRootsDir, 'briefer', 'settings.schema.json'),
+    JSON.stringify({
+      type: 'object',
+      properties: { night_time: { type: 'string', default: '21:00' } },
+    }),
+  );
   // A stub CLI entry that always exits non-zero. Every panel-driven CLI spawn
   // (mod enable, maintenance update) routes through this, so a spawn-failure
   // test is deterministic and — critically — a real `modulus update` (git pull
@@ -115,6 +148,13 @@ before(async () => {
     prefs: createPrefsStore(db),
     db,
   });
+  // Stub voice engines: STT echoes the byte length so a round-trip is provable;
+  // TTS hands back whatever ttsClip a test stages.
+  voiceService.registerStt(async (audio, mime) => ({
+    transcript: `heard ${audio.length}b ${mime}`,
+  }));
+  voiceService.registerTts(async () => ttsClip);
+
   panel = await createPanel({
     db,
     log,
@@ -125,9 +165,10 @@ before(async () => {
       telegram: { token: 'x', allowedIds: [123] },
       panel: { enabled: true, port: 0, bind: '127.0.0.1' },
     },
-    moduleRoots: [],
+    moduleRoots: [moduleRootsDir],
     scheduler,
     agentRegistry: createAgentRegistry(db),
+    activity: (activityStore = createActivityStore(db)),
     // The exercised routes don't touch the queue or llm; stub them.
     agentQueue: { notify() {} } as unknown as PanelDeps['agentQueue'],
     agentRuntime: {
@@ -170,22 +211,55 @@ before(async () => {
       tools: createToolRegistry({ log, confirm: async () => false }),
       log,
     }),
-    // A stub orchestrator that streams two deltas then finishes, and a loader
-    // with no intercepts — enough to exercise the SSE chat path offline.
+    // Captures the post-turn extraction handoff so a test can assert the panel
+    // save path runs (the real extractor's model call is covered elsewhere).
+    memoryExtractor: async (turn) => {
+      extractedTurns.push(turn);
+    },
+    // A stub orchestrator that streams two deltas then finishes (with an
+    // afterTurn payload so the extraction path has something to consume), and a
+    // loader with no intercepts — enough to exercise the SSE chat path offline.
     orchestrator: {
       handleUserMessage: async (msg: {
+        chatId: number;
+        userId: number;
+        text: string;
         send: (c: { delta: string; done: boolean; meta?: unknown }) => void;
       }) => {
         msg.send({ delta: 'hi ', done: false });
         msg.send({ delta: 'there', done: false });
-        msg.send({ delta: '', done: true, meta: { model: 'test', elapsedMs: 1 } });
+        msg.send({
+          delta: '',
+          done: true,
+          meta: {
+            model: 'test',
+            elapsedMs: 1,
+            afterTurn: {
+              chatId: msg.chatId,
+              userId: msg.userId,
+              conversationId: 0,
+              userText: msg.text,
+              assistantText: 'hi there',
+              startedAt: 0,
+              finishedAt: 0,
+              toolCalls: [],
+            },
+          },
+        });
       },
       stop: () => false,
       newChat: () => {},
       lastError: () => undefined,
       shutdown: async () => {},
     } as unknown as PanelDeps['orchestrator'],
-    loader: { intercepts: () => [], commands: () => [] } as unknown as PanelDeps['loader'],
+    loader: {
+      intercepts: () => [],
+      commands: () => [],
+      reload: async (name: string) => {
+        reloadCalls.push(name);
+      },
+    } as unknown as PanelDeps['loader'],
+    voice: voiceService,
     confirmBus: createPanelConfirmBus(),
     instantResponder: { respond: () => instantStub },
     cliEntry: cliStub,
@@ -224,6 +298,49 @@ test('GET /api/state returns live state with a valid token', async () => {
   // The daemon serving the panel is the agent, so it always reports running.
   assert.equal(body.agent.running, true);
   assert.equal(typeof body.version, 'string');
+});
+
+test('GET /api/activity returns the durable feed and timeline buckets', async () => {
+  const now = Date.now();
+  activityStore.record({
+    kind: 'agent_run',
+    actor: 'researcher',
+    trigger: 'user',
+    status: 'ok',
+    summary: 'Looked something up',
+    ts: now,
+    refTable: 'agent_tasks',
+    refId: 7,
+  });
+  activityStore.record({
+    kind: 'routine_fire',
+    actor: 'modulus',
+    trigger: 'schedule',
+    status: 'ok',
+    summary: 'Morning brief',
+    ts: now - 90 * 60_000,
+  });
+
+  // Auth gate.
+  assert.equal((await fetch(`${base}/api/activity`)).status, 401);
+
+  const feed = (await (await authed('/api/activity?limit=50')).json()) as {
+    items: Array<{ kind: string; summary: string; trigger: string }>;
+  };
+  // Newest-first, both rows present.
+  assert.deepEqual(
+    feed.items.map((i) => i.summary),
+    ['Looked something up', 'Morning brief'],
+  );
+  assert.equal(feed.items[0]!.trigger, 'user');
+
+  const tl = (await (await authed('/api/activity/timeline?days=1&bucket=hour')).json()) as {
+    bucketMs: number;
+    buckets: Array<{ total: number }>;
+  };
+  assert.equal(tl.bucketMs, 60 * 60_000);
+  // Two events ~90m apart land in two distinct hour buckets.
+  assert.equal(tl.buckets.reduce((n, b) => n + b.total, 0), 2);
 });
 
 test('GET /api/state carries a stable per-process bootId for auto-reload', async () => {
@@ -534,6 +651,30 @@ test('module settings for an unknown module is 404', async () => {
   assert.equal(res.status, 404);
 });
 
+test('saving module settings hot-reloads the module so cron jobs reschedule', async () => {
+  // Regression: a changed night_time used to land in module_settings but the
+  // scheduler kept the stale briefing cron until the next restart, so the night
+  // brief never fired at the new time. The save must hot-reload the module so
+  // register() re-reads the setting and re-registers the cron.
+  reloadCalls.length = 0;
+  const res = await authed('/api/modules/briefer/settings', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ night_time: '22:30' }),
+  });
+  assert.equal(res.status, 200);
+  assert.ok(reloadCalls.includes('briefer'), 'expected the saved module to be hot-reloaded');
+
+  // The new value is what a subsequent register() would read for the cron.
+  const after = (await (await authed('/api/modules/briefer/settings')).json()) as {
+    schema: Array<{ key: string; value: string }>;
+  };
+  assert.equal(
+    after.schema.find((f) => f.key === 'night_time')?.value,
+    '22:30',
+  );
+});
+
 test('settings: config exposes the instant-responses toggle', async () => {
   const res = await authed('/api/config');
   assert.equal(res.status, 200);
@@ -667,6 +808,22 @@ test('chat streams orchestrator deltas then done over SSE', async () => {
   assert.match(text, /event: done/);
 });
 
+test('chat: a completed turn fires memory extraction (the panel save path)', async () => {
+  // Regression: the Dashboard chat used to skip extraction entirely (it was only
+  // wired into the Telegram adapter), so a panel-only install never auto-saved
+  // any memory. A finished turn must now hand the turn to the extractor.
+  extractedTurns.length = 0;
+  const res = await authed('/api/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 'my dog is named Rex' }),
+  });
+  assert.equal(res.status, 200);
+  await res.text(); // drain the SSE stream so the turn completes server-side
+  assert.equal(extractedTurns.length, 1);
+  assert.equal(extractedTurns[0]?.userText, 'my dog is named Rex');
+});
+
 test('chat: an instant ack lands as its own frame, then the orchestrator still streams', async () => {
   instantStub = { mode: 'ack', text: 'On it.' };
   try {
@@ -720,6 +877,63 @@ test('chat/confirm with an unknown id is 409 (fail-closed)', async () => {
 test('chat/clear resets the conversation', async () => {
   const res = await authed('/api/chat/clear', { method: 'POST' });
   assert.equal(res.status, 200);
+});
+
+test('voice-in: posts a recording and gets the STT provider transcript', async () => {
+  const res = await authed('/api/chat/voice-in?ms=500', {
+    method: 'POST',
+    headers: { 'content-type': 'audio/webm' },
+    body: Buffer.from('fake-opus-bytes'),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { ok: boolean; transcript?: string };
+  assert.equal(body.ok, true);
+  assert.equal(body.transcript, `heard ${Buffer.from('fake-opus-bytes').length}b audio/webm`);
+});
+
+test('voice-in: an empty recording is reported, not transcribed', async () => {
+  const res = await authed('/api/chat/voice-in', {
+    method: 'POST',
+    headers: { 'content-type': 'audio/webm' },
+    body: Buffer.alloc(0),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { ok: boolean; error?: string };
+  assert.equal(body.ok, false);
+  assert.match(body.error ?? '', /empty/i);
+});
+
+test('chat stream emits a one-shot voice clip that voice/:id serves once', async () => {
+  ttsClip = { audio: Buffer.from('OggS-fake'), mime: 'audio/ogg' };
+  try {
+    const res = await authed('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'say hi' }),
+    });
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.match(text, /event: voice/);
+    const m = /event: voice\ndata: (\{.*\})/.exec(text);
+    assert.ok(m, 'voice frame should carry a clip id');
+    const { id } = JSON.parse(m![1]!) as { id: string };
+
+    // First fetch serves the audio bytes…
+    const clip = await authed(`/api/chat/voice/${id}`);
+    assert.equal(clip.status, 200);
+    assert.equal(clip.headers.get('content-type'), 'audio/ogg');
+    assert.equal(Buffer.from(await clip.arrayBuffer()).toString(), 'OggS-fake');
+
+    // …and it's one-shot: a second fetch is gone.
+    assert.equal((await authed(`/api/chat/voice/${id}`)).status, 404);
+  } finally {
+    ttsClip = null;
+  }
+});
+
+test('voice/:id for an unknown clip is 404', async () => {
+  const res = await authed('/api/chat/voice/00000000-0000-0000-0000-000000000000');
+  assert.equal(res.status, 404);
 });
 
 test('agent DM: history 404s for an unknown agent, returns messages + busy for a real one', async () => {

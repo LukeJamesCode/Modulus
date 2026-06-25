@@ -615,6 +615,22 @@ export function createModuleRoutes(deps: PanelDeps): RouteModule {
       }
       if (action === 'settings' && method === 'POST') {
         const ok = saveModuleSettings(deps, name, await readJson<Record<string, unknown>>(req));
+        // Modules read settings at register() time — most visibly the assistant's
+        // morning/night briefing crons, which are scheduled once from night_time/
+        // morning_time. Writing to the DB isn't enough: reload so the live
+        // registrations (scheduler jobs, prompts) pick up the new values, matching
+        // the auth/enable flows above. Without this a changed briefing time never
+        // takes effect until the next daemon restart.
+        if (ok) {
+          try {
+            await deps.loader.reload(name);
+          } catch (e) {
+            deps.log.warn('post-settings module reload failed', {
+              mod: name,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }
         sendJson(res, ok ? 200 : 400, ok ? { ok: true } : { error: 'no settings schema' });
         return true;
       }
